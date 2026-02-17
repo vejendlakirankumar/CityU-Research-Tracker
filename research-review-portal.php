@@ -1,1 +1,60 @@
-Supporting document for submission.
+<?php
+/**
+ * Plugin Name: Research Review Portal
+ * Description: Research submission and review workflow for conferences, publications, student projects, and grants. Port of the CityU Research Review Portal for WordPress.
+ * Version: 1.0.0
+ * Author: CityU C4CYI
+ * License: MIT
+ * Text Domain: research-review-portal
+ */
+
+if ( ! defined( 'ABSPATH' ) ) {
+	exit;
+}
+
+define( 'RRP_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
+define( 'RRP_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
+define( 'RRP_DATA_DIR', RRP_PLUGIN_DIR . 'data/' );
+define( 'RRP_UPLOADS_DIR', RRP_DATA_DIR . 'uploads/' );
+
+require_once RRP_PLUGIN_DIR . 'includes/class-portal-data.php';
+require_once RRP_PLUGIN_DIR . 'includes/class-portal-rest.php';
+
+class Research_Review_Portal {
+
+	public static function init() {
+		add_shortcode( 'research_review_portal', array( __CLASS__, 'shortcode_portal' ) );
+	}
+
+	public static function shortcode_portal( $atts ) {
+		do_action( 'rrp_portal_enqueue' );
+		wp_enqueue_style(
+			'research-review-portal',
+			RRP_PLUGIN_URL . 'assets/portal.css',
+			array(),
+			'1.0.0'
+		);
+		wp_enqueue_script(
+			'research-review-portal',
+			RRP_PLUGIN_URL . 'assets/portal.js',
+			array(),
+			'1.0.0',
+			true
+		);
+		wp_add_inline_script( 'research-review-portal', sprintf(
+			'window.RRP = { restBase: %s, nonce: %s };',
+			wp_json_encode( rest_url( 'research-portal/v1' ) ),
+			wp_json_encode( wp_create_nonce( 'wp_rest' ) )
+		), 'before' );
+		ob_start();
+		?>
+		<div id="research-review-portal" class="rrp-portal" data-rest-base="<?php echo esc_attr( rest_url( 'research-portal/v1' ) ); ?>" data-nonce="<?php echo esc_attr( wp_create_nonce( 'wp_rest' ) ); ?>">
+			<div class="rrp-loading">Loading portal…</div>
+		</div>
+		<?php
+		return ob_get_clean();
+	}
+}
+
+	add_action( 'init', array( 'Research_Review_Portal', 'init' ) );
+	add_action( 'rest_api_init', array( 'Portal_REST', 'register_routes' ) );
