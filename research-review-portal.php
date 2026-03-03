@@ -19,6 +19,8 @@ define( 'RRP_UPLOADS_DIR', RRP_DATA_DIR . 'uploads/' );
 
 require_once RRP_PLUGIN_DIR . 'includes/class-portal-data.php';
 require_once RRP_PLUGIN_DIR . 'includes/class-portal-rest.php';
+require_once RRP_PLUGIN_DIR . 'includes/class-user-management.php';
+require_once RRP_PLUGIN_DIR . 'includes/class-process-documentation.php';
 
 class Research_Review_Portal {
 

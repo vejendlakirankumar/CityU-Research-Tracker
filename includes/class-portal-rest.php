@@ -16,58 +16,58 @@ class Portal_REST {
 		register_rest_route( self::NAMESPACE, '/health', array(
 			'methods'             => 'GET',
 			'callback'            => array( __CLASS__, 'health' ),
-			'permission_callback' => '__return_true',
+			'permission_callback' => '__return_true', // Public endpoint
 		) );
 		register_rest_route( self::NAMESPACE, '/submit', array(
 			'methods'             => 'POST',
 			'callback'            => array( __CLASS__, 'submit' ),
-			'permission_callback' => '__return_true',
+			'permission_callback' => array( __CLASS__, 'can_submit_research' ),
 			'args'                => array(),
 		) );
 		register_rest_route( self::NAMESPACE, '/submissions', array(
 			'methods'             => 'GET',
 			'callback'            => array( __CLASS__, 'submissions_list' ),
-			'permission_callback' => '__return_true',
+			'permission_callback' => array( __CLASS__, 'can_view_submissions' ),
 		) );
 		register_rest_route( self::NAMESPACE, '/submissions/public', array(
 			'methods'             => 'GET',
 			'callback'            => array( __CLASS__, 'submissions_public' ),
-			'permission_callback' => '__return_true',
+			'permission_callback' => '__return_true', // Public endpoint
 		) );
 		register_rest_route( self::NAMESPACE, '/submissions/(?P<id>[a-zA-Z0-9\-]+)', array(
 			'methods'             => 'GET',
 			'callback'            => array( __CLASS__, 'submission_get' ),
-			'permission_callback' => '__return_true',
+			'permission_callback' => array( __CLASS__, 'can_view_submission' ),
 			'args'                => array( 'id' => array( 'required' => true ) ),
 		) );
 		register_rest_route( self::NAMESPACE, '/submissions/(?P<id>[a-zA-Z0-9\-]+)', array(
 			'methods'             => 'PATCH',
 			'callback'            => array( __CLASS__, 'submission_patch' ),
-			'permission_callback' => '__return_true',
+			'permission_callback' => array( __CLASS__, 'can_edit_submission' ),
 			'args'                => array( 'id' => array( 'required' => true ) ),
 		) );
 		register_rest_route( self::NAMESPACE, '/submissions/(?P<id>[a-zA-Z0-9\-]+)/feedback', array(
 			'methods'             => 'POST',
 			'callback'            => array( __CLASS__, 'feedback' ),
-			'permission_callback' => '__return_true',
+			'permission_callback' => array( __CLASS__, 'can_provide_feedback' ),
 			'args'                => array( 'id' => array( 'required' => true ) ),
 		) );
 		register_rest_route( self::NAMESPACE, '/submissions/(?P<id>[a-zA-Z0-9\-]+)/comments', array(
 			'methods'             => 'POST',
 			'callback'            => array( __CLASS__, 'comments' ),
-			'permission_callback' => '__return_true',
+			'permission_callback' => array( __CLASS__, 'can_add_comments' ),
 			'args'                => array( 'id' => array( 'required' => true ) ),
 		) );
 		register_rest_route( self::NAMESPACE, '/submissions/(?P<id>[a-zA-Z0-9\-]+)/attachments', array(
 			'methods'             => 'POST',
 			'callback'            => array( __CLASS__, 'attachments_upload' ),
-			'permission_callback' => '__return_true',
+			'permission_callback' => array( __CLASS__, 'can_upload_attachments' ),
 			'args'                => array( 'id' => array( 'required' => true ) ),
 		) );
 		register_rest_route( self::NAMESPACE, '/submissions/(?P<id>[a-zA-Z0-9\-]+)/attachments/(?P<filename>[^/]+)', array(
 			'methods'             => 'GET',
 			'callback'            => array( __CLASS__, 'attachments_download' ),
-			'permission_callback' => '__return_true',
+			'permission_callback' => array( __CLASS__, 'can_download_attachments' ),
 			'args'                => array(
 				'id'       => array( 'required' => true ),
 				'filename' => array( 'required' => true ),
@@ -76,42 +76,216 @@ class Portal_REST {
 		register_rest_route( self::NAMESPACE, '/assignment-summary', array(
 			'methods'             => 'GET',
 			'callback'            => array( __CLASS__, 'assignment_summary' ),
-			'permission_callback' => '__return_true',
+			'permission_callback' => array( __CLASS__, 'can_view_assignments' ),
 		) );
 		register_rest_route( self::NAMESPACE, '/config/suggest-reviewers', array(
 			'methods'             => 'GET',
 			'callback'            => array( __CLASS__, 'config_suggest_reviewers' ),
-			'permission_callback' => '__return_true',
+			'permission_callback' => array( __CLASS__, 'can_manage_workflow' ),
 		) );
 		register_rest_route( self::NAMESPACE, '/config/apply-pool-to-submissions', array(
 			'methods'             => 'POST',
 			'callback'            => array( __CLASS__, 'config_apply_pool' ),
-			'permission_callback' => '__return_true',
+			'permission_callback' => array( __CLASS__, 'can_assign_reviewers' ),
 		) );
 		register_rest_route( self::NAMESPACE, '/config', array(
 			'methods'             => 'GET',
 			'callback'            => array( __CLASS__, 'config_get' ),
-			'permission_callback' => '__return_true',
+			'permission_callback' => array( __CLASS__, 'can_view_config' ),
 		) );
 		register_rest_route( self::NAMESPACE, '/config', array(
 			'methods'             => 'PUT',
 			'callback'            => array( __CLASS__, 'config_put' ),
-			'permission_callback' => '__return_true',
+			'permission_callback' => array( __CLASS__, 'can_manage_config' ),
 		) );
 		register_rest_route( self::NAMESPACE, '/reviewers', array(
 			'methods'             => 'GET',
 			'callback'            => array( __CLASS__, 'reviewers' ),
-			'permission_callback' => '__return_true',
+			'permission_callback' => array( __CLASS__, 'can_view_reviewers' ),
 		) );
 		register_rest_route( self::NAMESPACE, '/reviews', array(
 			'methods'             => 'GET',
 			'callback'            => array( __CLASS__, 'reviews' ),
-			'permission_callback' => '__return_true',
+			'permission_callback' => array( __CLASS__, 'can_view_reviews' ),
 		) );
 	}
 
 	public static function health( WP_REST_Request $request ) {
 		return new WP_REST_Response( array( 'ok' => true, 'bootId' => (string) time() ), 200 );
+	}
+
+	/**
+	 * Permission callback functions for role-based access control
+	 */
+
+	public static function can_submit_research( WP_REST_Request $request ) {
+		// Allow logged-in users with submission capability or non-logged users for now
+		return is_user_logged_in() ? current_user_can( 'rrp_submit_research' ) || current_user_can( 'read' ) : true;
+	}
+
+	public static function can_view_submissions( WP_REST_Request $request ) {
+		// Users can view their own submissions or reviewers/admins can view assigned ones
+		return current_user_can( 'rrp_view_own_submissions' ) || current_user_can( 'rrp_view_all_submissions' ) || current_user_can( 'rrp_review_submissions' );
+	}
+
+	public static function can_view_submission( WP_REST_Request $request ) {
+		$submission_id = $request->get_param( 'id' );
+		
+		// Admins and coordinators can view any submission
+		if ( current_user_can( 'rrp_view_all_submissions' ) || current_user_can( 'rrp_full_admin_access' ) ) {
+			return true;
+		}
+
+		// Check if user is the submitter or assigned reviewer
+		$submission = self::get_submission_by_id( $submission_id );
+		if ( ! $submission ) {
+			return false;
+		}
+
+		$current_user = wp_get_current_user();
+		$user_email = $current_user->user_email;
+
+		// Check if user is the submitter
+		if ( isset( $submission['submitterEmail'] ) && $submission['submitterEmail'] === $user_email ) {
+			return current_user_can( 'rrp_view_own_submissions' );
+		}
+
+		// Check if user is an assigned reviewer
+		if ( current_user_can( 'rrp_review_submissions' ) ) {
+			$assigned_reviewers = $submission['assignedReviewers'] ?? array();
+			foreach ( $assigned_reviewers as $reviewer ) {
+				if ( isset( $reviewer['email'] ) && $reviewer['email'] === $user_email ) {
+					return true;
+				}
+			}
+		}
+
+		return false;
+	}
+
+	public static function can_edit_submission( WP_REST_Request $request ) {
+		$submission_id = $request->get_param( 'id' );
+		
+		// Admins and coordinators can edit any submission
+		if ( current_user_can( 'rrp_edit_any_submission' ) || current_user_can( 'rrp_full_admin_access' ) ) {
+			return true;
+		}
+
+		// Check if user is the submitter and can edit their own submissions
+		if ( current_user_can( 'rrp_edit_own_submissions' ) ) {
+			$submission = self::get_submission_by_id( $submission_id );
+			if ( $submission ) {
+				$current_user = wp_get_current_user();
+				return isset( $submission['submitterEmail'] ) && $submission['submitterEmail'] === $current_user->user_email;
+			}
+		}
+
+		return false;
+	}
+
+	public static function can_provide_feedback( WP_REST_Request $request ) {
+		// Reviewers can provide feedback on their assigned submissions
+		if ( ! current_user_can( 'rrp_provide_feedback' ) ) {
+			return false;
+		}
+
+		$submission_id = $request->get_param( 'id' );
+		$submission = self::get_submission_by_id( $submission_id );
+		if ( ! $submission ) {
+			return false;
+		}
+
+		$current_user = wp_get_current_user();
+		$user_email = $current_user->user_email;
+
+		// Check if user is an assigned reviewer
+		$assigned_reviewers = $submission['assignedReviewers'] ?? array();
+		foreach ( $assigned_reviewers as $reviewer ) {
+			if ( isset( $reviewer['email'] ) && $reviewer['email'] === $user_email ) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	public static function can_add_comments( WP_REST_Request $request ) {
+		// Similar to feedback but also allow submitters to comment
+		$submission_id = $request->get_param( 'id' );
+		$submission = self::get_submission_by_id( $submission_id );
+		if ( ! $submission ) {
+			return false;
+		}
+
+		$current_user = wp_get_current_user();
+		$user_email = $current_user->user_email;
+
+		// Check if user is the submitter
+		if ( isset( $submission['submitterEmail'] ) && $submission['submitterEmail'] === $user_email ) {
+			return true;
+		}
+
+		// Check if user is an assigned reviewer
+		if ( current_user_can( 'rrp_provide_feedback' ) ) {
+			$assigned_reviewers = $submission['assignedReviewers'] ?? array();
+			foreach ( $assigned_reviewers as $reviewer ) {
+				if ( isset( $reviewer['email'] ) && $reviewer['email'] === $user_email ) {
+					return true;
+				}
+			}
+		}
+
+		// Admins can always comment
+		return current_user_can( 'rrp_full_admin_access' );
+	}
+
+	public static function can_upload_attachments( WP_REST_Request $request ) {
+		return self::can_edit_submission( $request );
+	}
+
+	public static function can_download_attachments( WP_REST_Request $request ) {
+		return self::can_view_submission( $request );
+	}
+
+	public static function can_view_assignments( WP_REST_Request $request ) {
+		return current_user_can( 'rrp_view_all_submissions' ) || current_user_can( 'rrp_manage_workflow' ) || current_user_can( 'rrp_full_admin_access' );
+	}
+
+	public static function can_assign_reviewers( WP_REST_Request $request ) {
+		return current_user_can( 'rrp_assign_reviewers' ) || current_user_can( 'rrp_full_admin_access' );
+	}
+
+	public static function can_manage_workflow( WP_REST_Request $request ) {
+		return current_user_can( 'rrp_manage_workflow' ) || current_user_can( 'rrp_full_admin_access' );
+	}
+
+	public static function can_view_config( WP_REST_Request $request ) {
+		return current_user_can( 'rrp_view_all_submissions' ) || current_user_can( 'rrp_full_admin_access' );
+	}
+
+	public static function can_manage_config( WP_REST_Request $request ) {
+		return current_user_can( 'rrp_manage_system_config' ) || current_user_can( 'rrp_full_admin_access' );
+	}
+
+	public static function can_view_reviewers( WP_REST_Request $request ) {
+		return current_user_can( 'rrp_assign_reviewers' ) || current_user_can( 'rrp_manage_workflow' ) || current_user_can( 'rrp_full_admin_access' );
+	}
+
+	public static function can_view_reviews( WP_REST_Request $request ) {
+		return current_user_can( 'rrp_review_submissions' ) || current_user_can( 'rrp_view_review_dashboard' ) || current_user_can( 'rrp_full_admin_access' );
+	}
+
+	/**
+	 * Helper function to get submission by ID
+	 */
+	private static function get_submission_by_id( $id ) {
+		$data = Portal_Data::read_submissions();
+		foreach ( $data['submissions'] as $submission ) {
+			if ( $submission['id'] === $id ) {
+				return $submission;
+			}
+		}
+		return null;
 	}
 
 	public static function submit( WP_REST_Request $request ) {
