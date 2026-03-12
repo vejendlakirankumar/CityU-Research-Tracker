@@ -275,3 +275,19 @@
 - js_exists: ✅ PASS
 - class_exists: ❌ FAIL
 
+## user_management Test Results - 2026-03-12 20:34:12
+
+- role_rrp_student: ❌ FAIL
+- role_rrp_reviewer: ❌ FAIL
+- role_rrp_coordinator: ❌ FAIL
+- role_rrp_admin: ❌ FAIL
+- profile_extensions: ✅ PASS
+
+## process_documentation Test Results - 2026-03-12 20:34:12
+
+- shortcode_exists_alias: ✅ PASS
+- shortcode_exists_primary: ✅ PASS
+- css_exists: ✅ PASS
+- js_exists: ✅ PASS
+- class_exists: ❌ FAIL
+
