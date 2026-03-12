@@ -180,6 +180,23 @@ class Portal_REST {
 			'callback'            => array( __CLASS__, 'reviews' ),
 			'permission_callback' => array( __CLASS__, 'can_view_reviews' ),
 		) );
+		register_rest_route( self::NAMESPACE, '/submissions/(?P<id>[a-zA-Z0-9\-]+)/skip-stage', array(
+			'methods'             => 'POST',
+			'callback'            => array( __CLASS__, 'skip_stage' ),
+			'permission_callback' => array( __CLASS__, 'can_manage_workflow' ),
+			'args'                => array( 'id' => array( 'required' => true ) ),
+		) );
+		register_rest_route( self::NAMESPACE, '/submissions/(?P<id>[a-zA-Z0-9\-]+)/deadlines', array(
+			'methods'             => 'GET',
+			'callback'            => array( __CLASS__, 'submission_deadlines' ),
+			'permission_callback' => array( __CLASS__, 'can_view_submission' ),
+			'args'                => array( 'id' => array( 'required' => true ) ),
+		) );
+		register_rest_route( self::NAMESPACE, '/analytics/overdue', array(
+			'methods'             => 'GET',
+			'callback'            => array( __CLASS__, 'analytics_overdue' ),
+			'permission_callback' => array( __CLASS__, 'can_view_dashboard' ),
+		) );
 	}
 
 	public static function health( WP_REST_Request $request ) {
@@ -852,6 +869,13 @@ class Portal_REST {
 			$data['submissions'][ $idx ]['status'] = Portal_Data::derive_submission_status( $data['submissions'][ $idx ] );
 			Portal_Data::write_submissions( $data );
 			$updated = $data['submissions'][ $idx ];
+			// Auto-advance: notify next-stage reviewers when this stage is now fully approved
+			if ( Portal_Data::is_stage_approved( $review_stages[ $stage_index ] ) ) {
+				$next_index = $stage_index + 1;
+				if ( isset( $review_stages[ $next_index ] ) ) {
+					self::notify_stage_reviewers( $updated, $review_stages[ $next_index ] );
+				}
+			}
 			if ( isset( $body['stageFeedback'] ) && is_array( $body['stageFeedback'] ) && ( $decision === 'Needs Revision' || $decision === 'Rejected' ) ) {
 				$sf = $body['stageFeedback'];
 				$fn = $sf['stageName'] ?? ''; $role = $sf['role'] ?? ''; $fe = $sf['email'] ?? ''; $name = $sf['name'] ?? ''; $message = isset( $sf['message'] ) ? trim( (string) $sf['message'] ) : '';
@@ -1356,4 +1380,95 @@ class Portal_REST {
 		}
 		return new WP_REST_Response( array( 'submissions' => $list ), 200 );
 	}
-}
+
+	public static function skip_stage( WP_REST_Request $request ) {
+		$id   = $request->get_param( 'id' );
+		$body = $request->get_json_params() ?: array();
+		$stage_name = isset( $body['stageName'] ) ? strtolower( trim( (string) $body['stageName'] ) ) : '';
+
+		$data = Portal_Data::read_submissions();
+		$idx  = null;
+		foreach ( $data['submissions'] as $i => $s ) {
+			if ( ( $s['id'] ?? '' ) === $id ) { $idx = $i; break; }
+		}
+		if ( $idx === null ) {
+			return new WP_REST_Response( array( 'error' => 'Submission not found.' ), 404 );
+		}
+
+		$sub    = $data['submissions'][ $idx ];
+		$stages = $sub['reviewStages'] ?? array();
+		$found  = false;
+		foreach ( $stages as $si => $stage ) {
+			$match = $stage_name === '' || strtolower( (string) ( $stage['stageName'] ?? '' ) ) === $stage_name;
+			if ( $match && ! Portal_Data::is_stage_approved( $stage ) && ! ( $stage['skipped'] ?? false ) ) {
+				$stages[ $si ]['skipped']   = true;
+				$stages[ $si ]['skippedAt'] = gmdate( 'c' );
+				$stages[ $si ]['skippedBy'] = wp_get_current_user()->user_email ?? '';
+				// Mark all reviewers Approved so derived status can progress
+				foreach ( $stages[ $si ]['reviewers'] ?? array() as $r ) {
+					$em = strtolower( trim( (string) ( $r['email'] ?? '' ) ) );
+					if ( $em ) $stages[ $si ]['decisions'][ $em ] = 'Approved';
+				}
+				$found = true;
+				break;
+			}
+		}
+		if ( ! $found ) {
+			return new WP_REST_Response( array( 'error' => 'No pending stage found to skip.' ), 400 );
+		}
+
+		$sub['reviewStages'] = $stages;
+		$sub['status']       = Portal_Data::derive_submission_status( $sub );
+		$data['submissions'][ $idx ] = $sub;
+		Portal_Data::write_submissions( $data );
+		return new WP_REST_Response( $sub, 200 );
+	}
+
+	public static function submission_deadlines( WP_REST_Request $request ) {
+		$id  = $request->get_param( 'id' );
+		$sub = self::get_submission_by_id( $id );
+		if ( ! $sub ) {
+			return new WP_REST_Response( array( 'error' => 'Submission not found.' ), 404 );
+		}
+		$stages    = $sub['reviewStages'] ?? array();
+		$deadlines = array();
+		foreach ( $stages as $i => $stage ) {
+			$deadlines[] = array(
+				'stageName'  => $stage['stageName'] ?? '',
+				'stageIndex' => $i,
+				'deadline'   => Portal_Data::calculate_stage_deadline( $sub, $i ),
+				'approved'   => Portal_Data::is_stage_approved( $stage ),
+				'skipped'    => $stage['skipped'] ?? false,
+			);
+		}
+		return new WP_REST_Response( array( 'id' => $id, 'deadlines' => $deadlines ), 200 );
+	}
+
+	public static function analytics_overdue( WP_REST_Request $request ) {
+		return new WP_REST_Response( array( 'overdue' => Portal_Data::get_overdue_submissions() ), 200 );
+	}
+
+	/**
+	 * Send email notification to all reviewers assigned to a stage.
+	 */
+	private static function notify_stage_reviewers( $submission, $stage ) {
+		$reviewers = $stage['reviewers'] ?? array();
+		foreach ( $reviewers as $reviewer ) {
+			$email = trim( (string) ( $reviewer['email'] ?? '' ) );
+			if ( ! $email || ! is_email( $email ) ) {
+				continue;
+			}
+			$subject = 'Research Review Portal: Review Requested (' . ( $submission['id'] ?? '' ) . ')';
+			$message = sprintf(
+				"Hello %s,\n\nYou have been assigned to review a submission for stage: %s\n\nTitle: %s\nType: %s\nID: %s\n\nPlease log in to the portal to review the submission.\n\nThank you,\nResearch Review Portal",
+				trim( (string) ( $reviewer['name'] ?? $reviewer['email'] ?? '' ) ),
+				$stage['stageName'] ?? '',
+				$submission['title'] ?? '–',
+				$submission['type'] ?? '–',
+				$submission['id'] ?? ''
+			);
+			if ( function_exists( 'wp_mail' ) ) {
+				wp_mail( $email, $subject, $message );
+			}
+		}
+	}

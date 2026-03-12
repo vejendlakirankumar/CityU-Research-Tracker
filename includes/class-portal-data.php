@@ -863,6 +863,63 @@ class Portal_Data {
 		return $output;
 	}
 
+	/**
+	 * Return the index of the first stage that is neither fully approved nor skipped.
+	 * Returns the last stage index if all are done.
+	 */
+	public static function get_active_stage_index( $submission ) {
+		$stages = isset( $submission['reviewStages'] ) && is_array( $submission['reviewStages'] ) ? $submission['reviewStages'] : array();
+		foreach ( $stages as $i => $stage ) {
+			if ( ! ( $stage['skipped'] ?? false ) && ! self::is_stage_approved( $stage ) ) {
+				return $i;
+			}
+		}
+		return max( 0, count( $stages ) - 1 );
+	}
+
+	/**
+	 * Calculate the due-date for a stage. Default: 7 days per stage from submission creation.
+	 * Config key: stageDueDays[type] (integer days).
+	 */
+	public static function calculate_stage_deadline( $submission, $stage_index ) {
+		$created_ts = isset( $submission['createdAt'] ) ? strtotime( $submission['createdAt'] ) : time();
+		$type       = $submission['type'] ?? 'conference';
+		$config     = self::read_config();
+		$days       = isset( $config['stageDueDays'][ $type ] ) ? (int) $config['stageDueDays'][ $type ] : 7;
+		$deadline_ts = $created_ts + ( ( $stage_index + 1 ) * $days * DAY_IN_SECONDS );
+		return gmdate( 'c', $deadline_ts );
+	}
+
+	/**
+	 * Return an array of all submissions / stages that are overdue.
+	 */
+	public static function get_overdue_submissions() {
+		$data    = self::read_submissions();
+		$subs    = $data['submissions'] ?? array();
+		$now     = time();
+		$overdue = array();
+		foreach ( $subs as $sub ) {
+			$stages = $sub['reviewStages'] ?? array();
+			foreach ( $stages as $i => $stage ) {
+				if ( self::is_stage_approved( $stage ) || ( $stage['skipped'] ?? false ) ) {
+					continue;
+				}
+				$deadline_ts = strtotime( self::calculate_stage_deadline( $sub, $i ) );
+				if ( $deadline_ts && $now > $deadline_ts ) {
+					$overdue[] = array(
+						'submissionId' => $sub['id'] ?? '',
+						'title'        => $sub['title'] ?? '',
+						'stageName'    => $stage['stageName'] ?? '',
+						'stageIndex'   => $i,
+						'deadline'     => gmdate( 'c', $deadline_ts ),
+						'reviewers'    => array_map( function ( $r ) { return $r['email'] ?? ''; }, $stage['reviewers'] ?? array() ),
+					);
+				}
+			}
+		}
+		return $overdue;
+	}
+
 	private static function array_find_by_email( $arr, $email ) {
 		$email = strtolower( trim( $email ) );
 		foreach ( $arr as $a ) {

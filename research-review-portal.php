@@ -128,14 +128,15 @@ class Research_Review_Portal {
 		}
 
 		wp_add_inline_script( 'research-review-portal', sprintf(
-			'window.RRP = { restBase: %s, nonce: %s, isLoggedIn: %s, loginUrl: %s, logoutUrl: %s, userName: %s, userRole: %s };',
+			'window.RRP = { restBase: %s, nonce: %s, isLoggedIn: %s, loginUrl: %s, logoutUrl: %s, userName: %s, userRole: %s, userEmail: %s };',
 			wp_json_encode( rest_url( 'research-portal/v1' ) ),
 			wp_json_encode( wp_create_nonce( 'wp_rest' ) ),
 			wp_json_encode( $logged_in ),
 			wp_json_encode( $login_url ),
 			wp_json_encode( $logout_url ),
 			wp_json_encode( $user_name ),
-			wp_json_encode( $role_label )
+			wp_json_encode( $role_label ),
+			wp_json_encode( $current_user->exists() ? $current_user->user_email : '' )
 		), 'before' );
 
 		ob_start();
