@@ -191,8 +191,8 @@ class Portal_REST {
 	 */
 
 	public static function can_submit_research( WP_REST_Request $request ) {
-		// Allow logged-in users with submission capability or non-logged users for now
-		return is_user_logged_in() ? current_user_can( 'rrp_submit_research' ) || current_user_can( 'read' ) : true;
+		// Require login and submission capability
+		return is_user_logged_in() && current_user_can( 'rrp_submit_research' );
 	}
 
 	public static function can_view_submissions( WP_REST_Request $request ) {

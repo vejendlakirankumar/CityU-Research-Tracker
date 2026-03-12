@@ -3,6 +3,9 @@
 
   var restBase = (window.RRP && window.RRP.restBase) ? window.RRP.restBase.replace(/\/$/, '') : '';
   var nonce = (window.RRP && window.RRP.nonce) || '';
+  var isLoggedIn = (window.RRP && window.RRP.isLoggedIn) || false;
+  var loginUrl = (window.RRP && window.RRP.loginUrl) || '/wp-login.php';
+  var logoutUrl = (window.RRP && window.RRP.logoutUrl) || '/wp-login.php?action=logout';
 
   function api(method, path, body) {
     var url = restBase + path;
@@ -36,6 +39,16 @@
   var typeToApi = { conference: 'conference', publication: 'publication', student: 'student-project', grant: 'grant' };
 
   function renderSelection(container) {
+    if (!isLoggedIn) {
+      container.innerHTML =
+        '<h1>Research Submission Process</h1>' +
+        '<p class="rrp-info">You are not logged in. To submit research and access your dashboard, please <a href="' + escapeHtml(loginUrl) + '">log in</a> first.</p>' +
+        '<p class="rrp-info">If you do not have an account, contact your administrator.</p>' +
+        '<p><a class="rrp-btn secondary" href="' + escapeHtml(loginUrl) + '">Log in</a></p>' +
+        '<div style="margin-top:1rem;"><a class="rrp-btn" href="/">View process documentation</a></div>';
+      return;
+    }
+
     container.innerHTML =
       '<h1>Research Review Portal</h1>' +
       '<p style="color: var(--rrp-text-muted); margin-bottom: 1rem;">Choose a submission type to get started.</p>' +

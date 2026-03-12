@@ -43,12 +43,38 @@ class Research_Review_Portal {
 			'1.0.0',
 			true
 		);
+
+		$logged_in = is_user_logged_in();
+		$login_url = wp_login_url( get_permalink() );
+		$logout_url = wp_logout_url( get_permalink() );
+
 		wp_add_inline_script( 'research-review-portal', sprintf(
-			'window.RRP = { restBase: %s, nonce: %s };',
+			'window.RRP = { restBase: %s, nonce: %s, isLoggedIn: %s, loginUrl: %s, logoutUrl: %s };',
 			wp_json_encode( rest_url( 'research-portal/v1' ) ),
-			wp_json_encode( wp_create_nonce( 'wp_rest' ) )
+			wp_json_encode( wp_create_nonce( 'wp_rest' ) ),
+			wp_json_encode( $logged_in ),
+			wp_json_encode( $login_url ),
+			wp_json_encode( $logout_url )
 		), 'before' );
+
 		ob_start();
+
+		if ( ! $logged_in ) {
+			?>
+			<div id="research-review-portal" class="rrp-portal">
+				<div class="rrp-notice">
+					<h1>Research Submission Process</h1>
+					<p>Welcome to the Research Review Portal. Please review the submission process in detail below.</p>
+					<p><a href="<?php echo esc_url( $login_url ); ?>" class="rrp-btn">Log in to submit and access dashboard</a></p>
+				</div>
+				<div class="rrp-process-docs-container">
+					<?php echo do_shortcode( '[rrp_process_documentation type="all" style="compact"]' ); ?>
+				</div>
+			</div>
+			<?php
+			return ob_get_clean();
+		}
+
 		?>
 		<div id="research-review-portal" class="rrp-portal" data-rest-base="<?php echo esc_attr( rest_url( 'research-portal/v1' ) ); ?>" data-nonce="<?php echo esc_attr( wp_create_nonce( 'wp_rest' ) ); ?>">
 			<div class="rrp-loading">Loading portal…</div>
