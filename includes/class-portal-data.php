@@ -658,6 +658,112 @@ class Portal_Data {
 		return $metrics;
 	}
 
+	public static function get_reviewer_workload( $reviewer_email ) {
+		$reviewer_email = strtolower( trim( (string) $reviewer_email ) );
+		$data = self::read_submissions();
+		$submissions = isset( $data['submissions'] ) && is_array( $data['submissions'] ) ? $data['submissions'] : array();
+
+		$workload = array(
+			'reviewerEmail' => $reviewer_email,
+			'totalAssigned' => 0,
+			'pending' => 0,
+			'approved' => 0,
+			'rejected' => 0,
+			'revisionRequired' => 0,
+			'activeSubmissions' => array(),
+		);
+
+		foreach ( $submissions as $sub ) {
+			$assignedReviewer = false;
+			foreach ( $sub['assignedReviewers'] ?? array() as $r ) {
+				if ( strtolower( trim( (string) ( $r['email'] ?? '' ) ) ) === $reviewer_email ) {
+					$assignedReviewer = true;
+					break;
+				}
+			}
+			if ( ! $assignedReviewer ) {
+				continue;
+			}
+
+			$workload['totalAssigned']++;
+			$decision = 'Pending';
+			foreach ( $sub['reviewStages'] ?? array() as $stage ) {
+				$decisions = isset( $stage['decisions'] ) && is_array( $stage['decisions'] ) ? $stage['decisions'] : array();
+				if ( isset( $decisions[ $reviewer_email ] ) ) {
+					$decision = strtolower( trim( (string) $decisions[ $reviewer_email ] ) );
+					break;
+				}
+			}
+
+			if ( $decision === 'approved' ) {
+				$workload['approved']++;
+			} elseif ( $decision === 'rejected' ) {
+				$workload['rejected']++;
+			} elseif ( in_array( $decision, array( 'needs revision', 'revision required' ), true ) ) {
+				$workload['revisionRequired']++;
+			} else {
+				$workload['pending']++;
+			}
+
+			$workload['activeSubmissions'][] = array(
+				'id' => $sub['id'] ?? '',
+				'title' => $sub['title'] ?? '',
+				'status' => $sub['status'] ?? '',
+				'decision' => $decision,
+			);
+		}
+
+		return $workload;
+	}
+
+	public static function get_review_criteria_templates() {
+		$config = self::read_config();
+		return isset( $config['reviewCriteriaTemplates'] ) && is_array( $config['reviewCriteriaTemplates'] ) ? $config['reviewCriteriaTemplates'] : array(
+			array(
+				'name' => 'Standard Evaluation',
+				'criteria' => array(
+					array( 'label' => 'Originality', 'weight' => 25 ),
+					array( 'label' => 'Methodology', 'weight' => 25 ),
+					array( 'label' => 'Impact', 'weight' => 25 ),
+					array( 'label' => 'Clarity', 'weight' => 25 ),
+				),
+			),
+		);
+	}
+
+	public static function set_review_criteria_templates( $templates ) {
+		$config = self::read_config();
+		$config['reviewCriteriaTemplates'] = is_array( $templates ) ? $templates : array();
+		self::write_config( $config );
+		return $config['reviewCriteriaTemplates'];
+	}
+
+	public static function get_conflict_of_interest_records() {
+		$config = self::read_config();
+		return isset( $config['conflictOfInterest'] ) && is_array( $config['conflictOfInterest'] ) ? $config['conflictOfInterest'] : array();
+	}
+
+	public static function declare_conflict_of_interest( $reviewer_email, $submission_id, $reason ) {
+		$reviewer_email = strtolower( trim( (string) $reviewer_email ) );
+		$submission_id = trim( (string) $submission_id );
+		$reason = trim( (string) $reason );
+		$config = self::read_config();
+		if ( ! isset( $config['conflictOfInterest'] ) || ! is_array( $config['conflictOfInterest'] ) ) {
+			$config['conflictOfInterest'] = array();
+		}
+		if ( ! isset( $config['conflictOfInterest'][ $submission_id ] ) ) {
+			$config['conflictOfInterest'][ $submission_id ] = array();
+		}
+		$config['conflictOfInterest'][ $submission_id ][ $reviewer_email ] = array(
+			'reviewerEmail' => $reviewer_email,
+			'submissionId' => $submission_id,
+			'reason' => $reason,
+			'timestamp' => gmdate( 'c' ),
+		);
+		self::write_config( $config );
+		return $config['conflictOfInterest'][ $submission_id ][ $reviewer_email ];
+	}
+
 	public static function get_reviewer_metrics( $reviewer_email ) {
 		$reviewer_email = strtolower( trim( (string) $reviewer_email ) );
 		$data = self::read_submissions();

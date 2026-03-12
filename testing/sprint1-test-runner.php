@@ -4,6 +4,11 @@
  * Generates realistic test data for Sprint 1 validation
  */
 
+require_once __DIR__ . '/../includes/class-portal-data.php';
+require_once __DIR__ . '/../includes/class-portal-rest.php';
+require_once __DIR__ . '/../includes/class-user-management.php';
+require_once __DIR__ . '/../includes/class-process-documentation.php';
+
 if ( ! function_exists( 'username_exists' ) ) {
 	function username_exists( $username ) {
 		return false;
@@ -351,7 +356,11 @@ function run_sprint1_tests() {
     // 6. Test Sprint 4 analytics and reports
     echo "Testing sprint4 analytics and reports...\n";
     test_sprint4_features();
-    
+
+	// 7. Test Sprint 5 reviewer analytics and workflow features
+	echo "Testing sprint5 reviewer features...\n";
+	test_sprint5_features();
+
     echo "=== Sprint 1 Testing Completed ===\n";
 }
 
@@ -517,6 +526,28 @@ function test_sprint4_features() {
     return $tests;
 }
 
+function test_sprint5_features() {
+    $tests = array();
+
+    $reviewer = 'reviewer_smith@cityu.edu.hk';
+    $workload = Portal_Data::get_reviewer_workload( $reviewer );
+    $templates = Portal_Data::get_review_criteria_templates();
+    $coi = Portal_Data::declare_conflict_of_interest( $reviewer, 'TEST-COI-001', 'Conflict testing' );
+    $coi_records = Portal_Data::get_conflict_of_interest_records();
+
+    $tests['workload_has_counts'] = is_array( $workload ) && isset( $workload['totalAssigned'] );
+    $tests['templates_loaded'] = is_array( $templates );
+    $tests['coi_declaration'] = is_array( $coi ) && isset( $coi['reviewerEmail'] );
+    $tests['coi_records'] = is_array( $coi_records ) && isset( $coi_records['TEST-COI-001'] );
+    $tests['rest_analytics_workload'] = method_exists( 'Portal_REST', 'analytics_workload' );
+    $tests['rest_conflicts'] = method_exists( 'Portal_REST', 'conflicts_list' ) && method_exists( 'Portal_REST', 'declare_conflict' );
+    $tests['rest_review_templates'] = method_exists( 'Portal_REST', 'config_review_templates_get' ) && method_exists( 'Portal_REST', 'config_review_templates_put' );
+    $tests['rest_reviews_rate'] = method_exists( 'Portal_REST', 'reviews_rate' );
+
+    log_test_results( 'sprint5', $tests );
+    return $tests;
+}
+
 function log_test_results($test_suite, $results) {
     $log_file = __DIR__ . '/../testing/sprint1-test-results.md';
     $timestamp = date('Y-m-d H:i:s');
@@ -532,4 +563,8 @@ function log_test_results($test_suite, $results) {
     
     // Append to log file
     file_put_contents($log_file, $log_content, FILE_APPEND | LOCK_EX);
+}
+
+if ( php_sapi_name() === 'cli' ) {
+    run_sprint1_tests();
 }

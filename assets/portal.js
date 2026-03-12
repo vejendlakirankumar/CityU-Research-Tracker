@@ -324,9 +324,121 @@
       '<button type="button" class="rrp-btn secondary" style="margin-bottom: 1rem;" data-back>← Back</button>' +
       '<div class="rrp-form-block"><label>Reviewer Email</label><input type="email" id="rrp-reviewer-email" placeholder="reviewer@cityu.edu.hk" required></div>' +
       '<button type="button" class="rrp-btn" id="rrp-reviewer-metrics-btn">Load Metrics</button>' +
-      '<div id="rrp-reviewer-metrics" style="margin-top:1rem;"></div>';
+      '<button type="button" class="rrp-btn secondary" id="rrp-load-templates-btn" style="margin-left:0.5rem;">Load Criteria Templates</button>' +
+      '<div id="rrp-reviewer-metrics" style="margin-top:1rem;"></div>' +
+      '<div id="rrp-reviewer-templates" style="margin-top:1rem;"></div>' +
+      '<div id="rrp-reviewer-rate" style="margin-top:1rem;"></div>' +
+      '<div id="rrp-reviewer-coi" style="margin-top:1rem;"></div>';
 
     container.querySelector('[data-back]').addEventListener('click', function () { renderSelection(container); });
+
+    function showReviewerMetrics(email) {
+      var output = document.getElementById('rrp-reviewer-metrics');
+      output.innerHTML = '<p class="rrp-loading">Loading reviewer metrics…</p>';
+
+      Promise.all([
+        api('GET', '/analytics/reviewer?reviewerEmail=' + encodeURIComponent(email)),
+        api('GET', '/reviews?reviewerEmail=' + encodeURIComponent(email)),
+        api('GET', '/analytics/workload?reviewerEmail=' + encodeURIComponent(email))
+      ]).then(function (results) {
+        var metrics = results[0];
+        var submissions = results[1].submissions || [];
+        var workload = results[2];
+
+        output.innerHTML =
+          '<p><strong>Email:</strong> ' + escapeHtml(metrics.reviewerEmail || email) + '</p>' +
+          '<p><strong>Total assigned:</strong> ' + (metrics.totalAssigned || 0) + '</p>' +
+          '<p><strong>Pending:</strong> ' + (metrics.pending || 0) + '</p>' +
+          '<p><strong>Approved:</strong> ' + (metrics.approved || 0) + '</p>' +
+          '<p><strong>Rejected:</strong> ' + (metrics.rejected || 0) + '</p>' +
+          '<p><strong>Needs revision:</strong> ' + (metrics.needsRevision || 0) + '</p>' +
+          '<p><strong>Overdue:</strong> ' + (metrics.overdue || 0) + '</p>' +
+          '<p><strong>Active submissions:</strong> ' + ((workload.activeSubmissions && workload.activeSubmissions.length) || 0) + '</p>';
+
+        if (submissions.length) {
+          output.innerHTML += '<h3>Assigned submissions</h3><ul class="rrp-list">' + submissions.map(function (item) {
+            return '<li><strong>' + escapeHtml(item.title || item.id) + '</strong> · ' + escapeHtml(item.status || 'N/A') + '</li>';
+          }).join('') + '</ul>';
+        }
+      }).catch(function () {
+        output.innerHTML = '<div class="rrp-error">Unable to load reviewer metrics.</div>';
+      });
+    }
+
+    function loadTemplates() {
+      var output = document.getElementById('rrp-reviewer-templates');
+      output.innerHTML = '<p class="rrp-loading">Loading review templates…</p>';
+      api('GET', '/config/review-templates').then(function (resp) {
+        output.innerHTML = '<h3>Review Criteria Templates</h3>';
+        if (Array.isArray(resp)) {
+          output.innerHTML += '<ul class="rrp-list">' + resp.map(function (template) {
+            return '<li><strong>' + escapeHtml(template.name || 'Unnamed') + '</strong> ⚖ ' + escapeHtml((template.criteria || []).map(function (c) { return c.label + ' (' + c.weight + '%)'; }).join(', ')) + '</li>';
+          }).join('') + '</ul>';
+        } else {
+          output.innerHTML += '<p>No templates available.</p>';
+        }
+      }).catch(function () {
+        output.innerHTML = '<div class="rrp-error">Unable to load review templates.</div>';
+      });
+    }
+
+    function ratingForm() {
+      var container = document.getElementById('rrp-reviewer-rate');
+      container.innerHTML =
+        '<h3>Submit Review Rating</h3>' +
+        '<div class="rrp-form-block"><label>Submission ID</label><input type="text" id="rrp-rating-submission-id" placeholder="SUB-2026-001" required></div>' +
+        '<div class="rrp-form-block"><label>Review comments</label><textarea id="rrp-rating-comments" rows="3" placeholder="Add your assessment"></textarea></div>' +
+        '<div class="rrp-form-block"><label>Ratings (JSON array of name/score)</label><textarea id="rrp-rating-values" rows="3" placeholder="[{\"label\":\"Originality\",\"score\":4}]" required></textarea></div>' +
+        '<button type="button" class="rrp-btn" id="rrp-reviewer-submit-rating">Submit Rating</button>' +
+        '<div id="rrp-reviewer-rating-message" style="margin-top:.75rem;"></div>';
+
+      document.getElementById('rrp-reviewer-submit-rating').addEventListener('click', function () {
+        var email = document.getElementById('rrp-reviewer-email').value;
+        var submissionId = document.getElementById('rrp-rating-submission-id').value;
+        var comments = document.getElementById('rrp-rating-comments').value;
+        var ratingsRaw = document.getElementById('rrp-rating-values').value;
+
+        if (!email || !submissionId || !ratingsRaw) {
+          document.getElementById('rrp-reviewer-rating-message').innerHTML = '<div class="rrp-error">Please fill in required rating fields.</div>';
+          return;
+        }
+
+        var ratings;
+        try { ratings = JSON.parse(ratingsRaw); } catch (e) {
+          document.getElementById('rrp-reviewer-rating-message').innerHTML = '<div class="rrp-error">Ratings JSON invalid.</div>';
+          return;
+        }
+
+        api('POST', '/reviews/rate', { reviewerEmail: email, submissionId: submissionId, ratings: ratings, comments: comments })
+          .then(function () { document.getElementById('rrp-reviewer-rating-message').innerHTML = '<div class="rrp-success">Rating submitted.</div>'; })
+          .catch(function () { document.getElementById('rrp-reviewer-rating-message').innerHTML = '<div class="rrp-error">Failed to submit rating.</div>'; });
+      });
+    }
+
+    function conflictForm() {
+      var container = document.getElementById('rrp-reviewer-coi');
+      container.innerHTML =
+        '<h3>Declare Conflict of Interest</h3>' +
+        '<div class="rrp-form-block"><label>Submission ID</label><input type="text" id="rrp-coi-submission-id" placeholder="SUB-2026-001" required></div>' +
+        '<div class="rrp-form-block"><label>Reason</label><textarea id="rrp-coi-reason" rows="2" placeholder="Describe conflict"></textarea></div>' +
+        '<button type="button" class="rrp-btn" id="rrp-reviewer-declare-coi">Declare Conflict</button>' +
+        '<div id="rrp-reviewer-coi-message" style="margin-top:.75rem;"></div>';
+
+      document.getElementById('rrp-reviewer-declare-coi').addEventListener('click', function () {
+        var email = document.getElementById('rrp-reviewer-email').value;
+        var submissionId = document.getElementById('rrp-coi-submission-id').value;
+        var reason = document.getElementById('rrp-coi-reason').value;
+
+        if (!email || !submissionId || !reason) {
+          document.getElementById('rrp-reviewer-coi-message').innerHTML = '<div class="rrp-error">All fields are required.</div>';
+          return;
+        }
+
+        api('POST', '/conflicts', { reviewerEmail: email, submissionId: submissionId, reason: reason })
+          .then(function () { document.getElementById('rrp-reviewer-coi-message').innerHTML = '<div class="rrp-success">Conflict declared.</div>'; })
+          .catch(function () { document.getElementById('rrp-reviewer-coi-message').innerHTML = '<div class="rrp-error">Failed to declare conflict.</div>'; });
+      });
+    }
 
     document.getElementById('rrp-reviewer-metrics-btn').addEventListener('click', function () {
       var email = document.getElementById('rrp-reviewer-email').value;
@@ -334,34 +446,12 @@
         alert('Please enter reviewer email.');
         return;
       }
-      var output = document.getElementById('rrp-reviewer-metrics');
-      output.innerHTML = '<p class="rrp-loading">Loading reviewer metrics…</p>';
-
-      Promise.all([
-        api('GET', '/analytics/reviewer?reviewerEmail=' + encodeURIComponent(email)),
-        api('GET', '/reviews?reviewerEmail=' + encodeURIComponent(email))
-      ]).then(function (results) {
-        var metrics = results[0];
-        var submissions = results[1].submissions || [];
-
-        output.innerHTML =
-          '<p><strong>Email:</strong> ' + escapeHtml(metrics.reviewerEmail || email) + '</p>' +
-          '<p><strong>Total assignments:</strong> ' + (metrics.totalAssigned || 0) + '</p>' +
-          '<p><strong>Pending:</strong> ' + (metrics.pending || 0) + '</p>' +
-          '<p><strong>Approved:</strong> ' + (metrics.approved || 0) + '</p>' +
-          '<p><strong>Rejected:</strong> ' + (metrics.rejected || 0) + '</p>' +
-          '<p><strong>Needs revision:</strong> ' + (metrics.needsRevision || 0) + '</p>' +
-          '<p><strong>Overdue:</strong> ' + (metrics.overdue || 0) + '</p>';
-
-        if (submissions.length) {
-          output.innerHTML += '<h3>Assigned submissions</h3><ul class="rrp-list">' + submissions.map(function (item) {
-            return '<li><strong>' + escapeHtml(item.title || item.id) + '</strong> · ' + escapeHtml(item.status || '') + '</li>';
-          }).join('') + '</ul>';
-        }
-      }).catch(function () {
-        output.innerHTML = '<div class="rrp-error">Unable to load reviewer metrics.</div>';
-      });
+      showReviewerMetrics(email);
+      ratingForm();
+      conflictForm();
     });
+
+    document.getElementById('rrp-load-templates-btn').addEventListener('click', loadTemplates);
   }
 
   function renderPublic(container) {

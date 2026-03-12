@@ -99,6 +99,36 @@ class Portal_REST {
 			'callback'            => array( __CLASS__, 'analytics_reviewer' ),
 			'permission_callback' => array( __CLASS__, 'can_view_dashboard' ),
 		) );
+		register_rest_route( self::NAMESPACE, '/analytics/workload', array(
+			'methods'             => 'GET',
+			'callback'            => array( __CLASS__, 'analytics_workload' ),
+			'permission_callback' => array( __CLASS__, 'can_view_dashboard' ),
+		) );
+		register_rest_route( self::NAMESPACE, '/conflicts', array(
+			'methods'             => 'GET',
+			'callback'            => array( __CLASS__, 'conflicts_list' ),
+			'permission_callback' => array( __CLASS__, 'can_view_dashboard' ),
+		) );
+		register_rest_route( self::NAMESPACE, '/conflicts', array(
+			'methods'             => 'POST',
+			'callback'            => array( __CLASS__, 'declare_conflict' ),
+			'permission_callback' => array( __CLASS__, 'can_manage_workflow' ),
+		) );
+		register_rest_route( self::NAMESPACE, '/config/review-templates', array(
+			'methods'             => 'GET',
+			'callback'            => array( __CLASS__, 'config_review_templates_get' ),
+			'permission_callback' => array( __CLASS__, 'can_view_config' ),
+		) );
+		register_rest_route( self::NAMESPACE, '/config/review-templates', array(
+			'methods'             => 'PUT',
+			'callback'            => array( __CLASS__, 'config_review_templates_put' ),
+			'permission_callback' => array( __CLASS__, 'can_manage_config' ),
+		) );
+		register_rest_route( self::NAMESPACE, '/reviews/rate', array(
+			'methods'             => 'POST',
+			'callback'            => array( __CLASS__, 'reviews_rate' ),
+			'permission_callback' => array( __CLASS__, 'can_provide_feedback' ),
+		) );
 		register_rest_route( self::NAMESPACE, '/reports/export', array(
 			'methods'             => 'GET',
 			'callback'            => array( __CLASS__, 'reports_export' ),
@@ -358,6 +388,74 @@ class Portal_REST {
 		}
 		$metrics = Portal_Data::get_reviewer_metrics( $reviewer_email );
 		return new WP_REST_Response( $metrics, 200 );
+	}
+
+	public static function analytics_workload( WP_REST_Request $request ) {
+		$reviewer_email = $request->get_param( 'reviewerEmail' );
+		if ( ! $reviewer_email ) {
+			return new WP_REST_Response( array( 'error' => 'reviewerEmail query parameter is required.' ), 400 );
+		}
+		$workload = Portal_Data::get_reviewer_workload( $reviewer_email );
+		return new WP_REST_Response( $workload, 200 );
+	}
+
+	public static function conflicts_list( WP_REST_Request $request ) {
+		return new WP_REST_Response( Portal_Data::get_conflict_of_interest_records(), 200 );
+	}
+
+	public static function declare_conflict( WP_REST_Request $request ) {
+		$body = $request->get_json_params() ?: $request->get_body_params();
+		$reviewer_email = isset( $body['reviewerEmail'] ) ? trim( (string) $body['reviewerEmail'] ) : '';
+		$submission_id = isset( $body['submissionId'] ) ? trim( (string) $body['submissionId'] ) : '';
+		$reason = isset( $body['reason'] ) ? trim( (string) $body['reason'] ) : '';
+		if ( ! $reviewer_email || ! $submission_id || ! $reason ) {
+			return new WP_REST_Response( array( 'error' => 'reviewerEmail, submissionId, and reason are required.' ), 400 );
+		}
+		$record = Portal_Data::declare_conflict_of_interest( $reviewer_email, $submission_id, $reason );
+		return new WP_REST_Response( $record, 201 );
+	}
+
+	public static function config_review_templates_get( WP_REST_Request $request ) {
+		return new WP_REST_Response( Portal_Data::get_review_criteria_templates(), 200 );
+	}
+
+	public static function config_review_templates_put( WP_REST_Request $request ) {
+		$body = $request->get_json_params() ?: $request->get_body_params();
+		$templates = isset( $body['templates'] ) && is_array( $body['templates'] ) ? $body['templates'] : array();
+		$updated = Portal_Data::set_review_criteria_templates( $templates );
+		return new WP_REST_Response( array( 'templates' => $updated ), 200 );
+	}
+
+	public static function reviews_rate( WP_REST_Request $request ) {
+		$body = $request->get_json_params() ?: $request->get_body_params();
+		$submission_id = isset( $body['submissionId'] ) ? trim( (string) $body['submissionId'] ) : '';
+		$reviewer_email = isset( $body['reviewerEmail'] ) ? strtolower( trim( (string) $body['reviewerEmail'] ) ) : '';
+		$ratings = isset( $body['ratings'] ) && is_array( $body['ratings'] ) ? $body['ratings'] : array();
+		$comments = isset( $body['comments'] ) ? trim( (string) $body['comments'] ) : '';
+		if ( ! $submission_id || ! $reviewer_email || empty( $ratings ) ) {
+			return new WP_REST_Response( array( 'error' => 'submissionId, reviewerEmail, and ratings are required.' ), 400 );
+		}
+		$data = Portal_Data::read_submissions();
+		$found = false;
+		foreach ( $data['submissions'] as &$sub ) {
+			if ( $sub['id'] === $submission_id ) {
+				$found = true;
+				if ( ! isset( $sub['reviewScores'] ) || ! is_array( $sub['reviewScores'] ) ) {
+					$sub['reviewScores'] = array();
+				}
+				$sub['reviewScores'][ $reviewer_email ] = array(
+					'ratings' => $ratings,
+					'comments' => $comments,
+					'updatedAt' => gmdate( 'c' ),
+				);
+				Portal_Data::write_submissions( $data );
+				break;
+			}
+		}
+		if ( ! $found ) {
+			return new WP_REST_Response( array( 'error' => 'Submission not found' ), 404 );
+		}
+		return new WP_REST_Response( array( 'success' => true ), 200 );
 	}
 
 	public static function reports_export( WP_REST_Request $request ) {

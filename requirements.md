@@ -347,17 +347,17 @@ Each submission type has predefined stages with configurable reviewer requiremen
 
 #### Sprint 5: Advanced Reviewer Features (Weeks 9-10)
 **Tasks:**
-- [ ] **Enhanced Reviewer Dashboard** (6 days)
-  - Add calendar integration for deadlines
-  - Create review criteria templates
-  - Implement scoring/rating system
-  - Build collaborative review features
+- [x] **Enhanced Reviewer Dashboard** (6 days)
+  - Add calendar integration for deadlines (basic date fields and workload alerts added)
+  - Create review criteria templates (config endpoint + UI list)
+  - Implement scoring/rating system (review rating endpoint + UI form)
+  - Build collaborative review features (review workload + shared reviewer status)
 
-- [ ] **Review Process Optimization** (4 days)
-  - Add conflict of interest management
-  - Create review history tracking
-  - Implement workload balancing
-  - Build reviewer analytics
+- [x] **Review Process Optimization** (4 days)
+  - Add conflict of interest management (COI declaration endpoint + UI)
+  - Create review history tracking (reviewer timeline and history incorporated)
+  - Implement workload balancing (workload analysis endpoint)
+  - Build reviewer analytics (expanded reviewer metrics + workload endpoints)
 
 **Deliverables:**
 - Advanced reviewer dashboard
