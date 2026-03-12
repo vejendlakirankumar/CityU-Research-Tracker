@@ -78,11 +78,19 @@ class Research_Review_Portal {
 			?>
 			<div id="research-review-portal" class="rrp-portal">
 				<div class="rrp-notice">
-					<h1>Research Submission Process</h1>
-					<p>Welcome to the Research Review Portal. Please review the submission process in detail below.</p>
+					<h1>Welcome to CityU Research Review Portal</h1>
+					<p>The portal provides an end-to-end workflow for research submission and peer review.</p>
+					<ul>
+						<li>Conference / Symposium: Applied Research Symposium, Doctor of IT Forum</li>
+						<li>Publication: Journal and publication submissions</li>
+						<li>Student Project: Capstone and student research proposals</li>
+						<li>Grant: Funding and grant proposal submissions</li>
+					</ul>
+					<p>This page is for guests. To submit documents and access your personalized dashboard, please log in below.</p>
 					<p><a href="<?php echo esc_url( $login_url ); ?>" class="rrp-btn">Log in to submit and access dashboard</a></p>
 				</div>
 				<div class="rrp-process-docs-container">
+					<h2>Submission Process Flow (by type)</h2>
 					<?php echo do_shortcode( '[rrp_process_documentation type="all" style="compact"]' ); ?>
 				</div>
 			</div>
