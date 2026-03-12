@@ -26,7 +26,73 @@ class Research_Review_Portal {
 
 	public static function init() {
 		add_shortcode( 'research_review_portal', array( __CLASS__, 'shortcode_portal' ) );
+		add_action( 'wp_body_open', array( __CLASS__, 'render_site_banner' ) );
+		add_action( 'wp_head', array( __CLASS__, 'render_site_banner_fallback' ), 0 );
 	}
+
+	public static function render_site_banner() {
+		if ( ! function_exists( 'is_user_logged_in' ) ) {
+			return;
+		}
+
+		$logged_in = is_user_logged_in();
+		$login_url = wp_login_url( home_url() );
+		$logout_url = wp_logout_url( home_url() );
+		$current_user = wp_get_current_user();
+		$user_name = $current_user->exists() ? ( $current_user->display_name ?: $current_user->user_login ) : '';
+		$user_roles = $current_user->exists() ? $current_user->roles : array();
+		$role_label = '';
+		if ( in_array( 'rrp_student', $user_roles, true ) ) {
+			$role_label = 'Student';
+		} elseif ( in_array( 'rrp_reviewer', $user_roles, true ) ) {
+			$role_label = 'Reviewer';
+		} elseif ( in_array( 'rrp_coordinator', $user_roles, true ) ) {
+			$role_label = 'Coordinator';
+		} elseif ( in_array( 'rrp_admin', $user_roles, true ) || in_array( 'administrator', $user_roles, true ) ) {
+			$role_label = 'Admin';
+		}
+
+		echo '<div class="rrp-site-banner ' . ( $logged_in ? 'rrp-site-banner-loggedin' : 'rrp-site-banner-guest' ) . '">' .
+			'<div class="rrp-site-banner_content">';
+
+		if ( $logged_in ) {
+			echo '<span>Logged in as <strong>' . esc_html( $user_name ) . '</strong> (' . esc_html( $role_label ?: 'User' ) . ')</span>';
+		} else {
+			echo '<span>Guest user: please log in to submit documents and access your dashboard.</span>';
+		}
+
+		echo '</div><div class="rrp-site-banner_actions">';
+		if ( $logged_in ) {
+			echo '<a class="rrp-btn secondary" href="' . esc_url( add_query_arg( 'portal', '1', home_url( '/' ) ) ) . '">My Portal</a>';
+			echo '<a class="rrp-btn" href="' . esc_url( $logout_url ) . '">Logout</a>';
+		} else {
+			echo '<a class="rrp-btn" href="' . esc_url( $login_url ) . '">Login</a>';
+		}
+		echo '</div></div>';
+	}
+
+	public static function render_site_banner_fallback() {
+		// If theme doesn't support wp_body_open, render in head and use JS to move into body start.
+		?>
+		<style>
+		.rrp-site-banner { box-sizing: border-box; width: 100%; display: flex; justify-content: space-between; align-items: center; padding: 0.65rem 1rem; z-index: 99999; font-size: 0.95rem; }
+		.rrp-site-banner-guest { background: #f0f7ff; border-bottom: 1px solid #cfe2ff; color: #084298; }
+		.rrp-site-banner-loggedin { background: #e7f5ec; border-bottom: 1px solid #a8d8ab; color: #1d4620; }
+		.rrp-site-banner .rrp-site-banner_actions a { margin-left: 0.5rem; }
+		</style>
+		<script>
+		(function() {
+			var banner = document.querySelector('.rrp-site-banner');
+			if (!banner) return;
+			var body = document.body;
+			if (body.firstChild && body.firstChild.nodeName !== 'STYLE') {
+				body.insertBefore(banner, body.firstChild);
+			}
+		})();
+		</script>
+		<?php
+	}
+
 
 	public static function shortcode_portal( $atts ) {
 		do_action( 'rrp_portal_enqueue' );
