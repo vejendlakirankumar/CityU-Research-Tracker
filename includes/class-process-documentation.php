@@ -637,9 +637,25 @@ class RRP_Process_Documentation {
 
 		<script>
 		jQuery(document).ready(function($) {
-			// Show first process by default
-			$('.process-tab:first').addClass('active');
-			$('.process-details:first').show();
+			function getQueryParam(name) {
+				var match = window.location.search.match(new RegExp('[?&]' + name + '=([^&]+)'));
+				return match ? decodeURIComponent(match[1].replace(/\+/g, ' ')) : null;
+			}
+
+			var customStart = getQueryParam('start');
+			var selectedType = null;
+			var availableTypes = Object.keys(<?php echo json_encode( array_keys(self::PROCESS_DOCUMENTATION) ); ?>);
+
+			if ( customStart && availableTypes.indexOf(customStart) !== -1 ) {
+				selectedType = customStart;
+			} else {
+				selectedType = $('.process-tab:first').data('type');
+			}
+
+			$('.process-tab').removeClass('active');
+			$('.process-details').hide();
+			$('.process-tab[data-type="' + selectedType + '"]').addClass('active');
+			$('#process-' + selectedType).show();
 
 			// Tab switching functionality
 			$('.process-tab').on('click', function() {

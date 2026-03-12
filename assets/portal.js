@@ -38,6 +38,11 @@
 
   var typeToApi = { conference: 'conference', publication: 'publication', student: 'student-project', grant: 'grant' };
 
+  function getQueryParam(name) {
+    var match = window.location.search.match(new RegExp('[?&]' + name + '=([^&]+)'));
+    return match ? decodeURIComponent(match[1].replace(/\+/g, ' ')) : null;
+  }
+
   function renderSelection(container) {
     if (!isLoggedIn) {
       container.innerHTML =
@@ -103,6 +108,28 @@
         }
       });
     });
+
+    var startMode = getQueryParam('start');
+    if (startMode) {
+      if (['submit', 'status', 'dashboard', 'analytics', 'reviewer', 'public'].indexOf(startMode) !== -1) {
+        container.querySelector('.rrp-view-toggle [data-view="' + startMode + '"]').click();
+        return;
+      }
+      if (SUBMISSION_TYPES.some(function (t) { return t.id === startMode; })) {
+        var selectedCard = container.querySelector('.rrp-type-card[data-type="' + startMode + '"]');
+        if (selectedCard) {
+          selectedCard.click();
+        }
+      }
+    }
+
+    // select first type by default
+    if (!container.dataset.selectedType) {
+      var firstCard = container.querySelector('.rrp-type-card');
+      if (firstCard) {
+        firstCard.click();
+      }
+    }
   }
 
   function renderForm(container, type) {
