@@ -179,3 +179,38 @@
 .rrp-portal .rrp-view-toggle button.active {
   background: var(--rrp-primary-dark);
 }
+
+.rrp-portal .rrp-dashboard-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 0.8rem;
+  margin-bottom: 1rem;
+}
+
+.rrp-portal .rrp-dashboard-grid > div {
+  padding: 0.8rem;
+  border: 1px solid var(--rrp-border);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.rrp-portal .rrp-dashboard-section {
+  margin-top: 1rem;
+  padding: 0.8rem;
+  border: 1px solid var(--rrp-border);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.rrp-portal #rrp-dashboard-filters label {
+  display: block;
+  margin-top: 0.5rem;
+  margin-bottom: 0.2rem;
+  font-weight: 600;
+}
+
+.rrp-portal #rrp-dashboard-filters select {
+  margin-right: 0.5rem;
+  width: 48%;
+}
+

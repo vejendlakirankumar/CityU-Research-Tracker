@@ -117,8 +117,11 @@ class Portal_Data {
 		return $words ? count( $words ) : 0;
 	}
 
-	public static function validate_submission( $type, $body ) {
+	public static function validate_submission( $type, $body, $is_draft = false ) {
 		$body = is_array( $body ) ? $body : array();
+		if ( $is_draft ) {
+			return array();
+		}
 		$errors = array();
 		switch ( $type ) {
 			case 'conference':
@@ -416,6 +419,168 @@ class Portal_Data {
 		$submission['reviewStages']       = $review_stages;
 		$submission['assignedReviewers']  = $assigned_reviewers;
 		return $submission;
+	}
+
+	public static function is_stage_approved( $stage ) {
+		if ( empty( $stage['reviewers'] ) || ! is_array( $stage['reviewers'] ) ) {
+			return false;
+		}
+		$decisions = isset( $stage['decisions'] ) && is_array( $stage['decisions'] ) ? $stage['decisions'] : array();
+		foreach ( $stage['reviewers'] as $r ) {
+			$em = strtolower( trim( (string) ( $r['email'] ?? '' ) ) );
+			if ( ! $em ) {
+				continue;
+			}
+			$decision = strtolower( trim( (string) ( $decisions[ $em ] ?? '' ) ) );
+			if ( $decision !== 'approved' ) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	public static function derive_submission_status( $submission ) {
+		$status = $submission['status'] ?? 'Submitted';
+		$stages = isset( $submission['reviewStages'] ) && is_array( $submission['reviewStages'] ) ? $submission['reviewStages'] : array();
+		$has_needs_revision = false;
+		$has_rejected = false;
+		$all_approved = true;
+		foreach ( $stages as $stage ) {
+			$decisions = isset( $stage['decisions'] ) && is_array( $stage['decisions'] ) ? $stage['decisions'] : array();
+			foreach ( $decisions as $d ) {
+				$d = strtolower( trim( (string) $d ) );
+				if ( $d === 'rejected' ) {
+					$has_rejected = true;
+					$all_approved = false;
+					break 2;
+				}
+				if ( $d === 'needs revision' ) {
+					$has_needs_revision = true;
+					$all_approved = false;
+				}
+				if ( $d !== 'approved' ) {
+					$all_approved = false;
+				}
+			}
+		}
+		if ( $has_rejected ) {
+			return 'Rejected';
+		}
+		if ( $has_needs_revision ) {
+			return 'Revision Required';
+		}
+		if ( ! empty( $stages ) && $all_approved ) {
+			$type = strtolower( $submission['type'] ?? '' );
+			switch ( $type ) {
+				case 'conference':
+					return 'Confirmed for Presentation';
+				case 'publication':
+					return 'Published';
+				case 'student-project':
+					return 'Approved for Submission';
+				case 'grant':
+					return 'Approved';
+				default:
+					return 'Accepted';
+			}
+		}
+		return $status;
+	}
+
+	public static function get_dashboard_data( $params = array() ) {
+		$params = is_array( $params ) ? $params : array();
+		$current_user_email = isset( $params['userEmail'] ) ? strtolower( trim( (string) $params['userEmail'] ) ) : '';
+		$current_user_role = isset( $params['role'] ) ? $params['role'] : '';
+		$current_user_is_admin = isset( $params['isAdmin'] ) ? (bool) $params['isAdmin'] : false;
+		$current_user_is_reviewer = isset( $params['isReviewer'] ) ? (bool) $params['isReviewer'] : false;
+		$current_user_is_submitter = isset( $params['isSubmitter'] ) ? (bool) $params['isSubmitter'] : false;
+
+		$data = self::read_submissions();
+		$submissions = isset( $data['submissions'] ) && is_array( $data['submissions'] ) ? $data['submissions'] : array();
+
+		$overview = array(
+			'totalSubmissions' => 0,
+			'statusCounts' => array(),
+			'typeCounts' => array(),
+			'progressSummary' => array(),
+		);
+
+		$mySubmissions = array();
+		$assignedSubmissions = array();
+		$pendingReview = array();
+
+		foreach ( $submissions as $submission ) {
+			$overview['totalSubmissions']++;
+			$status = $submission['status'] ?? 'Unknown';
+			$type = $submission['type'] ?? 'unknown';
+
+			if ( ! isset( $overview['statusCounts'][ $status ] ) ) {
+				$overview['statusCounts'][ $status ] = 0;
+			}
+			$overview['statusCounts'][ $status ]++;
+
+			if ( ! isset( $overview['typeCounts'][ $type ] ) ) {
+				$overview['typeCounts'][ $type ] = 0;
+			}
+			$overview['typeCounts'][ $type ]++;
+
+			$stages = isset( $submission['reviewStages'] ) && is_array( $submission['reviewStages'] ) ? $submission['reviewStages'] : array();
+			$total_stages = count( $stages );
+			$approved = 0;
+			foreach ( $stages as $stage ) {
+				if ( self::is_stage_approved( $stage ) ) {
+					$approved++;
+				}
+			}
+			$progress_percent = $total_stages > 0 ? (int) round( ( $approved / $total_stages ) * 100 ) : ( $status === 'Draft' ? 0 : 10 );
+
+			$overview['progressSummary'][] = array(
+				'id' => $submission['id'] ?? null,
+				'title' => $submission['title'] ?? '',
+				'status' => $status,
+				'type' => $type,
+				'progress' => $progress_percent,
+			);
+
+			$submitter_email = strtolower( trim( (string) ( $submission['submitterEmail'] ?? '' ) ) );
+			if ( $current_user_email && $submitter_email === $current_user_email ) {
+				$mySubmissions[] = $submission;
+			}
+
+			$assigned_reviewers = isset( $submission['assignedReviewers'] ) && is_array( $submission['assignedReviewers'] ) ? $submission['assignedReviewers'] : array();
+			foreach ( $assigned_reviewers as $reviewer ) {
+				$rev_email = strtolower( trim( (string) ( $reviewer['email'] ?? '' ) ) );
+				if ( $current_user_email && $rev_email === $current_user_email ) {
+					$assignedSubmissions[] = $submission;
+					if ( in_array( $status, array( 'Submitted', 'Under Review', 'Submitted - Awaiting Review', 'Under Initial Review', 'Administrative Review', 'Revision Required' ), true ) ) {
+						$pendingReview[] = $submission;
+					}
+				}
+				if ( $rev_email ) {
+					$pendingReview[] = $submission;
+				}
+			}
+		}
+
+		$return = array(
+			'overview' => $overview,
+			'user' => array(
+				'email' => $current_user_email,
+				'role' => $current_user_role,
+				'isAdmin' => $current_user_is_admin,
+				'isReviewer' => $current_user_is_reviewer,
+				'isSubmitter' => $current_user_is_submitter,
+				'mySubmissionsCount' => count( array_values( $mySubmissions ) ),
+				'assignedSubmissionsCount' => count( array_values( $assignedSubmissions ) ),
+				'pendingReviewCount' => count( array_values( $pendingReview ) ),
+			),
+		);
+
+		if ( $current_user_is_admin ) {
+			$return['overall'] = $overview;
+		}
+
+		return $return;
 	}
 
 	private static function array_find_by_email( $arr, $email ) {

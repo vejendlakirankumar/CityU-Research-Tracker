@@ -518,6 +518,8 @@ class RRP_Process_Documentation {
 	public static function init() {
 		add_action( 'wp_enqueue_scripts', array( __CLASS__, 'enqueue_scripts' ) );
 		add_shortcode( 'rrp_process_documentation', array( __CLASS__, 'shortcode_documentation' ) );
+		// Backward compatibility alias used in Sprint 1 documentation
+		add_shortcode( 'research_process_docs', array( __CLASS__, 'shortcode_documentation' ) );
 		add_action( 'rest_api_init', array( __CLASS__, 'register_api_routes' ) );
 	}
 

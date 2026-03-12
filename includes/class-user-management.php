@@ -112,20 +112,20 @@ class RRP_User_Management {
 	 * Create custom roles and capabilities
 	 */
 	public static function create_roles() {
-		// Only create roles if they don't exist (avoid recreation on every init)
-		if ( get_role( 'rrp_student' ) ) {
-			return;
+		// Create any missing roles (idempotent) without early return
+		foreach ( self::ROLES as $role_slug => $role_data ) {
+			if ( ! get_role( $role_slug ) ) {
+				add_role( $role_slug, $role_data['name'], $role_data['capabilities'] );
+			}
 		}
 
-		foreach ( self::ROLES as $role_slug => $role_data ) {
-			add_role( $role_slug, $role_data['name'], $role_data['capabilities'] );
-		}
-		
 		// Add capabilities to administrator role
 		$admin_role = get_role( 'administrator' );
 		if ( $admin_role ) {
 			foreach ( self::CAPABILITIES as $cap_slug => $cap_desc ) {
-				$admin_role->add_cap( $cap_slug );
+				if ( method_exists( $admin_role, 'add_cap' ) ) {
+					$admin_role->add_cap( $cap_slug );
+				}
 			}
 		}
 	}

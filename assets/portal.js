@@ -43,6 +43,7 @@
       '<div class="rrp-view-toggle" style="margin-top: 1.5rem;">' +
         '<button type="button" class="rrp-btn secondary" data-view="submit">Submit new abstract</button>' +
         '<button type="button" class="rrp-btn secondary" data-view="status">Check my submissions</button>' +
+        '<button type="button" class="rrp-btn secondary" data-view="dashboard">Dashboard</button>' +
         '<button type="button" class="rrp-btn secondary" data-view="public">Research & symposium (public)</button>' +
       '</div>';
 
@@ -120,6 +121,95 @@
           errEl.innerHTML = '<div class="rrp-error">' + escapeHtml(msg) + '</div>';
         });
     });
+  }
+
+  function renderDashboard(container) {
+    container.innerHTML =
+      '<h1>Dashboard</h1>' +
+      '<button type="button" class="rrp-btn secondary" style="margin-bottom: 1rem;" data-back>← Back</button>' +
+      '<div class="rrp-form-block" id="rrp-dashboard-filters" style="margin-bottom: 1rem;"></div>' +
+      '<div id="rrp-dashboard-content"><p class="rrp-loading">Loading dashboard…</p></div>';
+
+    container.querySelector('[data-back]').addEventListener('click', function () { renderSelection(container); });
+
+    function applyDashboardFilter(data) {
+      var status = document.getElementById('rrp-dashboard-filter-status').value;
+      var type = document.getElementById('rrp-dashboard-filter-type').value;
+      var items = data.overview.progressSummary || [];
+      if (status !== 'all') {
+        items = items.filter(function (s) { return (s.status || '').toLowerCase() === status.toLowerCase(); });
+      }
+      if (type !== 'all') {
+        items = items.filter(function (s) { return (s.type || '').toLowerCase() === type.toLowerCase(); });
+      }
+      return items;
+    }
+
+    api('GET', '/dashboard')
+      .then(function (data) {
+        var c = document.getElementById('rrp-dashboard-content');
+        var o = data.overview || {};
+        var u = data.user || {};
+
+        var statuses = Object.keys(o.statusCounts || {});
+        var types = Object.keys(o.typeCounts || {});
+
+        document.getElementById('rrp-dashboard-filters').innerHTML =
+          '<label>Status filter</label><select id="rrp-dashboard-filter-status"><option value="all">All</option>' + statuses.map(function (s) { return '<option value="' + escapeHtml(s) + '">' + escapeHtml(s) + '</option>'; }).join('') + '</select>' +
+          '<label>Type filter</label><select id="rrp-dashboard-filter-type"><option value="all">All</option>' + types.map(function (t) { return '<option value="' + escapeHtml(t) + '">' + escapeHtml(t) + '</option>'; }).join('') + '</select>';
+
+        function renderProgressList() {
+          var list = applyDashboardFilter(data);
+          var rows = list.slice(0, 20).map(function (s) {
+            return '<li><strong>' + escapeHtml(s.title || s.id) + '</strong> (' + escapeHtml(s.id) + ') ' +
+              '<span class="rrp-status">' + escapeHtml(s.status || '') + '</span> ' +
+              '<span>' + (s.progress || 0) + '%</span> ' +
+              '<button type="button" class="rrp-btn secondary" data-timeline="' + escapeHtml(s.id) + '">Timeline</button></li>';
+          }).join('');
+          document.getElementById('rrp-dashboard-progress').innerHTML = '<ul class="rrp-list">' + (rows || '<li>No matching submissions.</li>') + '</ul>';
+          document.querySelectorAll('[data-timeline]').forEach(function (btn) {
+            btn.addEventListener('click', function () {
+              renderTimeline(btn.getAttribute('data-timeline'), container);
+            });
+          });
+        }
+
+        c.innerHTML =
+          '<div class="rrp-dashboard-grid">' +
+            '<div><strong>Total submissions:</strong> ' + (o.totalSubmissions || 0) + '</div>' +
+            '<div><strong>My submissions:</strong> ' + (u.mySubmissionsCount || 0) + '</div>' +
+            '<div><strong>Assigned reviews:</strong> ' + (u.assignedSubmissionsCount || 0) + '</div>' +
+            '<div><strong>Pending review:</strong> ' + (u.pendingReviewCount || 0) + '</div>' +
+          '</div>' +
+          '<div class="rrp-dashboard-section"><h3>Status counts</h3>' +
+          '<ul>' + Object.keys(o.statusCounts || {}).map(function (k) { return '<li>' + escapeHtml(k) + ': ' + o.statusCounts[k] + '</li>'; }).join('') + '</ul></div>' +
+          '<div class="rrp-dashboard-section"><h3>Type counts</h3>' +
+          '<ul>' + Object.keys(o.typeCounts || {}).map(function (k) { return '<li>' + escapeHtml(k) + ': ' + o.typeCounts[k] + '</li>'; }).join('') + '</ul></div>' +
+          '<div class="rrp-dashboard-section"><h3>Recent progress</h3><div id="rrp-dashboard-progress"></div></div>' +
+          '<div id="rrp-dashboard-notifications"><h3>Loading notifications…</h3></div>';
+
+        renderProgressList();
+
+        document.getElementById('rrp-dashboard-filter-status').addEventListener('change', renderProgressList);
+        document.getElementById('rrp-dashboard-filter-type').addEventListener('change', renderProgressList);
+
+        return api('GET', '/notifications');
+      })
+      .then(function (notifyData) {
+        var block = document.getElementById('rrp-dashboard-notifications');
+        if (!block) return;
+        var note = notifyData.notifications || [];
+        if (note.length === 0) {
+          block.innerHTML = '<div>No active notifications.</div>';
+          return;
+        }
+        block.innerHTML = '<div><h3>Notifications</h3><ul>' + note.map(function (n) {
+          return '<li>' + escapeHtml(n.message) + ' (' + escapeHtml(n.id) + ', ' + escapeHtml(n.status || '') + ')</li>';
+        }).join('') + '</ul></div>';
+      })
+      .catch(function () {
+        container.querySelector('#rrp-dashboard-content').innerHTML = '<div class="rrp-error">Unable to fetch dashboard data.</div>';
+      });
   }
 
   function renderStatus(container) {
@@ -204,6 +294,34 @@
     var div = document.createElement('div');
     div.textContent = s;
     return div.innerHTML;
+  }
+
+  function renderTimeline(submissionId, container) {
+    container.innerHTML =
+      '<h1>Timeline: ' + escapeHtml(submissionId) + '</h1>' +
+      '<button type="button" class="rrp-btn secondary" style="margin-bottom: 1rem;" data-back>← Back</button>' +
+      '<div id="rrp-timeline-content"><p class="rrp-loading">Loading timeline…</p></div>';
+
+    container.querySelector('[data-back]').addEventListener('click', function () { renderDashboard(container); });
+
+    api('GET', '/submissions/' + encodeURIComponent(submissionId) + '/timeline')
+      .then(function (res) {
+        var content = document.getElementById('rrp-timeline-content');
+        if (!res.timeline || !res.timeline.length) {
+          content.innerHTML = '<p>No timeline data available.</p>';
+          return;
+        }
+        content.innerHTML = '<div class="rrp-dashboard-section"><h3>Review timeline</h3></div>' +
+          '<ul class="rrp-list">' + res.timeline.map(function (stage) {
+            var reviewerList = (stage.reviewers || []).map(function (r) {
+              return '<li>' + escapeHtml(r.name || r.email) + ' - ' + escapeHtml(r.decision || 'Pending') + '</li>';
+            }).join('');
+            return '<li><strong>' + escapeHtml(stage.stageName) + '</strong> - ' + escapeHtml(stage.status) + '<ul>' + reviewerList + '</ul></li>';
+          }).join('') + '</ul>';
+      })
+      .catch(function () {
+        document.getElementById('rrp-timeline-content').innerHTML = '<div class="rrp-error">Unable to load timeline.</div>';
+      });
   }
 
   function boot() {

@@ -40,6 +40,12 @@ class Portal_REST {
 			'permission_callback' => array( __CLASS__, 'can_view_submission' ),
 			'args'                => array( 'id' => array( 'required' => true ) ),
 		) );
+		register_rest_route( self::NAMESPACE, '/submissions/(?P<id>[a-zA-Z0-9\-]+)/preview', array(
+			'methods'             => 'GET',
+			'callback'            => array( __CLASS__, 'submission_preview' ),
+			'permission_callback' => array( __CLASS__, 'can_view_submission' ),
+			'args'                => array( 'id' => array( 'required' => true ) ),
+		) );
 		register_rest_route( self::NAMESPACE, '/submissions/(?P<id>[a-zA-Z0-9\-]+)', array(
 			'methods'             => 'PATCH',
 			'callback'            => array( __CLASS__, 'submission_patch' ),
@@ -72,6 +78,22 @@ class Portal_REST {
 				'id'       => array( 'required' => true ),
 				'filename' => array( 'required' => true ),
 			),
+		) );
+		register_rest_route( self::NAMESPACE, '/dashboard', array(
+			'methods'             => 'GET',
+			'callback'            => array( __CLASS__, 'dashboard' ),
+			'permission_callback' => array( __CLASS__, 'can_view_dashboard' ),
+		) );
+		register_rest_route( self::NAMESPACE, '/notifications', array(
+			'methods'             => 'GET',
+			'callback'            => array( __CLASS__, 'notifications' ),
+			'permission_callback' => array( __CLASS__, 'can_view_dashboard' ),
+		) );
+		register_rest_route( self::NAMESPACE, '/submissions/(?P<id>[a-zA-Z0-9\-]+)/timeline', array(
+			'methods'             => 'GET',
+			'callback'            => array( __CLASS__, 'submission_timeline' ),
+			'permission_callback' => array( __CLASS__, 'can_view_submission' ),
+			'args'                => array( 'id' => array( 'required' => true ) ),
 		) );
 		register_rest_route( self::NAMESPACE, '/assignment-summary', array(
 			'methods'             => 'GET',
@@ -275,6 +297,30 @@ class Portal_REST {
 		return current_user_can( 'rrp_review_submissions' ) || current_user_can( 'rrp_view_review_dashboard' ) || current_user_can( 'rrp_full_admin_access' );
 	}
 
+	public static function can_view_dashboard( WP_REST_Request $request ) {
+		return current_user_can( 'rrp_view_all_submissions' ) || current_user_can( 'rrp_manage_workflow' ) || current_user_can( 'rrp_review_submissions' ) || current_user_can( 'rrp_view_own_submissions' ) || current_user_can( 'rrp_full_admin_access' );
+	}
+
+	public static function dashboard( WP_REST_Request $request ) {
+		$user_email = '';
+		$current_user = wp_get_current_user();
+		if ( isset( $current_user->user_email ) ) {
+			$user_email = strtolower( trim( (string) $current_user->user_email ) );
+		}
+		$req_email = $request->get_param( 'userEmail' );
+		if ( $req_email ) {
+			$user_email = strtolower( trim( (string) $req_email ) );
+		}
+		$data = Portal_Data::get_dashboard_data( array(
+			'userEmail' => $user_email,
+			'role' => isset( $current_user->roles ) && is_array( $current_user->roles ) ? implode( ',', $current_user->roles ) : '',
+			'isAdmin' => current_user_can( 'rrp_view_all_submissions' ) || current_user_can( 'rrp_full_admin_access' ),
+			'isReviewer' => current_user_can( 'rrp_review_submissions' ),
+			'isSubmitter' => current_user_can( 'rrp_view_own_submissions' ),
+		) );
+		return new WP_REST_Response( $data, 200 );
+	}
+
 	/**
 	 * Helper function to get submission by ID
 	 */
@@ -295,12 +341,13 @@ class Portal_REST {
 		if ( ! in_array( $type, $allowed, true ) ) {
 			return new WP_REST_Response( array( 'success' => false, 'error' => 'Invalid submission type.' ), 400 );
 		}
-		$errors = Portal_Data::validate_submission( $type, $body );
+		$is_draft = isset( $body['status'] ) && strtolower( trim( (string) $body['status'] ) ) === 'draft';
+		$errors = $is_draft ? array() : Portal_Data::validate_submission( $type, $body );
 		if ( ! empty( $errors ) ) {
 			return new WP_REST_Response( array( 'success' => false, 'errors' => $errors ), 400 );
 		}
 		$submission_id = Portal_Data::next_id( $type );
-		$status = $type === 'conference' ? 'Submitted - Awaiting Review' : 'Submitted';
+		$status = $is_draft ? 'Draft' : ( $type === 'conference' ? 'Submitted - Awaiting Review' : 'Submitted' );
 		$submission = array_merge( $body, array(
 			'id'        => $submission_id,
 			'type'      => $type,
@@ -316,11 +363,37 @@ class Portal_REST {
 		$data = Portal_Data::read_submissions();
 		$data['submissions'][] = $submission;
 		Portal_Data::write_submissions( $data );
+
+		// Send confirmation email for non-draft submissions
+		if ( ! $is_draft ) {
+			self::send_confirmation_email( $submission );
+		}
+
 		return new WP_REST_Response( array(
 			'success' => true,
 			'id'      => $submission_id,
-			'message' => 'Submission received. You will receive a confirmation email shortly.',
+			'message' => $is_draft ? 'Draft saved.' : 'Submission received. You will receive a confirmation email shortly.',
 		), 201 );
+	}
+
+	public static function send_confirmation_email( $submission ) {
+		$to = trim( (string) ( $submission['submitterEmail'] ?? '' ) );
+		if ( ! $to || ! is_email( $to ) ) {
+			return false;
+		}
+		$subject = 'Research Review Portal: Submission Received (' . ( $submission['id'] ?? '' ) . ')';
+		$message = sprintf(
+			"Hello %s,\n\nYour submission (%s) has been received and is now in the review queue.\n\nTitle: %s\nType: %s\nStatus: %s\n\nThank you,\nResearch Review Portal",
+			trim( (string) ( $submission['submitterName'] ?? $submission['submitterEmail'] ?? '' ) ),
+			( $submission['id'] ?? '' ),
+			( $submission['title'] ?? '–' ),
+			( $submission['type'] ?? '–' ),
+			( $submission['status'] ?? '–' )
+		);
+		if ( function_exists( 'wp_mail' ) ) {
+			return (bool) wp_mail( $to, $subject, $message );
+		}
+		return true;
 	}
 
 	public static function submissions_list( WP_REST_Request $request ) {
@@ -386,6 +459,70 @@ class Portal_REST {
 			}
 		}
 		return new WP_REST_Response( $sub, 200 );
+	}
+
+	public static function submission_preview( WP_REST_Request $request ) {
+		// reuse submission_get for now
+		return self::submission_get( $request );
+	}
+
+	public static function submission_timeline( WP_REST_Request $request ) {
+		$id = $request->get_param( 'id' );
+		$sub = self::get_submission_by_id( $id );
+		if ( ! $sub ) {
+			return new WP_REST_Response( array( 'error' => 'Submission not found.' ), 404 );
+		}
+		$stages = isset( $sub['reviewStages'] ) && is_array( $sub['reviewStages'] ) ? $sub['reviewStages'] : array();
+		$timeline = array();
+		foreach ( $stages as $stage ) {
+			$reviewers = isset( $stage['reviewers'] ) && is_array( $stage['reviewers'] ) ? $stage['reviewers'] : array();
+			$decisions = isset( $stage['decisions'] ) && is_array( $stage['decisions'] ) ? $stage['decisions'] : array();
+			$timeline[] = array(
+				'stageName' => $stage['stageName'] ?? '',
+				'status'    => Portal_Data::is_stage_approved( $stage ) ? 'Approved' : ( in_array( 'needs revision', array_map( 'strtolower', array_values( $decisions ) ), true ) ? 'Revision Required' : 'In Progress' ),
+				'reviewers' => array_map( function( $r ) use ( $decisions ) {
+					$email = strtolower( trim( (string) ( $r['email'] ?? '' ) ) );
+					return array(
+						'name' => $r['name'] ?? '',
+						'email' => $r['email'] ?? '',
+						'decision' => isset( $decisions[ $email ] ) ? $decisions[ $email ] : 'Pending',
+					);
+				}, $reviewers ),
+				'feedback' => $stage['feedback'] ?? array(),
+				'revisionSubmittedAt' => $stage['revisionSubmittedAt'] ?? null,
+			);
+		}
+		return new WP_REST_Response( array( 'id' => $id, 'timeline' => $timeline ), 200 );
+	}
+
+	public static function notifications( WP_REST_Request $request ) {
+		$current_user = wp_get_current_user();
+		$email = strtolower( trim( (string) ( $current_user->user_email ?? '' ) ) );
+		$submissions = Portal_Data::read_submissions();
+		$submissions = $submissions['submissions'] ?? array();
+		$notify = array();
+		foreach ( $submissions as $sub ) {
+			$status = $sub['status'] ?? '';
+			$submitter = strtolower( trim( (string) ( $sub['submitterEmail'] ?? '' ) ) );
+			$assigned = isset( $sub['assignedReviewers'] ) && is_array( $sub['assignedReviewers'] ) ? $sub['assignedReviewers'] : array();
+			$is_reviewer = false;
+			foreach ( $assigned as $r ) {
+				if ( strtolower( trim( (string) ( $r['email'] ?? '' ) ) ) === $email ) {
+					$is_reviewer = true;
+					break;
+				}
+			}
+			if ( $submitter === $email ) {
+				// update required states for submitter
+				if ( in_array( $status, array( 'Revision Required', 'Rejected' ), true ) ) {
+					$notify[] = array( 'id' => $sub['id'] ?? '', 'type' => 'revision', 'message' => 'Revision requested or rejected, please resubmit.', 'status' => $status );
+				}
+			}
+			if ( $is_reviewer && in_array( $status, array( 'Submitted', 'Under Review', 'Submitted - Awaiting Review', 'Under Initial Review', 'Administrative Review', 'Revision Required' ), true ) ) {
+				$notify[] = array( 'id' => $sub['id'] ?? '', 'type' => 'review', 'message' => 'Review pending for submission.', 'status' => $status );
+			}
+		}
+		return new WP_REST_Response( array( 'notifications' => $notify ), 200 );
 	}
 
 	public static function submission_patch( WP_REST_Request $request ) {
@@ -525,9 +662,13 @@ class Portal_REST {
 			if ( ! isset( $stage['feedback'] ) || ! is_array( $stage['feedback'] ) ) $stage['feedback'] = array();
 			if ( ! array_key_exists( 'revisionSubmittedAt', $stage ) ) $stage['revisionSubmittedAt'] = null;
 			$new_status = $sub['status'];
-			if ( $decision === 'Rejected' ) $new_status = 'Rejected';
-			elseif ( $decision === 'Needs Revision' ) $new_status = 'Revision Required';
+			if ( $decision === 'Rejected' ) {
+				$new_status = 'Rejected';
+			} elseif ( $decision === 'Needs Revision' ) {
+				$new_status = 'Revision Required';
+			}
 			$data['submissions'][ $idx ] = array_merge( $sub, array( 'reviewStages' => $review_stages, 'status' => $new_status ) );
+			$data['submissions'][ $idx ]['status'] = Portal_Data::derive_submission_status( $data['submissions'][ $idx ] );
 			Portal_Data::write_submissions( $data );
 			$updated = $data['submissions'][ $idx ];
 			if ( isset( $body['stageFeedback'] ) && is_array( $body['stageFeedback'] ) && ( $decision === 'Needs Revision' || $decision === 'Rejected' ) ) {
@@ -757,7 +898,9 @@ class Portal_REST {
 				$orig = $upload['name'][ $i ] ?? 'file';
 				if ( $err !== UPLOAD_ERR_OK || ! is_uploaded_file( $tmp ) || $size > $max_size ) continue;
 				$base = Portal_Data::sanitize_filename( pathinfo( $orig, PATHINFO_FILENAME ) );
-				$ext = pathinfo( $orig, PATHINFO_EXTENSION );
+				$ext = strtolower( pathinfo( $orig, PATHINFO_EXTENSION ) );
+				$allowed_exts = array( 'pdf', 'doc', 'docx', 'ppt', 'pptx', 'txt' );
+				if ( $ext && ! in_array( $ext, $allowed_exts, true ) ) continue;
 				$ext = $ext ? '.' . $ext : '';
 				$filename = $base ? $base . $ext : 'file-' . time() . $ext;
 				Portal_Data::ensure_data_dir();
@@ -775,7 +918,11 @@ class Portal_REST {
 			$orig = $upload['name'] ?? 'file';
 			if ( $err === UPLOAD_ERR_OK && is_uploaded_file( $tmp ) && $size <= $max_size ) {
 				$base = Portal_Data::sanitize_filename( pathinfo( $orig, PATHINFO_FILENAME ) );
-				$ext = pathinfo( $orig, PATHINFO_EXTENSION );
+				$ext = strtolower( pathinfo( $orig, PATHINFO_EXTENSION ) );
+				$allowed_exts = array( 'pdf', 'doc', 'docx', 'ppt', 'pptx', 'txt' );
+				if ( $ext && ! in_array( $ext, $allowed_exts, true ) ) {
+					$ext = '';
+				}
 				$ext = $ext ? '.' . $ext : '';
 				$filename = $base ? $base . $ext : 'file-' . time() . $ext;
 				Portal_Data::ensure_data_dir();
