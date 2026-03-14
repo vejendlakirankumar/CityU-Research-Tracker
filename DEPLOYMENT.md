@@ -238,3 +238,196 @@ Edit via the portal's **Config** API (`PUT /wp-json/research-portal/v1/config`) 
 | "Portal API not configured" on page | The shortcode page was published but plugin is not activated — activate it in WP Admin → Plugins |
 | Roles not appearing in Add User dropdown | Deactivate and re-activate the plugin once (role registration runs on activation hook) |
 | File uploads silently fail | Check `data/uploads/` exists and is writable; max upload size in `php.ini` must be ≥ 2 MB |
+
+---
+
+## Option D — WSL Ubuntu 22.04 LTS (independent VM / local WSL)
+
+> **Can I follow Option C instead?**  
+> Option C is written for GitHub Codespaces. The commands are ~90% the same, but WSL differs in three ways: the repo lives on your Windows drive (accessible at `/mnt/d/…`), there is no "Ports" tab — you just open `http://localhost` in your Windows browser, and MySQL setup uses `sudo mysql` directly. Use the dedicated steps below to avoid confusion.
+
+### Prerequisites (Windows side)
+- WSL 2 with Ubuntu 22.04 installed (`wsl --install -d Ubuntu-22.04`)
+- The repo present at `D:\Development\CityU-Research-Tracker` on Windows
+
+---
+
+### One-shot install script
+
+Copy the block below, paste it into your WSL terminal, and run it.  
+Everything will be installed and WordPress will be fully configured automatically.
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+# ── 1. System packages ────────────────────────────────────────────────────────
+echo "==> Installing Apache, PHP 8.1, MySQL, and utilities..."
+sudo apt-get update -qq
+sudo apt-get install -y \
+  apache2 \
+  php8.1 php8.1-mysql php8.1-curl php8.1-mbstring php8.1-xml \
+  php8.1-zip php8.1-gd libapache2-mod-php8.1 \
+  mysql-server \
+  curl unzip
+
+# ── 2. WP-CLI ────────────────────────────────────────────────────────────────
+echo "==> Installing WP-CLI..."
+curl -sO https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar
+chmod +x wp-cli.phar
+sudo mv wp-cli.phar /usr/local/bin/wp
+
+# ── 3. Services ──────────────────────────────────────────────────────────────
+echo "==> Starting MySQL and Apache..."
+sudo service mysql start
+sudo service apache2 start
+
+# ── 4. MySQL database ────────────────────────────────────────────────────────
+echo "==> Creating WordPress database and user..."
+sudo mysql <<'SQL'
+CREATE DATABASE IF NOT EXISTS wordpress CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE USER IF NOT EXISTS 'wp'@'localhost' IDENTIFIED BY 'wp_test_pass';
+GRANT ALL PRIVILEGES ON wordpress.* TO 'wp'@'localhost';
+FLUSH PRIVILEGES;
+SQL
+
+# ── 5. WordPress core ────────────────────────────────────────────────────────
+echo "==> Downloading WordPress..."
+sudo rm -rf /var/www/html/wp-includes  # remove default Apache page if WP already partially there
+cd /var/www/html
+sudo wp core download --allow-root --quiet
+
+sudo wp config create \
+  --dbname=wordpress \
+  --dbuser=wp \
+  --dbpass=wp_test_pass \
+  --dbhost=localhost \
+  --allow-root
+
+sudo wp core install \
+  --url=http://localhost \
+  --title="CityU Research Portal" \
+  --admin_user=admin \
+  --admin_password=Admin1234! \
+  --admin_email=admin@cityu-test.local \
+  --skip-email \
+  --allow-root
+
+# ── 6. Permalinks (required for REST API) ────────────────────────────────────
+echo "==> Enabling pretty permalinks..."
+sudo wp rewrite structure '/%postname%/' --allow-root
+sudo wp rewrite flush --allow-root
+
+# Enable mod_rewrite
+sudo a2enmod rewrite
+sudo sed -i 's/AllowOverride None/AllowOverride All/g' /etc/apache2/apache2.conf
+sudo service apache2 restart
+
+# ── 7. Plugin ────────────────────────────────────────────────────────────────
+PLUGIN_DIR="/var/www/html/wp-content/plugins/research-review-portal"
+REPO_WIN="/mnt/d/Development/CityU-Research-Tracker"
+
+echo "==> Linking plugin from Windows drive..."
+if [ ! -d "$REPO_WIN" ]; then
+  echo "ERROR: Repo not found at $REPO_WIN"
+  echo "       Adjust REPO_WIN in this script to match your Windows path."
+  exit 1
+fi
+
+sudo ln -sfn "$REPO_WIN" "$PLUGIN_DIR"
+sudo chmod -R 777 "$PLUGIN_DIR/data"
+
+sudo wp plugin activate research-review-portal --allow-root
+
+# ── 8. Portal page ───────────────────────────────────────────────────────────
+echo "==> Creating portal page..."
+PAGE_ID=$(sudo wp post create \
+  --post_type=page \
+  --post_title="Research Portal" \
+  --post_content='[research_review_portal]' \
+  --post_status=publish \
+  --porcelain \
+  --allow-root)
+sudo wp post update "$PAGE_ID" --post_name=research-portal --allow-root
+
+# Set as static front page (required — without this WP shows "Latest Posts")
+sudo wp option update show_on_front 'page' --allow-root
+sudo wp option update page_on_front "$PAGE_ID" --allow-root
+
+# ── 9. Test users ────────────────────────────────────────────────────────────
+echo "==> Creating test users..."
+sudo wp user create student    student@test.com      --role=rrp_student      --user_pass=test123 --allow-root 2>/dev/null || true
+sudo wp user create reviewer   reviewer@test.com     --role=rrp_reviewer     --user_pass=test123 --allow-root 2>/dev/null || true
+sudo wp user create coordinator coordinator@test.com --role=rrp_coordinator  --user_pass=test123 --allow-root 2>/dev/null || true
+sudo wp user create rrpadmin   rrpadmin@test.com     --role=rrp_admin        --user_pass=test123 --allow-root 2>/dev/null || true
+
+# ── Done ─────────────────────────────────────────────────────────────────────
+echo ""
+echo "============================================================"
+echo "  Install complete!"
+echo "============================================================"
+echo "  Portal:    http://localhost/research-portal/?portal=1"
+echo "  WP Admin:  http://localhost/wp-admin"
+echo "             admin / Admin1234!"
+echo ""
+echo "  Test logins (all passwords: test123)"
+echo "    student@test.com       rrp_student"
+echo "    reviewer@test.com      rrp_reviewer"
+echo "    coordinator@test.com   rrp_coordinator"
+echo "    rrpadmin@test.com      rrp_admin"
+echo ""
+echo "  Health check:"
+echo "    curl http://localhost/wp-json/research-portal/v1/health"
+echo "============================================================"
+```
+
+---
+
+### How to run the script
+
+The script is already saved in this repo at `scripts/install-wsl.sh`.
+
+1. Open your **WSL Ubuntu 22.04** terminal
+2. Navigate to the repo (accessible from WSL via the Windows drive):
+
+```bash
+cd /mnt/d/Development/CityU-Research-Tracker
+chmod +x scripts/install-wsl.sh
+./scripts/install-wsl.sh
+```
+
+Alternatively, copy-paste the block above into `~/install-portal.sh` and run it from there.
+
+3. When it finishes, open **http://localhost/research-portal/?portal=1** in your Windows browser.
+
+---
+
+### If the repo is NOT on D drive
+
+Edit the `REPO_WIN` line near the top of the script before running:
+
+```bash
+REPO_WIN="/mnt/c/Users/YourName/path/to/CityU-Research-Tracker"
+```
+
+Or clone directly from GitHub inside WSL (no Windows path needed):
+
+```bash
+# Alternative: clone inside WSL instead of linking
+sudo git clone https://github.com/<your-org>/CityU-Research-Tracker \
+  /var/www/html/wp-content/plugins/research-review-portal
+sudo chmod -R 777 /var/www/html/wp-content/plugins/research-review-portal/data
+sudo wp plugin activate research-review-portal --allow-root
+```
+
+---
+
+### Day-to-day commands (WSL)
+
+| Task | Command |
+|------|---------|
+| Start Apache + MySQL | `sudo service apache2 start && sudo service mysql start` |
+| Stop all | `sudo service apache2 stop && sudo service mysql stop` |
+| Tail PHP error log | `sudo tail -f /var/log/apache2/error.log` |
+| Re-run permissions fix | `sudo chmod -R 777 /var/www/html/wp-content/plugins/research-review-portal/data` |
+| Reset to fresh WordPress | `sudo wp db reset --yes --allow-root && ~/install-portal.sh` |

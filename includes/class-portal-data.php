@@ -171,28 +171,11 @@ class Portal_Data {
 				if ( empty( trim( (string) ( $body['submitterEmail'] ?? '' ) ) ) ) {
 					$errors[] = 'Submitter email is required.';
 				}
-				if ( empty( trim( (string) ( $body['affiliation'] ?? '' ) ) ) ) {
-					$errors[] = 'Affiliation is required.';
-				}
 				if ( empty( trim( (string) ( $body['title'] ?? '' ) ) ) ) {
 					$errors[] = 'Title is required.';
 				}
 				if ( strlen( (string) ( $body['title'] ?? '' ) ) > 200 ) {
 					$errors[] = 'Title must be 200 characters or less.';
-				}
-				if ( empty( trim( (string) ( $body['abstract'] ?? '' ) ) ) ) {
-					$errors[] = 'Extended abstract is required.';
-				}
-				if ( empty( trim( (string) ( $body['publicationType'] ?? '' ) ) ) ) {
-					$errors[] = 'Publication type is required.';
-				}
-				if ( empty( trim( (string) ( $body['keywords'] ?? '' ) ) ) ) {
-					$errors[] = 'Keywords are required (3–5).';
-				} else {
-					$kw = array_filter( array_map( 'trim', preg_split( '/[,;]/', (string) ( $body['keywords'] ?? '' ) ) ) );
-					if ( count( $kw ) < 3 || count( $kw ) > 5 ) {
-						$errors[] = 'Provide 3–5 keywords.';
-					}
 				}
 				if ( empty( trim( (string) ( $body['researchArea'] ?? '' ) ) ) ) {
 					$errors[] = 'Research area/category is required.';
@@ -208,11 +191,8 @@ class Portal_Data {
 				if ( empty( trim( (string) ( $body['title'] ?? '' ) ) ) ) {
 					$errors[] = 'Project title is required.';
 				}
-				if ( empty( trim( (string) ( $body['abstract'] ?? '' ) ) ) ) {
-					$errors[] = 'Project description is required.';
-				}
-				if ( empty( trim( (string) ( $body['projectType'] ?? '' ) ) ) ) {
-					$errors[] = 'Project type is required.';
+				if ( empty( trim( (string) ( $body['researchArea'] ?? '' ) ) ) ) {
+					$errors[] = 'Research area is required.';
 				}
 				break;
 			case 'grant':
@@ -225,11 +205,8 @@ class Portal_Data {
 				if ( empty( trim( (string) ( $body['title'] ?? '' ) ) ) ) {
 					$errors[] = 'Proposal title is required.';
 				}
-				if ( empty( trim( (string) ( $body['abstract'] ?? '' ) ) ) ) {
-					$errors[] = 'Abstract is required.';
-				}
-				if ( empty( trim( (string) ( $body['fundingAgency'] ?? '' ) ) ) ) {
-					$errors[] = 'Funding agency is required.';
+				if ( empty( trim( (string) ( $body['researchArea'] ?? '' ) ) ) ) {
+					$errors[] = 'Research area is required.';
 				}
 				break;
 			default:

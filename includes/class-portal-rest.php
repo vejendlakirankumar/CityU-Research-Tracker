@@ -197,6 +197,29 @@ class Portal_REST {
 			'callback'            => array( __CLASS__, 'analytics_overdue' ),
 			'permission_callback' => array( __CLASS__, 'can_view_dashboard' ),
 		) );
+		// Portal user management (students & reviewers)
+		register_rest_route( self::NAMESPACE, '/portal-users', array(
+			'methods'             => 'GET',
+			'callback'            => array( __CLASS__, 'portal_users_list' ),
+			'permission_callback' => array( __CLASS__, 'can_manage_workflow' ),
+		) );
+		register_rest_route( self::NAMESPACE, '/portal-users', array(
+			'methods'             => 'POST',
+			'callback'            => array( __CLASS__, 'portal_users_create' ),
+			'permission_callback' => array( __CLASS__, 'can_manage_workflow' ),
+		) );
+		register_rest_route( self::NAMESPACE, '/portal-users/(?P<id>\d+)', array(
+			'methods'             => 'PATCH',
+			'callback'            => array( __CLASS__, 'portal_users_update' ),
+			'permission_callback' => array( __CLASS__, 'can_manage_workflow' ),
+			'args'                => array( 'id' => array( 'required' => true ) ),
+		) );
+		register_rest_route( self::NAMESPACE, '/portal-users/(?P<id>\d+)', array(
+			'methods'             => 'DELETE',
+			'callback'            => array( __CLASS__, 'portal_users_delete' ),
+			'permission_callback' => array( __CLASS__, 'can_manage_workflow' ),
+			'args'                => array( 'id' => array( 'required' => true ) ),
+		) );
 	}
 
 	public static function health( WP_REST_Request $request ) {
@@ -1472,3 +1495,183 @@ class Portal_REST {
 			}
 		}
 	}
+
+	// ─── Portal User Management ───────────────────────────────────────────────
+
+	private static function format_portal_user( $u ) {
+		$roles = (array) $u->roles;
+		if ( in_array( 'rrp_reviewer', $roles, true ) ) {
+			$portal_role = 'Reviewer';
+		} elseif ( in_array( 'rrp_coordinator', $roles, true ) ) {
+			$portal_role = 'Coordinator';
+		} elseif ( in_array( 'rrp_admin', $roles, true ) || in_array( 'administrator', $roles, true ) ) {
+			$portal_role = 'Admin';
+		} else {
+			$portal_role = 'Student';
+		}
+		$wp_role = 'rrp_student';
+		foreach ( array( 'rrp_admin', 'administrator', 'rrp_coordinator', 'rrp_reviewer', 'rrp_student' ) as $r ) {
+			if ( in_array( $r, $roles, true ) ) { $wp_role = $r; break; }
+		}
+		return array(
+			'id'                    => $u->ID,
+			'name'                  => $u->display_name,
+			'email'                 => $u->user_email,
+			'portalRole'            => $portal_role,
+			'wpRole'                => $wp_role,
+			'degree'                => (string) ( get_user_meta( $u->ID, 'rrp_degree', true ) ?: '' ),
+			'allowedTypes'          => (array) ( get_user_meta( $u->ID, 'rrp_allowed_submission_types', true ) ?: array() ),
+			'defaultStageReviewers' => (array) ( get_user_meta( $u->ID, 'rrp_default_stage_reviewers', true ) ?: array() ),
+			'submissionTypes'       => (array) ( get_user_meta( $u->ID, 'rrp_submission_types', true ) ?: array() ),
+			'department'            => (string) ( get_user_meta( $u->ID, 'rrp_department', true ) ?: '' ),
+			'expertise'             => (string) ( get_user_meta( $u->ID, 'rrp_expertise', true ) ?: '' ),
+			'registeredAt'          => $u->user_registered,
+		);
+	}
+
+	public static function portal_users_list( WP_REST_Request $request ) {
+		$role_filter = $request->get_param( 'role' ) ? sanitize_key( (string) $request->get_param( 'role' ) ) : '';
+		$roles_to_query = array();
+		if ( $role_filter === 'student' ) {
+			$roles_to_query = array( 'rrp_student' );
+		} elseif ( $role_filter === 'reviewer' ) {
+			$roles_to_query = array( 'rrp_reviewer' );
+		} else {
+			$roles_to_query = array( 'rrp_student', 'rrp_reviewer' );
+		}
+		$users = array();
+		foreach ( $roles_to_query as $role ) {
+			$wp_users = get_users( array( 'role' => $role, 'number' => -1, 'orderby' => 'display_name' ) );
+			foreach ( $wp_users as $u ) {
+				$users[] = self::format_portal_user( $u );
+			}
+		}
+		return new WP_REST_Response( array( 'users' => $users ), 200 );
+	}
+
+	public static function portal_users_create( WP_REST_Request $request ) {
+		$body       = $request->get_json_params() ?: array();
+		$first_name = sanitize_text_field( $body['firstName'] ?? '' );
+		$last_name  = sanitize_text_field( $body['lastName'] ?? '' );
+		$email      = sanitize_email( $body['email'] ?? '' );
+		$role       = sanitize_key( $body['role'] ?? 'rrp_student' );
+		$password   = isset( $body['password'] ) ? (string) $body['password'] : '';
+
+		if ( ! $email || ! is_email( $email ) ) {
+			return new WP_REST_Response( array( 'error' => 'A valid email address is required.' ), 400 );
+		}
+		if ( ! in_array( $role, array( 'rrp_student', 'rrp_reviewer' ), true ) ) {
+			return new WP_REST_Response( array( 'error' => 'Role must be rrp_student or rrp_reviewer.' ), 400 );
+		}
+		if ( email_exists( $email ) ) {
+			return new WP_REST_Response( array( 'error' => 'A user with this email already exists.' ), 409 );
+		}
+
+		$display_name = trim( $first_name . ' ' . $last_name ) ?: $email;
+		$base_login   = sanitize_user( strtolower( str_replace( ' ', '.', $display_name ) ), true );
+		$base_login   = $base_login ?: sanitize_user( explode( '@', $email )[0], true );
+		$login        = $base_login;
+		$i            = 1;
+		while ( username_exists( $login ) ) {
+			$login = $base_login . $i++;
+		}
+
+		$user_data = array(
+			'user_login'   => $login,
+			'user_email'   => $email,
+			'first_name'   => $first_name,
+			'last_name'    => $last_name,
+			'display_name' => $display_name,
+			'user_pass'    => $password ?: wp_generate_password( 12, true, false ),
+			'role'         => $role,
+		);
+		$user_id = wp_insert_user( $user_data );
+		if ( is_wp_error( $user_id ) ) {
+			return new WP_REST_Response( array( 'error' => $user_id->get_error_message() ), 400 );
+		}
+
+		if ( ! empty( $body['degree'] ) ) {
+			update_user_meta( $user_id, 'rrp_degree', sanitize_text_field( $body['degree'] ) );
+		}
+		if ( ! empty( $body['allowedTypes'] ) && is_array( $body['allowedTypes'] ) ) {
+			update_user_meta( $user_id, 'rrp_allowed_submission_types', array_map( 'sanitize_text_field', $body['allowedTypes'] ) );
+		}
+		if ( ! empty( $body['defaultStageReviewers'] ) && is_array( $body['defaultStageReviewers'] ) ) {
+			update_user_meta( $user_id, 'rrp_default_stage_reviewers', $body['defaultStageReviewers'] );
+		}
+		if ( ! empty( $body['submissionTypes'] ) && is_array( $body['submissionTypes'] ) ) {
+			update_user_meta( $user_id, 'rrp_submission_types', array_map( 'sanitize_text_field', $body['submissionTypes'] ) );
+		}
+		if ( ! empty( $body['department'] ) ) {
+			update_user_meta( $user_id, 'rrp_department', sanitize_text_field( $body['department'] ) );
+		}
+		if ( ! empty( $body['expertise'] ) ) {
+			update_user_meta( $user_id, 'rrp_expertise', sanitize_textarea_field( $body['expertise'] ) );
+		}
+
+		return new WP_REST_Response( array( 'user' => self::format_portal_user( get_userdata( $user_id ) ), 'created' => true ), 201 );
+	}
+
+	public static function portal_users_update( WP_REST_Request $request ) {
+		$id   = (int) $request->get_param( 'id' );
+		$body = $request->get_json_params() ?: array();
+		$user = get_userdata( $id );
+		if ( ! $user ) {
+			return new WP_REST_Response( array( 'error' => 'User not found.' ), 404 );
+		}
+
+		$update = array( 'ID' => $id );
+		if ( isset( $body['firstName'] ) ) $update['first_name']   = sanitize_text_field( $body['firstName'] );
+		if ( isset( $body['lastName'] ) )  $update['last_name']    = sanitize_text_field( $body['lastName'] );
+		if ( isset( $body['firstName'] ) || isset( $body['lastName'] ) ) {
+			$fn = sanitize_text_field( $body['firstName'] ?? $user->first_name );
+			$ln = sanitize_text_field( $body['lastName']  ?? $user->last_name );
+			$update['display_name'] = trim( $fn . ' ' . $ln ) ?: $user->display_name;
+		}
+		if ( count( $update ) > 1 ) {
+			wp_update_user( $update );
+		}
+
+		if ( array_key_exists( 'degree', $body ) ) {
+			update_user_meta( $id, 'rrp_degree', sanitize_text_field( $body['degree'] ) );
+		}
+		if ( array_key_exists( 'allowedTypes', $body ) && is_array( $body['allowedTypes'] ) ) {
+			update_user_meta( $id, 'rrp_allowed_submission_types', array_map( 'sanitize_text_field', $body['allowedTypes'] ) );
+		}
+		if ( array_key_exists( 'defaultStageReviewers', $body ) && is_array( $body['defaultStageReviewers'] ) ) {
+			update_user_meta( $id, 'rrp_default_stage_reviewers', $body['defaultStageReviewers'] );
+		}
+		if ( array_key_exists( 'submissionTypes', $body ) && is_array( $body['submissionTypes'] ) ) {
+			update_user_meta( $id, 'rrp_submission_types', array_map( 'sanitize_text_field', $body['submissionTypes'] ) );
+		}
+		if ( array_key_exists( 'department', $body ) ) {
+			update_user_meta( $id, 'rrp_department', sanitize_text_field( $body['department'] ) );
+		}
+		if ( array_key_exists( 'expertise', $body ) ) {
+			update_user_meta( $id, 'rrp_expertise', sanitize_textarea_field( $body['expertise'] ) );
+		}
+
+		return new WP_REST_Response( array( 'user' => self::format_portal_user( get_userdata( $id ) ) ), 200 );
+	}
+
+	public static function portal_users_delete( WP_REST_Request $request ) {
+		$id = (int) $request->get_param( 'id' );
+		if ( $id === get_current_user_id() ) {
+			return new WP_REST_Response( array( 'error' => 'You cannot remove your own portal access.' ), 400 );
+		}
+		$user = get_userdata( $id );
+		if ( ! $user ) {
+			return new WP_REST_Response( array( 'error' => 'User not found.' ), 404 );
+		}
+		if ( user_can( $id, 'rrp_full_admin_access' ) && ! current_user_can( 'rrp_full_admin_access' ) ) {
+			return new WP_REST_Response( array( 'error' => 'You cannot remove an administrator.' ), 403 );
+		}
+		foreach ( array( 'rrp_student', 'rrp_reviewer', 'rrp_coordinator', 'rrp_admin' ) as $r ) {
+			$user->remove_role( $r );
+		}
+		if ( empty( $user->roles ) ) {
+			$user->set_role( 'subscriber' );
+		}
+		return new WP_REST_Response( array( 'removed' => true, 'userId' => $id ), 200 );
+	}
+}
