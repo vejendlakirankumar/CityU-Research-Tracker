@@ -225,14 +225,58 @@ class Portal_Data {
 		return is_array( $list ) ? $list : self::DEFAULT_REVIEWERS;
 	}
 
+	public static function write_reviewers( $list ) {
+		self::ensure_data_dir();
+		file_put_contents( RRP_DATA_DIR . self::REVIEWERS_FILE, wp_json_encode( array_values( $list ), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES ), LOCK_EX );
+	}
+
+	/**
+	 * Sync a WordPress reviewer user to reviewers.json (create or update the entry).
+	 */
+	public static function sync_reviewer_to_json( $user_id ) {
+		$user = get_userdata( $user_id );
+		if ( ! $user ) return;
+		$types = (array) ( get_user_meta( $user_id, 'rrp_submission_types', true ) ?: array() );
+		$rid   = (string) ( get_user_meta( $user_id, 'rrp_reviewer_id', true ) ?: 'wp_' . $user_id );
+		$list  = self::read_reviewers();
+		$found = false;
+		foreach ( $list as &$r ) {
+			if ( strtolower( trim( (string) ( $r['email'] ?? '' ) ) ) === strtolower( trim( $user->user_email ) ) ) {
+				$r['id']              = $rid;
+				$r['name']            = $user->display_name;
+				$r['submissionTypes'] = $types;
+				$found = true;
+				break;
+			}
+		}
+		unset( $r );
+		if ( ! $found ) {
+			$list[] = array( 'id' => $rid, 'name' => $user->display_name, 'email' => $user->user_email, 'submissionTypes' => $types );
+		}
+		self::write_reviewers( $list );
+	}
+
+	/**
+	 * Remove a reviewer entry from reviewers.json by email.
+	 */
+	public static function remove_reviewer_from_json( $email ) {
+		$list    = self::read_reviewers();
+		$email_l = strtolower( trim( (string) $email ) );
+		$list    = array_values( array_filter( $list, function ( $r ) use ( $email_l ) {
+			return strtolower( trim( (string) ( $r['email'] ?? '' ) ) ) !== $email_l;
+		} ) );
+		self::write_reviewers( $list );
+	}
+
 	public static function read_config() {
 		$path = RRP_DATA_DIR . self::CONFIG_FILE;
 		$defaults = array(
-			'stageRequirements'     => array(),
-			'reviewerPools'         => array(),
-			'poolCohorts'           => array(),
-			'activeCohort'          => null,
+			'stageRequirements'      => array(),
+			'reviewerPools'          => array(),
+			'poolCohorts'            => array(),
+			'activeCohort'           => null,
 			'defaultReviewersByStage' => array(),
+			'programs'               => array(),
 		);
 		if ( ! file_exists( $path ) ) {
 			return $defaults;
@@ -245,13 +289,8 @@ class Portal_Data {
 		if ( ! is_array( $data ) ) {
 			return $defaults;
 		}
-		return array(
-			'stageRequirements'      => isset( $data['stageRequirements'] ) && is_array( $data['stageRequirements'] ) ? $data['stageRequirements'] : array(),
-			'reviewerPools'          => isset( $data['reviewerPools'] ) && is_array( $data['reviewerPools'] ) ? $data['reviewerPools'] : array(),
-			'poolCohorts'            => isset( $data['poolCohorts'] ) && is_array( $data['poolCohorts'] ) ? $data['poolCohorts'] : array(),
-			'activeCohort'           => isset( $data['activeCohort'] ) ? $data['activeCohort'] : null,
-			'defaultReviewersByStage' => isset( $data['defaultReviewersByStage'] ) && is_array( $data['defaultReviewersByStage'] ) ? $data['defaultReviewersByStage'] : array(),
-		);
+		// Merge persisted data over defaults so all keys (programs, templates, COI, etc.) are preserved.
+		return array_merge( $defaults, $data );
 	}
 
 	public static function write_config( $config ) {
@@ -419,24 +458,32 @@ class Portal_Data {
 	public static function derive_submission_status( $submission ) {
 		$status = $submission['status'] ?? 'Submitted';
 		$stages = isset( $submission['reviewStages'] ) && is_array( $submission['reviewStages'] ) ? $submission['reviewStages'] : array();
+
+		// Preserved terminal statuses — do not override.
+		$preserved = array( 'Draft', 'Withdrawn' );
+		if ( in_array( $status, $preserved, true ) ) {
+			return $status;
+		}
+
+		$active_stages = array_filter( $stages, function ( $s ) { return ! ( $s['skipped'] ?? false ); } );
+		if ( empty( $active_stages ) ) {
+			return $status;
+		}
+
 		$has_needs_revision = false;
 		$has_rejected = false;
-		$all_approved = true;
-		foreach ( $stages as $stage ) {
+
+		// Scan all active stages for terminal decisions first.
+		foreach ( $active_stages as $stage ) {
 			$decisions = isset( $stage['decisions'] ) && is_array( $stage['decisions'] ) ? $stage['decisions'] : array();
 			foreach ( $decisions as $d ) {
 				$d = strtolower( trim( (string) $d ) );
 				if ( $d === 'rejected' ) {
 					$has_rejected = true;
-					$all_approved = false;
 					break 2;
 				}
 				if ( $d === 'needs revision' ) {
 					$has_needs_revision = true;
-					$all_approved = false;
-				}
-				if ( $d !== 'approved' ) {
-					$all_approved = false;
 				}
 			}
 		}
@@ -446,22 +493,28 @@ class Portal_Data {
 		if ( $has_needs_revision ) {
 			return 'Revision Required';
 		}
-		if ( ! empty( $stages ) && $all_approved ) {
-			$type = strtolower( $submission['type'] ?? '' );
-			switch ( $type ) {
-				case 'conference':
-					return 'Confirmed for Presentation';
-				case 'publication':
-					return 'Published';
-				case 'student-project':
-					return 'Approved for Submission';
-				case 'grant':
-					return 'Approved';
-				default:
-					return 'Accepted';
+
+		// Partial progress: find the first active stage that has reviewers but isn't fully approved.
+		// Stages with NO reviewers are simply unassigned — they don't count as "In Progress".
+		foreach ( array_values( $active_stages ) as $stage ) {
+			if ( ! empty( $stage['reviewers'] ) && ! self::is_stage_approved( $stage ) ) {
+				$stage_name = trim( (string) ( $stage['stageName'] ?? '' ) );
+				return $stage_name ? $stage_name . ': In Progress' : 'Under Review';
 			}
 		}
-		return $status;
+
+		// Reach here when every active stage either has no reviewers or is fully approved → final label.
+		$type = strtolower( $submission['type'] ?? '' );
+		switch ( $type ) {
+			case 'conference':
+				return 'Confirmed for Presentation';
+			case 'publication':
+				return 'Published';
+			case 'grant':
+				return 'Approved';
+			default:
+				return 'Approved';
+		}
 	}
 
 	public static function get_dashboard_data( $params = array() ) {
@@ -489,7 +542,7 @@ class Portal_Data {
 		foreach ( $submissions as $submission ) {
 			$overview['totalSubmissions']++;
 			$status = $submission['status'] ?? 'Unknown';
-			$type = $submission['type'] ?? 'unknown';
+			$type = ( ! empty( $submission['submissionType'] ) ? $submission['submissionType'] : ( $submission['type'] ?? 'unknown' ) );
 
 			if ( ! isset( $overview['statusCounts'][ $status ] ) ) {
 				$overview['statusCounts'][ $status ] = 0;
@@ -562,7 +615,8 @@ class Portal_Data {
 
 	public static function get_workflow_metrics( $params = array() ) {
 		$data = self::read_submissions();
-		$submissions = isset( $data['submissions'] ) && is_array( $data['submissions'] ) ? $data['submissions'] : array();
+		$all  = isset( $data['submissions'] ) && is_array( $data['submissions'] ) ? $data['submissions'] : array();
+		$submissions = self::filter_submissions_for_analytics( $all, $params );
 
 		$metrics = array(
 			'totalSubmissions' => count( $submissions ),
@@ -576,7 +630,7 @@ class Portal_Data {
 		$reviewerCounts = 0;
 
 		foreach ( $submissions as $sub ) {
-			$type = $sub['type'] ?? 'unknown';
+			$type = ( ! empty( $sub['submissionType'] ) ? $sub['submissionType'] : ( $sub['type'] ?? 'unknown' ) );
 			$status = $sub['status'] ?? 'unknown';
 			$stages = isset( $sub['reviewStages'] ) && is_array( $sub['reviewStages'] ) ? $sub['reviewStages'] : array();
 			$reviewers = isset( $sub['assignedReviewers'] ) && is_array( $sub['assignedReviewers'] ) ? $sub['assignedReviewers'] : array();
@@ -597,7 +651,8 @@ class Portal_Data {
 
 	public static function get_performance_metrics( $params = array() ) {
 		$data = self::read_submissions();
-		$submissions = isset( $data['submissions'] ) && is_array( $data['submissions'] ) ? $data['submissions'] : array();
+		$all  = isset( $data['submissions'] ) && is_array( $data['submissions'] ) ? $data['submissions'] : array();
+		$submissions = self::filter_submissions_for_analytics( $all, $params );
 
 		$metrics = array(
 			'averageTimeToDecisionDays' => null,
@@ -613,12 +668,16 @@ class Portal_Data {
 		foreach ( $submissions as $sub ) {
 			$status = $sub['status'] ?? '';
 			$createdAt = isset( $sub['createdAt'] ) ? strtotime( $sub['createdAt'] ) : null;
-			if ( $status === 'Confirmed for Presentation' || $status === 'Published' || $status === 'Approved for Submission' || $status === 'Approved' || $status === 'Accepted' ) {
+			$finalized_statuses = array( 'Confirmed for Presentation', 'Published', 'Approved for Submission', 'Approved', 'Accepted' );
+			$in_progress_statuses = array( 'Submitted', 'Under Review', 'Under Initial Review', 'Administrative Review', 'Revision Required', 'Revision Submitted' );
+			$is_finalized   = in_array( $status, $finalized_statuses, true );
+			$is_in_progress = ! $is_finalized && ( in_array( $status, $in_progress_statuses, true ) || strpos( $status, ': In Progress' ) !== false );
+			if ( $is_finalized ) {
 				$metrics['finalizedCount']++;
 				if ( $createdAt ) {
 					$timeDiffs[] = ( $now - $createdAt ) / DAY_IN_SECONDS;
 				}
-			} elseif ( in_array( $status, array( 'Submitted', 'Under Review', 'Under Initial Review', 'Administrative Review', 'Revision Required', 'Revision Submitted' ), true ) ) {
+			} elseif ( $is_in_progress ) {
 				$metrics['inProgressCount']++;
 				if ( $createdAt && ( $now - $createdAt ) > ( 14 * DAY_IN_SECONDS ) ) {
 					$metrics['lateReviewAlerts']++;
@@ -691,6 +750,31 @@ class Portal_Data {
 		}
 
 		return $workload;
+	}
+
+	/**
+	 * Filter a submissions array for analytics based on role params.
+	 * - $params empty          → all submissions (coordinator / admin)
+	 * - $params['submitterEmail'] → only that submitter's submissions (student)
+	 * - $params['reviewerEmail']  → only submissions assigned to that reviewer
+	 */
+	private static function filter_submissions_for_analytics( array $subs, array $params ) {
+		if ( ! empty( $params['submitterEmail'] ) ) {
+			$fe = strtolower( trim( (string) $params['submitterEmail'] ) );
+			return array_values( array_filter( $subs, function ( $s ) use ( $fe ) {
+				return strtolower( trim( (string) ( $s['submitterEmail'] ?? '' ) ) ) === $fe;
+			} ) );
+		}
+		if ( ! empty( $params['reviewerEmail'] ) ) {
+			$re = strtolower( trim( (string) $params['reviewerEmail'] ) );
+			return array_values( array_filter( $subs, function ( $s ) use ( $re ) {
+				foreach ( $s['assignedReviewers'] ?? array() as $r ) {
+					if ( strtolower( trim( (string) ( $r['email'] ?? '' ) ) ) === $re ) return true;
+				}
+				return false;
+			} ) );
+		}
+		return $subs; // no filter = all
 	}
 
 	public static function get_review_criteria_templates() {

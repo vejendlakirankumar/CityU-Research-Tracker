@@ -36,6 +36,45 @@
     { id: 'grant', title: 'Grant', subtitle: 'Funding and grant proposals' }
   ];
 
+  var TYPE_LABEL_MAP = {
+    'dissertation':    'Doctoral Dissertation',
+    'capstone':        'Capstone Project',
+    'student-project': 'Student Project',
+    'student':         'Student Project',
+    'research-paper':  'Research Paper',
+    'publication':     'Publication',
+    'conference':      'Conference Paper',
+    'conference paper': 'Conference Paper',
+    'grant':           'Grant Proposal',
+    'grant-proposal':  'Grant Proposal'
+  };
+
+  function typeLabel(raw) {
+    return TYPE_LABEL_MAP[(raw || '').toLowerCase()] || (raw || '—');
+  }
+
+  function statusBadgeCls(status) {
+    var s = (status || '').toLowerCase().replace(/[\s_]+/g, '-');
+    if (s === 'approved' || s === 'confirmed-for-presentation' || s === 'published' ||
+        s === 'approved-for-submission' || s === 'accepted' || s === 'conditionally-accepted')
+                                                               return 'rrp-dec-approved';
+    if (s === 'rejected')                                      return 'rrp-dec-rejected';
+    if (s === 'needs-revision' || s === 'revision-required'
+        || s === 'revision' || s === 'needs-revision')         return 'rrp-dec-revision';
+    if (s === 'revision-submitted')                            return 'rrp-dec-revision';
+    if (s === 'draft')                                         return 'rrp-dec-draft';
+    if (s === 'submitted')                                     return 'rrp-dec-submitted';
+    if (s.indexOf('review') !== -1 || s.indexOf('in-progress') !== -1)
+                                                               return 'rrp-dec-inreview';
+    return 'rrp-dec-pending';
+  }
+
+  function isApprovedStatus(status) {
+    var s = (status || '').toLowerCase().replace(/[\s_]+/g, '-');
+    return s === 'approved' || s === 'confirmed-for-presentation' || s === 'published' ||
+           s === 'approved-for-submission' || s === 'accepted' || s === 'conditionally-accepted';
+  }
+
   var typeToApi = { conference: 'conference', publication: 'publication', student: 'student-project', grant: 'grant' };
 
   function getQueryParam(name) {
@@ -104,8 +143,8 @@
         });
 
         var total    = mine.length;
-        var inReview = mine.filter(function (s) { var st = (s.status || '').toLowerCase(); return st !== 'draft' && st !== 'approved' && st !== 'rejected'; }).length;
-        var approved = mine.filter(function (s) { return (s.status || '').toLowerCase() === 'approved'; }).length;
+        var inReview = mine.filter(function (s) { var st = (s.status || '').toLowerCase(); return st !== 'draft' && !isApprovedStatus(s.status) && st !== 'rejected'; }).length;
+        var approved = mine.filter(function (s) { return isApprovedStatus(s.status); }).length;
         var drafts   = mine.filter(function (s) { return (s.status || '').toLowerCase() === 'draft'; }).length;
 
         document.getElementById('rrp-student-stats').innerHTML =
@@ -148,7 +187,7 @@
       if (filter === 'inreview') {
         filtered = mine.filter(function (s) { var st = (s.status || '').toLowerCase(); return st !== 'draft' && st !== 'approved' && st !== 'rejected'; });
       } else if (filter === 'approved') {
-        filtered = mine.filter(function (s) { return (s.status || '').toLowerCase() === 'approved'; });
+        filtered = mine.filter(function (s) { return isApprovedStatus(s.status); });
       } else if (filter === 'draft') {
         filtered = mine.filter(function (s) { return (s.status || '').toLowerCase() === 'draft'; });
       }
@@ -174,21 +213,26 @@
         '<h2>' + heading + ' <span class="rrp-count-badge">' + filtered.length + '</span></h2>' +
         '<ul class="rrp-list rrp-submissions-list">' +
         filtered.map(function (s) {
-          var st = (s.status || '').toLowerCase();
-          var badgeCls = st === 'approved' ? 'rrp-dec-approved' :
-                         (st === 'rejected' ? 'rrp-dec-rejected' :
-                         (st === 'draft'    ? 'rrp-dec-pending'  : 'rrp-dec-pending'));
+          var firstReviewer = '';
+          (s.reviewStages || []).forEach(function (rs) {
+            if (!firstReviewer && rs.reviewers && rs.reviewers.length) {
+              firstReviewer = rs.reviewers[0].name || rs.reviewers[0].email;
+            }
+          });
           return '<li class="rrp-sub-item">' +
             '<div class="rrp-sub-item-header">' +
               '<strong>' + escapeHtml(s.title || 'Untitled') + '</strong>' +
-              '<span class="rrp-decision-badge ' + badgeCls + '">' + escapeHtml(s.status || 'Unknown') + '</span>' +
+              '<span class="rrp-decision-badge ' + statusBadgeCls(s.status) + '">' + escapeHtml(s.status || 'Submitted') + '</span>' +
             '</div>' +
             '<div class="rrp-sub-item-meta">' +
-              '<span>' + escapeHtml(s.id) + '</span>' +
-              '<span>' + escapeHtml(s.type || '—') + '</span>' +
-              (s.createdAt ? '<span>' + new Date(s.createdAt).toLocaleDateString() + '</span>' : '') +
+              '<span class="rrp-meta-id"><span class="rrp-meta-lbl">ID</span>' + escapeHtml(s.id) + '</span>' +
+              '<span><span class="rrp-meta-lbl">Category</span>' + escapeHtml(typeLabel(s.submissionType || s.type)) + '</span>' +
+              (s.createdAt ? '<span><span class="rrp-meta-lbl">Submitted</span>' + new Date(s.createdAt).toLocaleDateString() + '</span>' : '') +
+              (firstReviewer ? '<span><span class="rrp-meta-lbl">Reviewer</span>' + escapeHtml(firstReviewer) + '</span>' : '') +
             '</div>' +
-            '<button type="button" class="rrp-btn secondary" data-detail="' + escapeHtml(s.id) + '">View Details</button>' +
+            '<div class="rrp-sub-item-actions">' +
+              '<button type="button" class="rrp-btn secondary" data-detail="' + escapeHtml(s.id) + '">View Details</button>' +
+            '</div>' +
             '</li>';
         }).join('') +
         '</ul>';
@@ -213,6 +257,19 @@
       'grant-proposal':  'grant'
     };
 
+    var STUDENT_FORM_TYPES = {
+      'dissertation':   'Doctoral Dissertation',
+      'capstone':       'Capstone Project',
+      'research-paper': 'Research Paper',
+      'grant-proposal': 'Grant Proposal'
+    };
+    var allowedTypes = (window.RRP && window.RRP.allowedTypes && window.RRP.allowedTypes.length)
+      ? window.RRP.allowedTypes
+      : Object.keys(STUDENT_FORM_TYPES);
+    var typeOptions = allowedTypes.map(function (t) {
+      return '<option value="' + t + '">' + (STUDENT_FORM_TYPES[t] || t) + '</option>';
+    }).join('');
+
     container.innerHTML =
       '<h1>New Submission</h1>' +
       '<button type="button" class="rrp-btn secondary" style="margin-bottom:1rem;" data-back>&#8592; Back to Dashboard</button>' +
@@ -222,10 +279,7 @@
           '<label>Submission type *</label>' +
           '<select name="submissionType" required>' +
             '<option value="">&#8212; select type &#8212;</option>' +
-            '<option value="dissertation">Doctoral Dissertation</option>' +
-            '<option value="capstone">Capstone Project</option>' +
-            '<option value="research-paper">Research Paper</option>' +
-            '<option value="grant-proposal">Grant Proposal</option>' +
+            typeOptions +
           '</select>' +
         '</div>' +
         '<div class="rrp-form-block">' +
@@ -414,13 +468,13 @@
             '<ul class="rrp-nav-list">' +
               '<li><button type="button" class="rrp-nav-link" data-view="students">&#127891; Students</button></li>' +
               '<li><button type="button" class="rrp-nav-link" data-view="reviewers">&#128101; Reviewers</button></li>' +
-              '<li><button type="button" class="rrp-nav-link" id="rrp-coord-manage-reviewers-btn">&#128296; Reviewer Pool</button></li>' +
+              '<li><button type="button" class="rrp-nav-link" data-view="programs">&#127979; Programs</button></li>' +
               '<li><button type="button" class="rrp-nav-link" data-view="analytics">&#128202; Analytics</button></li>' +
               '<li><button type="button" class="rrp-nav-link" data-view="overdue">&#128680; Overdue Submissions</button></li>' +
               '<li><button type="button" class="rrp-nav-link" data-view="public">&#127760; Public submissions</button></li>' +
             '</ul>' +
           '</div>' +
-          '<div id="rrp-coord-reviewer-pool" style="margin-top:1rem;"></div>' +
+          '<div id="rrp-coord-reviewer-pool"></div>' +
         '</aside>' +
       '</div>' +
       // Inline assignment panel (hidden until triggered)
@@ -435,35 +489,11 @@
         if (view === 'overdue')   renderOverdue(container);
         if (view === 'students')  renderStudentManagement(container, function () { renderCoordinatorDashboard(container); });
         if (view === 'reviewers') renderReviewerManagement(container, function () { renderCoordinatorDashboard(container); });
+        if (view === 'programs')  renderProgramManagement(container, function () { renderCoordinatorDashboard(container); });
       });
     });
 
-    // Manage Reviewer Pool toggle
-    document.getElementById('rrp-coord-manage-reviewers-btn').addEventListener('click', function () {
-      var poolEl = document.getElementById('rrp-coord-reviewer-pool');
-      if (poolEl.innerHTML) { poolEl.innerHTML = ''; return; }
-      poolEl.innerHTML = '<p class="rrp-loading">Loading reviewers&hellip;</p>';
-      api('GET', '/reviewers')
-        .then(function (res) {
-          var list = res.reviewers || [];
-          poolEl.innerHTML =
-            '<div class="rrp-nav-card">' +
-              '<div class="rrp-nav-card-title">Reviewer Pool (' + list.length + ')</div>' +
-              '<ul class="rrp-list" style="max-height:260px;overflow-y:auto;">' +
-              list.map(function (r) {
-                return '<li style="font-size:.82rem;padding:.4rem 0;border-bottom:1px solid #f0f0f0;">' +
-                  '<strong>' + escapeHtml(r.name || r.email) + '</strong><br>' +
-                  '<span style="color:var(--rrp-text-muted)">' + escapeHtml(r.email) + '</span><br>' +
-                  '<span style="font-size:.75rem;color:#1d6fa4">' + escapeHtml((r.submissionTypes || []).join(', ')) + '</span>' +
-                  '</li>';
-              }).join('') +
-              '</ul>' +
-            '</div>';
-        })
-        .catch(function () {
-          poolEl.innerHTML = '<div class="rrp-error">Unable to load reviewers.</div>';
-        });
-    });
+    // Manage Reviewer Pool toggle — removed (use Reviewers quick link instead)
 
     // Auto-assign all submissions
     document.getElementById('rrp-coord-auto-assign-btn').addEventListener('click', function () {
@@ -498,9 +528,9 @@
       }).length;
       var inReview = all.filter(function (s) {
         var st = (s.status || '').toLowerCase();
-        return st !== 'draft' && st !== 'approved' && st !== 'rejected' && st !== 'submitted';
+        return st !== 'draft' && !isApprovedStatus(s.status) && st !== 'rejected' && st !== 'submitted';
       }).length;
-      var approved = all.filter(function (s) { return (s.status || '').toLowerCase() === 'approved'; }).length;
+      var approved = all.filter(function (s) { return isApprovedStatus(s.status); }).length;
 
       document.getElementById('rrp-coord-stats').innerHTML =
         '<button class="rrp-stat-card'       + (activeFilter === 'all'        ? ' rrp-stat-active' : '') + '" data-stat-filter="all">' +
@@ -546,7 +576,7 @@
           return st !== 'draft' && st !== 'approved' && st !== 'rejected' && st !== 'submitted';
         });
       } else if (filter === 'approved') {
-        filtered = all.filter(function (s) { return (s.status || '').toLowerCase() === 'approved'; });
+        filtered = all.filter(function (s) { return isApprovedStatus(s.status); });
       }
 
       var heading = filter === 'unassigned' ? 'Needs Assignment' :
@@ -565,21 +595,36 @@
         '<h2>' + heading + ' <span class="rrp-count-badge">' + filtered.length + '</span></h2>' +
         '<ul class="rrp-list rrp-submissions-list">' +
         filtered.map(function (s) {
-          var st  = (s.status || '').toLowerCase();
-          var cls = st === 'approved' ? 'rrp-dec-approved' : (st === 'rejected' ? 'rrp-dec-rejected' : 'rrp-dec-pending');
           var sum = summary[s.id];
           var hasAssignment = sum && (sum.reviewStages || []).some(function (rs) { return (rs.reviewers || []).length > 0; });
+          var firstReviewer = '';
+          var currentStage  = '';
+          if (sum) {
+            (sum.reviewStages || []).forEach(function (rs) {
+              if (!firstReviewer && rs.reviewers && rs.reviewers.length) {
+                firstReviewer = rs.reviewers[0].name || rs.reviewers[0].email;
+                currentStage  = rs.stageName;
+              }
+            });
+          }
           return '<li class="rrp-sub-item">' +
             '<div class="rrp-sub-item-header">' +
               '<strong>' + escapeHtml(s.title || 'Untitled') + '</strong>' +
-              '<span class="rrp-decision-badge ' + cls + '">' + escapeHtml(s.status || 'Unknown') + '</span>' +
+              '<span class="rrp-decision-badge ' + statusBadgeCls(s.status) + '">' + escapeHtml(s.status || 'Submitted') + '</span>' +
             '</div>' +
             '<div class="rrp-sub-item-meta">' +
-              '<span>' + escapeHtml(s.id) + '</span>' +
-              '<span>' + escapeHtml(s.type || '\u2014') + '</span>' +
-              '<span>' + escapeHtml(s.submitterName || s.submitterEmail || '') + '</span>' +
-              (s.createdAt ? '<span>' + new Date(s.createdAt).toLocaleDateString() + '</span>' : '') +
+              '<span class="rrp-meta-id"><span class="rrp-meta-lbl">ID</span>' + escapeHtml(s.id) + '</span>' +
+              '<span><span class="rrp-meta-lbl">Category</span>' + escapeHtml(typeLabel(s.submissionType || s.type)) + '</span>' +
+              '<span><span class="rrp-meta-lbl">Submitted by</span>' + escapeHtml(s.submitterName || s.submitterEmail || '\u2014') + '</span>' +
+              (s.createdAt ? '<span><span class="rrp-meta-lbl">Date</span>' + new Date(s.createdAt).toLocaleDateString() + '</span>' : '') +
             '</div>' +
+            (firstReviewer || !hasAssignment ?
+              '<div class="rrp-sub-item-review-info">' +
+                (firstReviewer
+                  ? '<span>&#128100; <span class="rrp-meta-lbl">Reviewer &mdash;</span> ' + escapeHtml(firstReviewer) + '</span>' +
+                    (currentStage ? '<span>&#128196; <span class="rrp-meta-lbl">Stage &mdash;</span> ' + escapeHtml(currentStage) + '</span>' : '')
+                  : '<span class="rrp-review-unassigned">&#9888; Not yet assigned</span>') +
+              '</div>' : '') +
             '<div class="rrp-sub-item-actions">' +
               '<button type="button" class="rrp-btn secondary" data-detail="' + escapeHtml(s.id) + '">View</button>' +
               '<button type="button" class="rrp-btn' + (hasAssignment ? ' secondary' : '') + '" data-assign="' + escapeHtml(s.id) + '">' +
@@ -610,7 +655,7 @@
       panel.innerHTML = '<p class="rrp-loading">Loading reviewers&hellip;</p>';
       panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
 
-      api('GET', '/reviewers?submissionType=' + encodeURIComponent(sub.type || ''))
+      api('GET', '/reviewers')
         .then(function (res) {
           var reviewers = res.reviewers || [];
           var stages    = stagesForSub(sub);
@@ -625,7 +670,7 @@
                 '<h2>Assign Reviewers &mdash; <span style="font-weight:400;">' + escapeHtml(sub.title || sub.id) + '</span></h2>' +
                 '<div class="rrp-assign-panel-meta">' +
                   '<span><strong>ID:</strong> ' + escapeHtml(sub.id) + '</span>' +
-                  '<span><strong>Type:</strong> ' + escapeHtml(sub.type || '\u2014') + '</span>' +
+                  '<span><strong>Type:</strong> ' + escapeHtml(typeLabel(sub.submissionType || sub.type) || '\u2014') + '</span>' +
                   '<span><strong>Submitted by:</strong> ' + escapeHtml(sub.submitterName || sub.submitterEmail || '\u2014') + '</span>' +
                   '<span><strong>Status:</strong> ' + escapeHtml(sub.status || '\u2014') + '</span>' +
                 '</div>' +
@@ -728,7 +773,7 @@
                 '</div>' +
                 '<div class="rrp-sub-item-meta">' +
                   '<span>' + escapeHtml(s.id) + '</span>' +
-                  '<span>' + escapeHtml(s.type || '') + '</span>' +
+                  '<span>' + escapeHtml(typeLabel(s.submissionType || s.type)) + '</span>' +
                   '<span>' + escapeHtml(s.submitterEmail || '') + '</span>' +
                 '</div>' +
                 '<button type="button" class="rrp-btn secondary" data-detail="' + escapeHtml(s.id) + '">View</button>' +
@@ -1176,55 +1221,161 @@
 
   function renderAnalytics(container, backFn) {
     container.innerHTML =
-      '<h1>Analytics</h1>' +
-      '<button type="button" class="rrp-btn secondary" style="margin-bottom: 1rem;" data-back>← Back</button>' +
-      '<div id="rrp-analytics-content" class="rrp-analytics-content">Loading analytics…</div>' +
-      '<div class="rrp-analytics-actions" style="margin-top: 1rem;"><button class="rrp-btn" id="rrp-export-csv">Export CSV</button><button class="rrp-btn" id="rrp-export-xlsx" style="margin-left:0.5rem;">Export XLSX</button></div>';
+      '<h1>&#128202; Analytics</h1>' +
+      '<button type="button" class="rrp-btn secondary" style="margin-bottom:1rem;" data-back>&#8592; Back</button>' +
+      '<div id="rrp-analytics-content"><p class="rrp-loading">Loading analytics&hellip;</p></div>' +
+      '<div class="rrp-analytics-actions" style="margin-top:1rem;">' +
+        '<button class="rrp-btn" id="rrp-export-csv">Export CSV</button>' +
+        '<button class="rrp-btn" id="rrp-export-xlsx" style="margin-left:0.5rem;">Export XLSX</button>' +
+      '</div>';
 
-    container.querySelector('[data-back]').addEventListener('click', function () { if (typeof backFn === 'function') backFn(); else renderSelection(container); });
+    container.querySelector('[data-back]').addEventListener('click', function () {
+      if (typeof backFn === 'function') backFn(); else renderSelection(container);
+    });
 
     Promise.all([
       api('GET', '/analytics/workflow'),
-      api('GET', '/analytics/performance')
+      api('GET', '/analytics/performance'),
+      api('GET', '/analytics/daily').catch(function () { return { dates: [], series: [] }; })
     ]).then(function (results) {
-      var w = results[0];
-      var p = results[1];
+      var w     = results[0];
+      var p     = results[1];
+      var daily = results[2];
       var el = document.getElementById('rrp-analytics-content');
+      if (!el) return;
+
+      // ── Status distribution bar chart ─────────────────────────────────────
+      var byStatus = w.totalByStatus || {};
+      var byType   = w.totalByType   || {};
+      var total    = w.totalSubmissions || 0;
+
+      var STATUS_COLORS = {
+        'Submitted':          '#3b82f6',
+        'Under Review':       '#f59e0b',
+        'Under Initial Review': '#f59e0b',
+        'Administrative Review': '#f59e0b',
+        'Revision Required':  '#8b5cf6',
+        'Revision Submitted': '#a78bfa',
+        'Approved':           '#22c55e',
+        'Confirmed for Presentation': '#22c55e',
+        'Published':          '#22c55e',
+        'Approved for Submission': '#22c55e',
+        'Rejected':           '#ef4444',
+        'Draft':              '#94a3b8'
+      };
+      function statusColor(s) {
+        if (STATUS_COLORS[s]) return STATUS_COLORS[s];
+        if (s && s.indexOf(': In Progress') !== -1) return '#f59e0b';
+        return DEFAULT_COLOR;
+      }
+      var DEFAULT_COLOR = '#64748b';
+
+      // Sort statuses by count desc
+      var statusEntries = Object.keys(byStatus).sort(function (a, b) { return byStatus[b] - byStatus[a]; });
+      var maxCount = statusEntries.length ? byStatus[statusEntries[0]] : 1;
+
+      var barsHtml = statusEntries.map(function (status) {
+        var count = byStatus[status];
+        var pct   = total > 0 ? Math.round((count / total) * 100) : 0;
+        var barW  = maxCount > 0 ? Math.round((count / maxCount) * 100) : 0;
+        var color = statusColor(status);
+        return '<div class="rrp-chart-row">' +
+          '<div class="rrp-chart-label">' + escapeHtml(status) + '</div>' +
+          '<div class="rrp-chart-bar-wrap">' +
+            '<div class="rrp-chart-bar" style="width:' + barW + '%;background:' + color + ';" title="' + count + ' submissions"></div>' +
+          '</div>' +
+          '<div class="rrp-chart-value">' + count + ' <span class="rrp-chart-pct">(' + pct + '%)</span></div>' +
+        '</div>';
+      }).join('') || '<p style="color:var(--rrp-text-muted)">No submissions yet.</p>';
+
+      // ── Submission type breakdown ─────────────────────────────────────────
+      var typeEntries = Object.keys(byType).sort(function (a, b) { return byType[b] - byType[a]; });
+      var typesHtml = typeEntries.map(function (t) {
+        var count = byType[t];
+        var pct   = total > 0 ? Math.round((count / total) * 100) : 0;
+        var barW  = maxCount > 0 ? Math.round((count / maxCount) * 100) : 0;
+        return '<div class="rrp-chart-row">' +
+          '<div class="rrp-chart-label">' + escapeHtml(typeLabel(t)) + '</div>' +
+          '<div class="rrp-chart-bar-wrap">' +
+            '<div class="rrp-chart-bar" style="width:' + barW + '%;background:#0ea5e9;"></div>' +
+          '</div>' +
+          '<div class="rrp-chart-value">' + count + ' <span class="rrp-chart-pct">(' + pct + '%)</span></div>' +
+        '</div>';
+      }).join('') || '<p style="color:var(--rrp-text-muted)">No submissions yet.</p>';
+
       el.innerHTML =
-        '<p><strong>Total submissions:</strong> ' + (w.totalSubmissions || 0) + '</p>' +
-        '<p><strong>Average stages per submission:</strong> ' + (w.averageStages || 0) + '</p>' +
-        '<p><strong>Mean reviewer load:</strong> ' + (w.meanReviewerLoad || 0) + '</p>' +
-        '<p><strong>Finalized submissions:</strong> ' + (p.finalizedCount || 0) + '</p>' +
-        '<p><strong>In-progress submissions:</strong> ' + (p.inProgressCount || 0) + '</p>' +
-        '<p><strong>Average time to decision (days):</strong> ' + (p.averageTimeToDecisionDays || 0) + '</p>' +
-        '<p><strong>Late review alerts:</strong> ' + (p.lateReviewAlerts || 0) + '</p>';
+        // ── Line chart: daily submissions by status ─────────────────────────
+        '<div class="rrp-analytics-card">' +
+          '<h2 class="rrp-analytics-card-title">Daily Submissions by Status</h2>' +
+          buildLineChart(daily) +
+        '</div>' +
+
+        // ── Chart: Status distribution ──────────────────────────────────────
+        '<div class="rrp-analytics-card">' +
+          '<h2 class="rrp-analytics-card-title">Submissions by Status</h2>' +
+          '<div class="rrp-chart">' + barsHtml + '</div>' +
+        '</div>' +
+
+        // ── Chart: By type ──────────────────────────────────────────────────
+        '<div class="rrp-analytics-card">' +
+          '<h2 class="rrp-analytics-card-title">Submissions by Type</h2>' +
+          '<div class="rrp-chart">' + typesHtml + '</div>' +
+        '</div>' +
+
+        // ── Summary stat tiles ──────────────────────────────────────────────
+        '<div class="rrp-analytics-card">' +
+          '<h2 class="rrp-analytics-card-title">Summary</h2>' +
+          '<div class="rrp-analytics-tiles">' +
+            '<div class="rrp-analytics-tile">' +
+              '<div class="rrp-analytics-tile-val">' + total + '</div>' +
+              '<div class="rrp-analytics-tile-lbl">Total Submissions</div>' +
+            '</div>' +
+            '<div class="rrp-analytics-tile rrp-tile-green">' +
+              '<div class="rrp-analytics-tile-val">' + (p.finalizedCount || 0) + '</div>' +
+              '<div class="rrp-analytics-tile-lbl">Finalized</div>' +
+            '</div>' +
+            '<div class="rrp-analytics-tile rrp-tile-amber">' +
+              '<div class="rrp-analytics-tile-val">' + (p.inProgressCount || 0) + '</div>' +
+              '<div class="rrp-analytics-tile-lbl">In Progress</div>' +
+            '</div>' +
+            '<div class="rrp-analytics-tile rrp-tile-red">' +
+              '<div class="rrp-analytics-tile-val">' + (p.lateReviewAlerts || 0) + '</div>' +
+              '<div class="rrp-analytics-tile-lbl">Late Alerts</div>' +
+            '</div>' +
+            '<div class="rrp-analytics-tile">' +
+              '<div class="rrp-analytics-tile-val">' + (p.averageTimeToDecisionDays != null ? p.averageTimeToDecisionDays + 'd' : '—') + '</div>' +
+              '<div class="rrp-analytics-tile-lbl">Avg. Time to Decision</div>' +
+            '</div>' +
+            '<div class="rrp-analytics-tile">' +
+              '<div class="rrp-analytics-tile-val">' + (w.averageStages || 0) + '</div>' +
+              '<div class="rrp-analytics-tile-lbl">Avg. Stages / Submission</div>' +
+            '</div>' +
+            '<div class="rrp-analytics-tile">' +
+              '<div class="rrp-analytics-tile-val">' + (w.meanReviewerLoad || 0) + '</div>' +
+              '<div class="rrp-analytics-tile-lbl">Mean Reviewer Load</div>' +
+            '</div>' +
+          '</div>' +
+        '</div>';
 
       document.getElementById('rrp-export-csv').addEventListener('click', function () {
         api('GET', '/reports/export?type=workflow&format=csv').then(function (resp) {
           var blob = new Blob([atob(resp.content)], { type: 'text/csv' });
-          var a = document.createElement('a');
-          a.href = URL.createObjectURL(blob);
-          a.download = resp.filename || 'rrp-workflow.csv';
-          a.click();
-        }).catch(function () {
-          alert('Export failed');
-        });
+          var a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+          a.download = resp.filename || 'rrp-workflow.csv'; a.click();
+        }).catch(function () { alert('Export failed'); });
       });
 
       document.getElementById('rrp-export-xlsx').addEventListener('click', function () {
         api('GET', '/reports/export?type=workflow&format=xlsx').then(function (resp) {
           var blob = new Blob([atob(resp.content)], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-          var a = document.createElement('a');
-          a.href = URL.createObjectURL(blob);
-          a.download = resp.filename || 'rrp-workflow.xlsx';
-          a.click();
-        }).catch(function () {
-          alert('Export failed');
-        });
+          var a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+          a.download = resp.filename || 'rrp-workflow.xlsx'; a.click();
+        }).catch(function () { alert('Export failed'); });
       });
 
-    }).catch(function (err) {
-      document.getElementById('rrp-analytics-content').innerHTML = '<div class="rrp-error">Unable to load analytics. Please login and try again.</div>';
+    }).catch(function () {
+      var el = document.getElementById('rrp-analytics-content');
+      if (el) el.innerHTML = '<div class="rrp-error">Unable to load analytics. Please login and try again.</div>';
     });
   }
 
@@ -1374,9 +1525,9 @@
     });
 
     function classifyStatus(status) {
+      if (isApprovedStatus(status)) return 'approved';
       var s = (status || '').toLowerCase();
-      if (s === 'approved') return 'approved';
-      if (s === 'rejected' || s.indexOf('revision') !== -1) return 'action';
+      if (s === 'rejected' || s === 'revision required') return 'action';
       return 'pending';
     }
 
@@ -1406,18 +1557,22 @@
         '<h2>' + heading + ' <span class="rrp-count-badge">' + filtered.length + '</span></h2>' +
         '<ul class="rrp-list rrp-submissions-list">' +
         filtered.map(function (item) {
-          var sc  = classifyStatus(item.status);
-          var cls = sc === 'approved' ? 'rrp-dec-approved' : (sc === 'action' ? 'rrp-dec-revision' : 'rrp-dec-pending');
+          var dueTxt = item.deadline ? new Date(item.deadline).toLocaleDateString() : '\u2014';
+          var dueNear = item.deadline && (new Date(item.deadline) - Date.now()) < 3 * 86400000;
           return '<li class="rrp-sub-item">' +
             '<div class="rrp-sub-item-header">' +
               '<strong>' + escapeHtml(item.title || item.id) + '</strong>' +
-              '<span class="rrp-decision-badge ' + cls + '">' + escapeHtml(item.status || 'Pending') + '</span>' +
+              '<span class="rrp-decision-badge ' + statusBadgeCls(item.status) + '">' + escapeHtml(item.status || 'Pending') + '</span>' +
             '</div>' +
             '<div class="rrp-sub-item-meta">' +
-              '<span>' + escapeHtml(item.id) + '</span>' +
-              '<span>' + escapeHtml(item.type || '\u2014') + '</span>' +
+              '<span class="rrp-meta-id"><span class="rrp-meta-lbl">ID</span>' + escapeHtml(item.id) + '</span>' +
+              '<span><span class="rrp-meta-lbl">Category</span>' + escapeHtml(typeLabel(item.submissionType || item.type)) + '</span>' +
+              (item.createdAt ? '<span><span class="rrp-meta-lbl">Submitted</span>' + new Date(item.createdAt).toLocaleDateString() + '</span>' : '') +
+              '<span class="' + (dueNear ? 'rrp-due-soon' : '') + '"><span class="rrp-meta-lbl">Due</span>' + dueTxt + '</span>' +
             '</div>' +
-            '<button type="button" class="rrp-btn secondary" data-review="' + escapeHtml(item.id) + '">Review</button>' +
+            '<div class="rrp-sub-item-actions">' +
+              '<button type="button" class="rrp-btn secondary" data-review="' + escapeHtml(item.id) + '">Review</button>' +
+            '</div>' +
           '</li>';
         }).join('') +
         '</ul>';
@@ -1507,9 +1662,10 @@
     return '<p style="color:var(--rrp-text-muted);font-size:.9rem;">Please revise your submission based on the reviewer feedback and resubmit.</p>' +
     '<form id="rrp-revision-form">' +
       '<div class="rrp-form-block"><label>Title</label><input type="text" name="title" value="' + escapeHtml(sub.title || '') + '" maxlength="200"></div>' +
-      '<div class="rrp-form-block"><label>Abstract</label><textarea name="abstract" rows="5">' + escapeHtml(sub.abstract || '') + '</textarea></div>' +
-      '<div class="rrp-form-block"><label>Keywords</label><input type="text" name="keywords" value="' + escapeHtml(sub.keywords || '') + '"></div>' +
       '<div class="rrp-form-block"><label>Research area</label><input type="text" name="researchArea" value="' + escapeHtml(sub.researchArea || '') + '"></div>' +
+      '<div class="rrp-form-block"><label>Revised document <span class="rrp-hint">(optional — PDF, DOC, DOCX, max 2 MB)</span></label>' +
+        '<input type="file" name="revisionFile" accept=".pdf,.doc,.docx,.ppt,.pptx,.txt">' +
+      '</div>' +
       '<button type="submit" class="rrp-btn">Submit Revision</button> ' +
       '<span id="rrp-revision-msg" style="margin-left:.5rem;"></span>' +
     '</form>';
@@ -1550,13 +1706,35 @@
       var needsRevision = sub.status === 'Revision Required' || sub.status === 'Rejected';
 
       // Stage timeline HTML
-      var stagesHtml = (sub.reviewStages || []).map(function (stage, i) {
+      // Find the index of the current active stage so future stages can show "Not Started"
+      var _allStages = sub.reviewStages || [];
+      var _activeStageIdx = -1;
+      for (var _asi = 0; _asi < _allStages.length; _asi++) {
+        if (_allStages[_asi].skipped) continue;
+        var _asDecs = _allStages[_asi].decisions || {};
+        var _asRevs = _allStages[_asi].reviewers || [];
+        if (_asRevs.length === 0) { _activeStageIdx = _asi; break; }
+        var _asAllApproved = _asRevs.every(function (r) {
+          return (_asDecs[(r.email || '').toLowerCase()] || '').toLowerCase() === 'approved';
+        });
+        if (!_asAllApproved) { _activeStageIdx = _asi; break; }
+      }
+
+      var stagesHtml = _allStages.map(function (stage, i) {
         var dl = deadlines[i] || {};
         var approved = dl.approved || false;
         var skipped  = stage.skipped || false;
         var decisions = stage.decisions || {};
-        var statusClass = skipped ? 'rrp-stage-skipped' : (approved ? 'rrp-stage-approved' : 'rrp-stage-pending');
-        var statusLabel = skipped ? 'Skipped' : (approved ? '✓ Approved' : 'In Progress');
+        var hasRevisionDec = Object.keys(decisions).some(function (k) {
+          return (decisions[k] || '').toLowerCase() === 'needs revision';
+        });
+        var isFuture = !skipped && !approved && _activeStageIdx !== -1 && i > _activeStageIdx;
+        var statusClass, statusLabel;
+        if (skipped)           { statusClass = 'rrp-stage-skipped';     statusLabel = 'Skipped'; }
+        else if (approved)     { statusClass = 'rrp-stage-approved';    statusLabel = '✓ Approved'; }
+        else if (isFuture)     { statusClass = 'rrp-stage-not-started'; statusLabel = 'Not Started'; }
+        else if (hasRevisionDec) { statusClass = 'rrp-stage-revision';  statusLabel = 'Revision Requested'; }
+        else                   { statusClass = 'rrp-stage-pending';     statusLabel = 'In Progress'; }
         var reviewerRows = (stage.reviewers || []).map(function (r) {
           var em  = (r.email || '').toLowerCase();
           var dec = decisions[em] || 'Pending';
@@ -1581,7 +1759,7 @@
           '<h2>' + escapeHtml(sub.title || sub.id) + '</h2>' +
           '<div class="rrp-detail-meta">' +
             '<span><strong>ID:</strong> ' + escapeHtml(sub.id) + '</span>' +
-            '<span><strong>Type:</strong> <span class="rrp-type-badge">' + escapeHtml(sub.type || '—') + '</span></span>' +
+            '<span><strong>Type:</strong> <span class="rrp-type-badge">' + escapeHtml(typeLabel(sub.submissionType || sub.type) || '—') + '</span></span>' +
             '<span><strong>Status:</strong> <span class="rrp-status">' + escapeHtml(sub.status || '—') + '</span></span>' +
             '<span><strong>Submitted by:</strong> ' + escapeHtml(sub.submitterName || sub.submitterEmail || '—') + '</span>' +
             (sub.createdAt ? '<span><strong>Date:</strong> ' + escapeHtml(new Date(sub.createdAt).toLocaleDateString()) + '</span>' : '') +
@@ -1591,19 +1769,137 @@
           (sub.researchArea ? '<p><strong>Research area:</strong> ' + escapeHtml(sub.researchArea) + '</p>' : '') +
         '</div>' +
         ((sub.attachments && sub.attachments.length) ?
-          '<div class="rrp-detail-section"><h3>Attachments</h3><ul class="rrp-list">' +
-            sub.attachments.map(function (a) {
-              return '<li>' + escapeHtml(a.name || a.filename) +
-                ' <a class="rrp-btn secondary" target="_blank" href="' + escapeHtml(restBase + '/submissions/' + submissionId + '/attachments/' + encodeURIComponent(a.filename)) + '">Download</a></li>';
-            }).join('') +
-          '</ul></div>' : '') +
+          (function () {
+            // Group attachments by revisionRound (0 = original, 1+ = revisions)
+            var groups = {};
+            sub.attachments.forEach(function (a) {
+              var rr = (a.revisionRound != null) ? a.revisionRound : 0;
+              if (!groups[rr]) groups[rr] = [];
+              groups[rr].push(a);
+            });
+            var rounds = Object.keys(groups).map(Number).sort(function (a, b) { return a - b; });
+            var maxRound = rounds[rounds.length - 1];
+            var html = '<div class="rrp-detail-section"><h3>Documents</h3>' +
+              '<div id="rrp-inline-viewer" class="rrp-inline-viewer" style="display:none;"></div>';
+            rounds.forEach(function (rr) {
+              var isLatest = rr === maxRound;
+              var groupLabel = rr === 0 ? 'Original Submission' : 'Revision ' + rr;
+              html += '<div class="rrp-attach-group' + (isLatest ? ' rrp-attach-group-latest' : '') + '">' +
+                '<div class="rrp-attach-group-header">' +
+                  '<span class="rrp-attach-round-badge' + (isLatest ? ' latest' : '') + '">' + escapeHtml(groupLabel) + '</span>' +
+                  (isLatest ? '<span class="rrp-latest-badge">Latest</span>' : '') +
+                '</div>' +
+                '<ul class="rrp-list rrp-attachment-list">';
+              groups[rr].forEach(function (a) {
+                var isPdf = (a.filename || a.name || '').toLowerCase().endsWith('.pdf');
+                var fileUrl = escapeHtml(restBase + '/submissions/' + submissionId + '/attachments/' + encodeURIComponent(a.filename || a.name) + '?_wpnonce=' + nonce);
+                var inlineUrl = fileUrl + '&inline=1';
+                var uploadedDate = a.uploadedAt ? new Date(a.uploadedAt).toLocaleString() : null;
+                html += '<li class="rrp-attach-item">' +
+                  '<span class="rrp-attach-icon">&#128196;</span> ' +
+                  '<span class="rrp-attach-name">' + escapeHtml(a.name || a.filename) + '</span>' +
+                  (uploadedDate ? '<span class="rrp-attach-date">Uploaded: ' + escapeHtml(uploadedDate) + '</span>' : '') +
+                  '<span class="rrp-attach-actions">' +
+                  (isPdf ? '<button type="button" class="rrp-btn secondary" data-inline-url="' + inlineUrl + '" data-inline-name="' + escapeHtml(a.name || a.filename) + '">&#128065; View</button> ' : '') +
+                  '<a class="rrp-btn secondary" target="_blank" href="' + fileUrl + '">&#8595; Download</a>' +
+                  '</span></li>';
+              });
+              html += '</ul></div>';
+            });
+            html += '</div>';
+            return html;
+          })() : '') +
         '<div class="rrp-detail-section"><h3>Review Progress</h3>' + (stagesHtml || '<p>No review stages assigned yet.</p>') + '</div>' +
+        '<div class="rrp-detail-section rrp-annotations-section" id="rrp-annotations">' +
+          '<h3>&#128221; Annotations &amp; Comments</h3>' +
+          ((sub.internalComments && sub.internalComments.length) ?
+            '<ul class="rrp-comment-list">' +
+            sub.internalComments.map(function (c) {
+              return '<li class="rrp-comment-item">' +
+                '<div class="rrp-comment-meta">' +
+                  '<strong>' + escapeHtml(c.by || 'Unknown') + '</strong>' +
+                  (c.stage ? ' &middot; <em>' + escapeHtml(c.stage) + '</em>' : '') +
+                  (c.at ? ' &middot; <span class="rrp-comment-time">' + new Date(c.at).toLocaleString() + '</span>' : '') +
+                '</div>' +
+                '<div class="rrp-comment-text">' + escapeHtml(c.text) + '</div>' +
+              '</li>';
+            }).join('') +
+            '</ul>' : '<p style="color:var(--rrp-text-muted);font-size:.88rem;">No comments yet.</p>') +
+          (isReviewer || isAdmin ?
+            '<div class="rrp-add-comment" id="rrp-add-comment-form">' +
+              '<textarea id="rrp-comment-text" rows="3" placeholder="Add annotation or comment&hellip;" style="width:100%;box-sizing:border-box;"></textarea>' +
+              '<div style="display:flex;gap:.5rem;margin-top:.5rem;">' +
+                '<button type="button" class="rrp-btn" id="rrp-comment-save">&#128203; Save Comment</button>' +
+                '<span id="rrp-comment-msg" style="align-self:center;"></span>' +
+              '</div>' +
+            '</div>' : '') +
+        '</div>' +
         (isReviewer ? '<div id="rrp-reviewer-action" class="rrp-detail-section"><h3>Record Your Decision</h3>' + buildReviewerDecisionForm(sub) + '</div>' : '') +
         (isSubmitter && needsRevision ? '<div id="rrp-submitter-revision" class="rrp-detail-section"><h3>Submit Revision</h3>' + buildRevisionForm(sub) + '</div>' : '') +
         (isAdmin ? '<div id="rrp-admin-controls" class="rrp-detail-section"><h3>Administrative Controls</h3>' +
           '<button type="button" class="rrp-btn secondary" id="rrp-skip-stage-btn">Skip Current Stage</button>' +
           '<span id="rrp-skip-msg" style="margin-left:.5rem;"></span>' +
         '</div>' : '');
+
+      // Wire inline document viewer
+      var viewerEl = document.getElementById('rrp-inline-viewer');
+      if (viewerEl) {
+        el.querySelectorAll('[data-inline-url]').forEach(function (btn) {
+          btn.addEventListener('click', function () {
+            var url  = btn.getAttribute('data-inline-url');
+            var name = btn.getAttribute('data-inline-name');
+            var isOpen = viewerEl.style.display !== 'none' && viewerEl.getAttribute('data-current') === url;
+            if (isOpen) {
+              viewerEl.style.display = 'none';
+              viewerEl.innerHTML = '';
+              viewerEl.removeAttribute('data-current');
+              btn.textContent = '\u{1F441} View';
+            } else {
+              el.querySelectorAll('[data-inline-url]').forEach(function (b) { b.textContent = '\u{1F441} View'; });
+              viewerEl.style.display = '';
+              viewerEl.setAttribute('data-current', url);
+              viewerEl.innerHTML = '<div class="rrp-viewer-toolbar"><strong>' + escapeHtml(name) + '</strong>' +
+                '<button type="button" class="rrp-btn secondary" id="rrp-viewer-close">&#10005; Close</button></div>' +
+                '<iframe src="' + url + '" class="rrp-viewer-frame" title="' + escapeHtml(name) + '"></iframe>';
+              document.getElementById('rrp-viewer-close').addEventListener('click', function () {
+                viewerEl.style.display = 'none'; viewerEl.innerHTML = ''; viewerEl.removeAttribute('data-current');
+                btn.textContent = '\u{1F441} View';
+              });
+              viewerEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+              btn.textContent = '&#x2715; Close viewer';
+            }
+          });
+        });
+      }
+
+      // Wire annotation / comment save
+      var commentSaveBtn = document.getElementById('rrp-comment-save');
+      if (commentSaveBtn) {
+        commentSaveBtn.addEventListener('click', function () {
+          var txt    = (document.getElementById('rrp-comment-text').value || '').trim();
+          var msgEl  = document.getElementById('rrp-comment-msg');
+          if (!txt) { msgEl.innerHTML = '<span class="rrp-error">Please enter a comment.</span>'; return; }
+          var activeStage = '';
+          (sub.reviewStages || []).forEach(function (rs) {
+            if (!activeStage && !(rs.skipped) && rs.stageName) activeStage = rs.stageName;
+          });
+          msgEl.innerHTML = '<span class="rrp-loading">Saving&hellip;</span>';
+          commentSaveBtn.disabled = true;
+          api('POST', '/submissions/' + encodeURIComponent(submissionId) + '/comments', {
+            stage: activeStage || 'General',
+            text:  txt,
+            by:    (window.RRP && window.RRP.userName) || userRole
+          }).then(function () {
+              msgEl.innerHTML = '';
+              commentSaveBtn.disabled = false;
+              document.getElementById('rrp-comment-text').value = '';
+              renderSubmissionDetail(submissionId, container, backFn);
+            }).catch(function () {
+              commentSaveBtn.disabled = false;
+              msgEl.innerHTML = '<span class="rrp-error">Failed to save comment.</span>';
+            });
+        });
+      }
 
       // Wire reviewer decision form
       var decForm = document.getElementById('rrp-decision-form');
@@ -1636,26 +1932,49 @@
         revForm.addEventListener('submit', function (e) {
           e.preventDefault();
           var updBody = {};
-          ['title', 'abstract', 'keywords', 'researchArea'].forEach(function (f) {
+          ['title', 'researchArea'].forEach(function (f) {
             var el2 = revForm.querySelector('[name="' + f + '"]');
             if (el2) updBody[f] = el2.value;
           });
+          var fileInput = revForm.querySelector('[name="revisionFile"]');
+          var hasFile   = fileInput && fileInput.files && fileInput.files.length > 0;
           var msgEl = document.getElementById('rrp-revision-msg');
-          msgEl.innerHTML = '<span class="rrp-loading">Saving…</span>';
-          // First update content, then mark stage revision submitted
-          api('PATCH', '/submissions/' + encodeURIComponent(submissionId), updBody)
+          msgEl.innerHTML = '<span class="rrp-loading">Submitting…</span>';
+
+          var firstStageName = (sub.reviewStages && sub.reviewStages[0]) ? sub.reviewStages[0].stageName : '';
+
+          // Step 1: upload revised file (if any)
+          var uploadStep = hasFile
+            ? (function () {
+                var fd = new FormData();
+                fd.append('files', fileInput.files[0]);
+                return fetch(restBase + '/submissions/' + encodeURIComponent(submissionId) + '/attachments', {
+                  method: 'POST',
+                  headers: { 'X-WP-Nonce': nonce },
+                  body: fd
+                }).then(function (r) {
+                  if (!r.ok) return r.json().then(function (d) { throw d; });
+                });
+              })()
+            : Promise.resolve();
+
+          // Step 2: update title / researchArea, then reset workflow to stage 0
+          uploadStep
             .then(function () {
-              var activeStage = getActiveStage(sub.reviewStages || []);
-              if (activeStage) {
-                return api('PATCH', '/submissions/' + encodeURIComponent(submissionId), { stageRevisionSubmitted: { stageName: activeStage.stageName } });
-              }
+              return api('PATCH', '/submissions/' + encodeURIComponent(submissionId), updBody);
             })
             .then(function () {
-              msgEl.innerHTML = '<span class="rrp-success">Revision submitted.</span>';
-              setTimeout(function () { renderSubmissionDetail(submissionId, container, backFn); }, 1400);
+              if (!firstStageName) return;
+              return api('PATCH', '/submissions/' + encodeURIComponent(submissionId), {
+                stageRevisionSubmitted: { stageName: firstStageName }
+              });
+            })
+            .then(function () {
+              msgEl.innerHTML = '<span class="rrp-success">Revision submitted. The submission has been sent back to Chair Review.</span>';
+              setTimeout(function () { renderSubmissionDetail(submissionId, container, backFn); }, 1800);
             })
             .catch(function (err) {
-              msgEl.innerHTML = '<span class="rrp-error">' + escapeHtml((err.data && err.data.error) || 'Failed to submit revision.') + '</span>';
+              msgEl.innerHTML = '<span class="rrp-error">' + escapeHtml((err && err.error) || (err && err.data && err.data.error) || 'Failed to submit revision.') + '</span>';
             });
         });
       }
@@ -1763,11 +2082,43 @@
     {value: 'conference',     label: 'Conference Paper'}
   ];
   var OB_DEGREES = [
-    {value: 'doctoral',     label: 'Doctoral (Ph.D. / DBA / Ed.D.)'},
-    {value: 'masters',      label: 'Masters'},
-    {value: 'bachelors',    label: 'Bachelors'},
-    {value: 'certificate',  label: 'Certificate Program'}
+    // School of Business
+    {value:'emba',                     label:"Executive Master's in Business Administration",                        level:'masters',    school:'Business'},
+    {value:'mba',                      label:'Master of Business Administration',                                    level:'masters',    school:'Business'},
+    {value:'ms-healthcare-admin',      label:'MS in Healthcare Administration',                                      level:'masters',    school:'Business'},
+    {value:'ms-management',            label:'MS in Management',                                                     level:'masters',    school:'Business'},
+    {value:'ms-management-leadership', label:'MS in Management and Leadership',                                      level:'masters',    school:'Business'},
+    {value:'ms-org-leadership',        label:'MS in Organizational Leadership',                                      level:'masters',    school:'Business'},
+    {value:'ms-tech-product-mgmt',     label:'MS in Technology and Product Management',                              level:'masters',    school:'Business'},
+    {value:'ms-project-mgmt',          label:"Master's in Project Management",                                       level:'masters',    school:'Business'},
+    {value:'ms-hrm',                   label:'MS Human Resources Management',                                        level:'masters',    school:'Business'},
+    {value:'dba',                      label:'Doctor of Business Administration',                                    level:'doctoral',   school:'Business'},
+    // School of Education
+    {value:'med-alt-cert',             label:'M.Ed. Alternative Routes to Certification',                            level:'masters',    school:'Education'},
+    {value:'med-curriculum',           label:'M.Ed. in Curriculum and Instruction',                                  level:'masters',    school:'Education'},
+    {value:'mit',                      label:'Master in Teaching',                                                   level:'masters',    school:'Education'},
+    {value:'med-adult-ed',             label:'M.Ed. in Adult Education and Instructional Design',                    level:'masters',    school:'Education'},
+    {value:'med-ed-leadership-cert',   label:'M.Ed. in Educational Leadership: Administrator Certification',         level:'masters',    school:'Education'},
+    {value:'med-elementary',           label:'M.Ed. in Elementary Education',                                        level:'masters',    school:'Education'},
+    {value:'med-leadership',           label:'M.Ed. in Leadership',                                                  level:'masters',    school:'Education'},
+    {value:'med-reading',              label:'M.Ed. in Reading Instruction',                                         level:'masters',    school:'Education'},
+    {value:'med-special-ed',           label:'M.Ed. in Special Education',                                           level:'masters',    school:'Education'},
+    {value:'edd-leadership',           label:'Doctor of Education in Leadership',                                    level:'doctoral',   school:'Education'},
+    {value:'eds-leadership',           label:'Ed.S. in Leadership',                                                  level:'specialist', school:'Education'},
+    // School of Technology
+    {value:'ms-ai',                    label:'MS in Artificial Intelligence',                                        level:'masters',    school:'Technology'},
+    {value:'ms-cs',                    label:'MS in Computer Science',                                               level:'masters',    school:'Technology'},
+    {value:'ms-cybersecurity',         label:'MS in Cybersecurity',                                                  level:'masters',    school:'Technology'},
+    {value:'ms-data-science',          label:'MS in Data Science',                                                   level:'masters',    school:'Technology'},
+    {value:'dit',                      label:'Doctor of Information Technology',                                     level:'doctoral',   school:'Technology'}
   ];
+  var OB_DEGREE_SCHOOLS = ['Business', 'Education', 'Technology'];
+
+  var LEVEL_BADGES = {
+    'masters':    '<span class="rrp-badge-masters">Master&#x2019;s</span>',
+    'doctoral':   '<span class="rrp-badge-doctoral">Doctoral</span>',
+    'specialist': '<span class="rrp-badge-specialist">Specialist</span>'
+  };
 
   // ── Student Management ────────────────────────────────────────────────────
   function renderStudentManagement(container, backFn) {
@@ -1806,34 +2157,58 @@
             users.map(function (u) {
               var types  = (u.allowedTypes || []).map(function (t) { return OB_TYPE_LABELS[t] || t; }).join(', ') || '—';
               var degree = OB_DEGREES.find(function (d) { return d.value === u.degree; });
-              return '<div class="rrp-umr-row">' +
-                '<span class="rrp-umr-name"><strong>' + escapeHtml(u.name || u.email) + '</strong></span>' +
+              var nameCell = '<strong>' + escapeHtml(u.name || u.email) + '</strong>' +
+                (u.jsonOnly ? ' <span class="rrp-badge-legacy" title="Submitter found in submissions — no portal login yet">Legacy</span>' : '');
+              var degreeCell = u.jsonOnly
+                ? '<em style="color:var(--rrp-text-muted);font-size:.85rem;">No portal account</em>'
+                : escapeHtml(degree ? degree.label : (u.degree || '—'));
+              var actionsCell = u.jsonOnly
+                ? '<button type="button" class="rrp-btn small" data-import-student="' + encodeURIComponent(u.jsonStudentEmail || u.email) + '" data-student-obj="' + u.id + '">&#8659; Import</button> ' +
+                  '<button type="button" class="rrp-btn danger small" data-dismiss-student="' + encodeURIComponent(u.jsonStudentEmail || u.email) + '">Dismiss</button>'
+                : '<button type="button" class="rrp-btn secondary small" data-edit-student="' + u.id + '">Edit</button> ' +
+                  '<button type="button" class="rrp-btn danger small" data-remove-student="' + u.id + '">Remove</button>';
+              return '<div class="rrp-umr-row' + (u.jsonOnly ? ' rrp-umr-row-legacy' : '') + '">' +
+                '<span class="rrp-umr-name">' + nameCell + '</span>' +
                 '<span class="rrp-umr-email">' + escapeHtml(u.email) + '</span>' +
-                '<span>' + escapeHtml(degree ? degree.label : (u.degree || '—')) + '</span>' +
+                '<span>' + degreeCell + '</span>' +
                 '<span class="rrp-umr-types" title="' + escapeHtml(types) + '">' + escapeHtml(types.length > 38 ? types.substring(0, 36) + '…' : types) + '</span>' +
-                '<span class="rrp-umr-actions">' +
-                  '<button type="button" class="rrp-btn secondary small" data-edit-student="' + u.id + '">Edit</button> ' +
-                  '<button type="button" class="rrp-btn danger small"     data-remove-student="' + u.id + '">Remove</button>' +
-                '</span>' +
+                '<span class="rrp-umr-actions">' + actionsCell + '</span>' +
               '</div>';
             }).join('') +
           '</div>';
 
         el.querySelectorAll('[data-edit-student]').forEach(function (btn) {
-          var uid  = parseInt(btn.getAttribute('data-edit-student'), 10);
-          var user = users.find(function (u) { return u.id === uid; });
+          var uid  = btn.getAttribute('data-edit-student');
+          var user = users.find(function (u) { return String(u.id) === uid; });
+          btn.addEventListener('click', function () {
+            renderStudentOnboardForm(container, user, function () { renderStudentManagement(container, backFn); });
+          });
+        });
+        el.querySelectorAll('[data-import-student]').forEach(function (btn) {
+          var uid  = btn.getAttribute('data-student-obj');
+          var user = users.find(function (u) { return String(u.id) === uid; });
           btn.addEventListener('click', function () {
             renderStudentOnboardForm(container, user, function () { renderStudentManagement(container, backFn); });
           });
         });
         el.querySelectorAll('[data-remove-student]').forEach(function (btn) {
-          var uid  = parseInt(btn.getAttribute('data-remove-student'), 10);
-          var user = users.find(function (u) { return u.id === uid; });
+          var uid  = btn.getAttribute('data-remove-student');
+          var user = users.find(function (u) { return String(u.id) === uid; });
           btn.addEventListener('click', function () {
             if (!confirm('Remove portal access for ' + escapeHtml(user ? (user.name || user.email) : 'this user') + '?\nThey will lose the Student role but remain as a WordPress user.')) return;
             api('DELETE', '/portal-users/' + uid)
               .then(function ()  { renderStudentManagement(container, backFn); })
               .catch(function () { alert('Failed to remove access. Please try again.'); });
+          });
+        });
+        el.querySelectorAll('[data-dismiss-student]').forEach(function (btn) {
+          var email = decodeURIComponent(btn.getAttribute('data-dismiss-student'));
+          var user  = users.find(function (u) { return (u.jsonStudentEmail || u.email) === email; });
+          btn.addEventListener('click', function () {
+            if (!confirm('Dismiss legacy entry for ' + escapeHtml(user ? (user.name || user.email) : email) + '?\nTheir submission history is preserved.')) return;
+            api('DELETE', '/portal-users/json-student/' + encodeURIComponent(email))
+              .then(function ()  { renderStudentManagement(container, backFn); })
+              .catch(function () { alert('Failed to dismiss entry. Please try again.'); });
           });
         });
       })
@@ -1845,12 +2220,14 @@
 
   // ── Student Onboard Form (3-step wizard) ──────────────────────────────────
   function renderStudentOnboardForm(container, editUser, backFn) {
-    var isEdit = !!(editUser && editUser.id);
-    var nameParts = isEdit ? (editUser.name || '').split(' ') : [];
+    var isJsonOnly = !!(editUser && editUser.jsonOnly);
+    var isEdit     = !!(editUser && editUser.id) && !isJsonOnly;
+    var isImport   = isJsonOnly;
+    var nameParts  = (isEdit || isImport) ? (editUser.name || '').split(' ') : [];
     var state = {
-      firstName:             isEdit ? (nameParts[0] || '') : '',
-      lastName:              isEdit ? (nameParts.slice(1).join(' ') || '') : '',
-      email:                 isEdit ? (editUser.email || '') : '',
+      firstName:             (isEdit || isImport) ? (nameParts[0] || '') : '',
+      lastName:              (isEdit || isImport) ? (nameParts.slice(1).join(' ') || '') : '',
+      email:                 (isEdit || isImport) ? (editUser.email || '') : '',
       password:              '',
       degree:                isEdit ? (editUser.degree || '') : '',
       allowedTypes:          isEdit ? (editUser.allowedTypes || []) : [],
@@ -1943,7 +2320,8 @@
       };
       var method = isEdit ? 'PATCH' : 'POST';
       var endpoint = isEdit ? '/portal-users/' + editUser.id : '/portal-users';
-      if (!isEdit) { payload.email = state.email; payload.password = state.password; payload.role = 'rrp_student'; }
+      if (!isEdit) { payload.email = state.email; payload.role = 'rrp_student'; }
+      if (state.password) { payload.password = state.password; }
       api(method, endpoint, payload)
         .then(function () {
           msgEl.innerHTML = '<span class="rrp-success">' + (isEdit ? 'Student profile updated.' : 'Student created successfully.') + '</span>';
@@ -1967,6 +2345,7 @@
         body =
           '<h2 class="rrp-ob-step-heading">Step 1: Basic Information</h2>' +
           (isEdit ? '<p class="rrp-info">Editing: <strong>' + escapeHtml(editUser.email) + '</strong></p>' : '') +
+          (isImport ? '<p class="rrp-info">Creating a portal login for <strong>' + escapeHtml(editUser.name || editUser.email) + '</strong>. This student submitted work before having a portal account.</p>' : '') +
           '<div class="rrp-form-row">' +
             '<div class="rrp-form-group"><label>First Name</label><input type="text" id="ob-first-name" class="rrp-input" value="' + escapeHtml(state.firstName) + '" placeholder="First name"></div>' +
             '<div class="rrp-form-group"><label>Last Name</label><input type="text"  id="ob-last-name"  class="rrp-input" value="' + escapeHtml(state.lastName)  + '" placeholder="Last name"></div>' +
@@ -1975,7 +2354,7 @@
             '<div class="rrp-form-group"><label>Email Address <em>*</em></label><input type="email" id="ob-email" class="rrp-input" value="' + escapeHtml(state.email) + '" placeholder="student@cityuniversity.edu"></div>' +
             '<div class="rrp-form-group"><label>Temporary Password</label><input type="text" id="ob-password" class="rrp-input" value="' + escapeHtml(state.password) + '" placeholder="Leave blank to auto-generate">' +
               '<small style="color:var(--rrp-text-muted)">If blank, a secure password is generated automatically.</small></div>'
-          : '') +
+          : '<div class="rrp-form-group"><label>Change Password <em>(optional)</em></label><input type="text" id="ob-password" class="rrp-input" value="" placeholder="Leave blank to keep current password"><small style="color:var(--rrp-text-muted)">Only fill this to set a new password.</small></div>') +
           '<div id="rrp-ob-step1-msg" style="min-height:1.4rem;"></div>' +
           '<div class="rrp-onboard-actions"><button type="button" class="rrp-btn" id="rrp-ob-next-btn">Continue &#8594;</button></div>';
 
@@ -1983,11 +2362,14 @@
         body =
           '<h2 class="rrp-ob-step-heading">Step 2: Academic Profile</h2>' +
           '<div class="rrp-form-group">' +
-            '<label>Degree Program</label>' +
+            '<label>Program</label>' +
             '<select id="ob-degree" class="rrp-input">' +
-              '<option value="">&#8212; Select degree &#8212;</option>' +
-              OB_DEGREES.map(function (d) {
-                return '<option value="' + escapeHtml(d.value) + '"' + (state.degree === d.value ? ' selected' : '') + '>' + escapeHtml(d.label) + '</option>';
+              '<option value="">&#8212; Select program &#8212;</option>' +
+              OB_DEGREE_SCHOOLS.map(function (sch) {
+                var opts = OB_DEGREES.filter(function (d) { return d.school === sch; }).map(function (d) {
+                  return '<option value="' + escapeHtml(d.value) + '"' + (state.degree === d.value ? ' selected' : '') + '>' + escapeHtml(d.label) + '</option>';
+                }).join('');
+                return '<optgroup label="School of ' + sch + '">' + opts + '</optgroup>';
               }).join('') +
             '</select>' +
           '</div>' +
@@ -2016,7 +2398,7 @@
           '<div id="rrp-ob-save-msg" style="min-height:1.4rem;margin-top:.5rem;"></div>' +
           '<div class="rrp-onboard-actions">' +
             '<button type="button" class="rrp-btn secondary" id="rrp-ob-prev-btn">&#8592; Previous</button>' +
-            '<button type="button" class="rrp-btn" id="rrp-ob-save-btn">' + (isEdit ? '&#10003; Save Changes' : '&#10003; Create Student') + '</button>' +
+            '<button type="button" class="rrp-btn" id="rrp-ob-save-btn">' + (isEdit ? '&#10003; Save Changes' : (isImport ? '&#8659; Import &amp; Create Account' : '&#10003; Create Student')) + '</button>' +
           '</div>';
       }
 
@@ -2024,7 +2406,7 @@
         '<div class="rrp-onboard-wrap">' +
           '<div class="rrp-onboard-header">' +
             '<button type="button" class="rrp-btn secondary" id="rrp-ob-cancel-btn">&#8592; Back</button>' +
-            '<h1>' + (isEdit ? 'Edit Student Profile' : 'Onboard New Student') + '</h1>' +
+            '<h1>' + (isEdit ? 'Edit Student Profile' : (isImport ? 'Import Legacy Student' : 'Onboard New Student')) + '</h1>' +
             '<div class="rrp-ob-steps">' + stepsHtml + '</div>' +
           '</div>' +
           '<div class="rrp-onboard-body">' + body + '</div>' +
@@ -2048,10 +2430,10 @@
         container.querySelector('#rrp-ob-next-btn').addEventListener('click', function () {
           var fn = container.querySelector('#ob-first-name').value.trim();
           var ln = container.querySelector('#ob-last-name').value.trim();
-          var em = isEdit ? editUser.email : (container.querySelector('#ob-email') ? container.querySelector('#ob-email').value.trim() : '');
-          var pw = isEdit ? '' : (container.querySelector('#ob-password') ? container.querySelector('#ob-password').value : '');
+          var em = (isEdit || isImport) ? (editUser.email) : (container.querySelector('#ob-email') ? container.querySelector('#ob-email').value.trim() : '');
+          var pw = container.querySelector('#ob-password') ? container.querySelector('#ob-password').value : '';
           var msg = container.querySelector('#rrp-ob-step1-msg');
-          if (!isEdit && !em) { msg.innerHTML = '<span class="rrp-error">Email is required.</span>'; return; }
+          if (!isEdit && !isImport && !em) { msg.innerHTML = '<span class="rrp-error">Email is required.</span>'; return; }
           state.firstName = fn; state.lastName = ln; state.email = em; state.password = pw;
           state.step = 2; renderStep();
         });
@@ -2112,34 +2494,58 @@
             '</div>' +
             users.map(function (u) {
               var types = (u.submissionTypes || []).map(function (t) { return OB_TYPE_LABELS[t] || t; }).join(', ') || '—';
-              return '<div class="rrp-umr-row">' +
-                '<span class="rrp-umr-name"><strong>' + escapeHtml(u.name || u.email) + '</strong></span>' +
+              var nameCell = '<strong>' + escapeHtml(u.name || u.email) + '</strong>' +
+                (u.jsonOnly ? ' <span class="rrp-badge-legacy" title="Seeded from reviewer pool — no portal login yet">Legacy</span>' : '');
+              var deptCell = u.jsonOnly
+                ? '<em style="color:var(--rrp-text-muted);font-size:.85rem;">No portal account</em>'
+                : escapeHtml(u.department || '—');
+              var actionsCell = u.jsonOnly
+                ? '<button type="button" class="rrp-btn small" data-import-reviewer="' + u.id + '">&#8659; Import</button> ' +
+                  '<button type="button" class="rrp-btn danger small" data-remove-json="' + u.id + '">Remove</button>'
+                : '<button type="button" class="rrp-btn secondary small" data-edit-reviewer="' + u.id + '">Edit</button> ' +
+                  '<button type="button" class="rrp-btn danger small"     data-remove-reviewer="' + u.id + '">Remove</button>';
+              return '<div class="rrp-umr-row' + (u.jsonOnly ? ' rrp-umr-row-legacy' : '') + '">' +
+                '<span class="rrp-umr-name">' + nameCell + '</span>' +
                 '<span class="rrp-umr-email">' + escapeHtml(u.email) + '</span>' +
-                '<span>' + escapeHtml(u.department || '—') + '</span>' +
+                '<span>' + deptCell + '</span>' +
                 '<span class="rrp-umr-types" title="' + escapeHtml(types) + '">' + escapeHtml(types.length > 38 ? types.substring(0, 36) + '…' : types) + '</span>' +
-                '<span class="rrp-umr-actions">' +
-                  '<button type="button" class="rrp-btn secondary small" data-edit-reviewer="' + u.id + '">Edit</button> ' +
-                  '<button type="button" class="rrp-btn danger small"     data-remove-reviewer="' + u.id + '">Remove</button>' +
-                '</span>' +
+                '<span class="rrp-umr-actions">' + actionsCell + '</span>' +
               '</div>';
             }).join('') +
           '</div>';
 
         el.querySelectorAll('[data-edit-reviewer]').forEach(function (btn) {
-          var uid  = parseInt(btn.getAttribute('data-edit-reviewer'), 10);
-          var user = users.find(function (u) { return u.id === uid; });
+          var uid  = btn.getAttribute('data-edit-reviewer');
+          var user = users.find(function (u) { return String(u.id) === uid; });
+          btn.addEventListener('click', function () {
+            renderReviewerOnboardForm(container, user, function () { renderReviewerManagement(container, backFn); });
+          });
+        });
+        el.querySelectorAll('[data-import-reviewer]').forEach(function (btn) {
+          var uid  = btn.getAttribute('data-import-reviewer');
+          var user = users.find(function (u) { return String(u.id) === uid; });
           btn.addEventListener('click', function () {
             renderReviewerOnboardForm(container, user, function () { renderReviewerManagement(container, backFn); });
           });
         });
         el.querySelectorAll('[data-remove-reviewer]').forEach(function (btn) {
-          var uid  = parseInt(btn.getAttribute('data-remove-reviewer'), 10);
-          var user = users.find(function (u) { return u.id === uid; });
+          var uid  = btn.getAttribute('data-remove-reviewer');
+          var user = users.find(function (u) { return String(u.id) === uid; });
           btn.addEventListener('click', function () {
             if (!confirm('Remove portal access for ' + escapeHtml(user ? (user.name || user.email) : 'this user') + '?\nThey will lose the Reviewer role but remain as a WordPress user.')) return;
             api('DELETE', '/portal-users/' + uid)
               .then(function ()  { renderReviewerManagement(container, backFn); })
               .catch(function () { alert('Failed to remove access. Please try again.'); });
+          });
+        });
+        el.querySelectorAll('[data-remove-json]').forEach(function (btn) {
+          var jsonId = btn.getAttribute('data-remove-json');
+          var user   = users.find(function (u) { return String(u.id) === jsonId; });
+          btn.addEventListener('click', function () {
+            if (!confirm('Remove ' + escapeHtml(user ? (user.name || user.email) : 'this reviewer') + ' from the reviewer pool?\nThis cannot be undone.')) return;
+            api('DELETE', '/portal-users/json/' + jsonId)
+              .then(function ()  { renderReviewerManagement(container, backFn); })
+              .catch(function () { alert('Failed to remove reviewer. Please try again.'); });
           });
         });
       })
@@ -2151,25 +2557,29 @@
 
   // ── Reviewer Onboard Form ─────────────────────────────────────────────────
   function renderReviewerOnboardForm(container, editUser, backFn) {
-    var isEdit    = !!(editUser && editUser.id);
-    var nameParts = isEdit ? (editUser.name || '').split(' ') : [];
+    var isJsonOnly = !!(editUser && editUser.jsonOnly);
+    var isEdit     = !!(editUser && editUser.id) && !isJsonOnly;
+    var isImport   = isJsonOnly;  // legacy pool entry: create a WP account from JSON data
+    var nameParts  = (isEdit || isImport) ? (editUser.name || '').split(' ') : [];
+    var modeTitle  = isImport ? 'Import Legacy Reviewer' : (isEdit ? 'Edit Reviewer Profile' : 'Add Reviewer');
 
     container.innerHTML =
       '<div class="rrp-onboard-wrap">' +
         '<div class="rrp-onboard-header">' +
           '<button type="button" class="rrp-btn secondary" id="rrp-ob-cancel-btn">&#8592; Back</button>' +
-          '<h1>' + (isEdit ? 'Edit Reviewer Profile' : 'Add Reviewer') + '</h1>' +
+          '<h1>' + modeTitle + '</h1>' +
         '</div>' +
         '<div class="rrp-onboard-body">' +
-          (isEdit ? '<p class="rrp-info">Editing: <strong>' + escapeHtml(editUser.email) + '</strong></p>' : '') +
+          (isEdit   ? '<p class="rrp-info">Editing: <strong>' + escapeHtml(editUser.email) + '</strong></p>' : '') +
+          (isImport ? '<p class="rrp-info">Creating a portal login for <strong>' + escapeHtml(editUser.name || editUser.email) + '</strong>. This reviewer exists in the pool but has no portal account yet.</p>' : '') +
           '<div class="rrp-form-row">' +
             '<div class="rrp-form-group"><label>First Name</label><input type="text" id="ob-first-name" class="rrp-input" value="' + escapeHtml(nameParts[0] || '') + '" placeholder="First name"></div>' +
             '<div class="rrp-form-group"><label>Last Name</label><input type="text" id="ob-last-name" class="rrp-input" value="' + escapeHtml(nameParts.slice(1).join(' ') || '') + '" placeholder="Last name"></div>' +
           '</div>' +
           (!isEdit ?
-            '<div class="rrp-form-group"><label>Email Address <em>*</em></label><input type="email" id="ob-email" class="rrp-input" placeholder="reviewer@university.edu"></div>' +
+            '<div class="rrp-form-group"><label>Email Address <em>*</em></label><input type="email" id="ob-email" class="rrp-input" value="' + escapeHtml(isImport ? (editUser.email || '') : '') + '" placeholder="reviewer@university.edu"></div>' +
             '<div class="rrp-form-group"><label>Temporary Password</label><input type="text" id="ob-password" class="rrp-input" placeholder="Leave blank to auto-generate"><small style="color:var(--rrp-text-muted)">If blank, a secure password is generated.</small></div>'
-          : '') +
+          : '<div class="rrp-form-group"><label>Change Password <em>(optional)</em></label><input type="text" id="ob-password" class="rrp-input" value="" placeholder="Leave blank to keep current password"><small style="color:var(--rrp-text-muted)">Only fill this to set a new password.</small></div>') +
           '<div class="rrp-form-row">' +
             '<div class="rrp-form-group"><label>Department / Unit</label><input type="text" id="ob-dept" class="rrp-input" value="' + escapeHtml(isEdit ? (editUser.department || '') : '') + '" placeholder="e.g. Computer Science"></div>' +
             '<div class="rrp-form-group"><label>Expertise / Specialization</label><input type="text" id="ob-expertise" class="rrp-input" value="' + escapeHtml(isEdit ? (editUser.expertise || '') : '') + '" placeholder="e.g. Machine Learning, HCI"></div>' +
@@ -2179,7 +2589,7 @@
             '<p style="font-size:.83rem;color:var(--rrp-text-muted);margin:.25rem 0 .6rem;">Select all types this reviewer is qualified to evaluate.</p>' +
             '<div class="rrp-checkbox-grid">' +
               OB_ALLOWED_TYPES.map(function (t) {
-                var checked = isEdit && (editUser.submissionTypes || []).indexOf(t.value) !== -1;
+                var checked = (isEdit || isImport) && (editUser.submissionTypes || []).indexOf(t.value) !== -1;
                 return '<label class="rrp-check-chip' + (checked ? ' checked' : '') + '">' +
                   '<input type="checkbox" name="ob-submissionTypes" value="' + escapeHtml(t.value) + '"' + (checked ? ' checked' : '') + '> ' + escapeHtml(t.label) +
                 '</label>';
@@ -2188,7 +2598,7 @@
           '</div>' +
           '<div id="rrp-ob-save-msg" style="min-height:1.4rem;margin-top:.5rem;"></div>' +
           '<div class="rrp-onboard-actions">' +
-            '<button type="button" class="rrp-btn" id="rrp-ob-save-btn">' + (isEdit ? '&#10003; Save Changes' : '&#10003; Add Reviewer') + '</button>' +
+            '<button type="button" class="rrp-btn" id="rrp-ob-save-btn">' + (isEdit ? '&#10003; Save Changes' : (isImport ? '&#8659; Import &amp; Create Account' : '&#10003; Add Reviewer')) + '</button>' +
           '</div>' +
         '</div>' +
       '</div>';
@@ -2209,7 +2619,7 @@
       var fn      = container.querySelector('#ob-first-name').value.trim();
       var ln      = container.querySelector('#ob-last-name').value.trim();
       var em      = isEdit ? editUser.email : (container.querySelector('#ob-email') ? container.querySelector('#ob-email').value.trim() : '');
-      var pw      = isEdit ? '' : (container.querySelector('#ob-password') ? container.querySelector('#ob-password').value : '');
+      var pw      = container.querySelector('#ob-password') ? container.querySelector('#ob-password').value : '';
       var dept    = container.querySelector('#ob-dept').value.trim();
       var exp     = container.querySelector('#ob-expertise').value.trim();
       var types   = [];
@@ -2223,7 +2633,8 @@
       var payload = { firstName: fn, lastName: ln, submissionTypes: types, department: dept, expertise: exp };
       var method   = isEdit ? 'PATCH' : 'POST';
       var endpoint = isEdit ? '/portal-users/' + editUser.id : '/portal-users';
-      if (!isEdit) { payload.email = em; payload.password = pw; payload.role = 'rrp_reviewer'; }
+      if (!isEdit) { payload.email = em; payload.role = 'rrp_reviewer'; }
+      if (pw) { payload.password = pw; }
 
       api(method, endpoint, payload)
         .then(function () {
@@ -2234,6 +2645,226 @@
           saveBtn.disabled = false;
           msgEl.innerHTML = '<span class="rrp-error">' + escapeHtml((err.data && err.data.error) || 'Save failed.') + '</span>';
         });
+    });
+  }
+
+  // ── SVG Line Chart builder ─────────────────────────────────────────────────
+  function buildLineChart(dailyData) {
+    var dates  = (dailyData && dailyData.dates)  || [];
+    var series = (dailyData && dailyData.series) || [];
+    // Filter to only series that have at least one non-zero value
+    var activeSeries = series.filter(function (s) { return s.values.some(function (v) { return v > 0; }); });
+    if (!dates.length || !activeSeries.length) {
+      return '<p style="color:var(--rrp-text-muted);font-size:.88rem">No submission data available yet.</p>';
+    }
+
+    var W = 700, H = 260;
+    var padL = 36, padT = 14, padR = 18, padB = 46;
+    var innerW = W - padL - padR;
+    var innerH = H - padT - padB;
+    var n = dates.length;
+
+    var maxVal = 1;
+    activeSeries.forEach(function (s) { s.values.forEach(function (v) { if (v > maxVal) maxVal = v; }); });
+    // Round up maxVal to a nice number
+    var yMax = Math.ceil(maxVal * 1.15) || 1;
+
+    var labelStep = Math.max(1, Math.ceil(n / 14));
+
+    function xPos(i)  { return padL + (n > 1 ? (i / (n - 1)) * innerW : innerW / 2); }
+    function yPos(v)  { return padT + (1 - v / yMax) * innerH; }
+
+    var svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" xmlns="http://www.w3.org/2000/svg" ' +
+      'style="width:100%;height:auto;display:block;overflow:visible;">\n';
+
+    // Horizontal grid lines + Y labels
+    var ySteps = 4;
+    for (var yi = 0; yi <= ySteps; yi++) {
+      var yv  = yMax * (1 - yi / ySteps);
+      var ypx = padT + (yi / ySteps) * innerH;
+      svg += '<line x1="' + padL + '" x2="' + (W - padR) + '" y1="' + ypx.toFixed(1) + '" y2="' + ypx.toFixed(1) + '" stroke="#e2e8f0" stroke-width="1"/>\n';
+      svg += '<text x="' + (padL - 5) + '" y="' + (ypx + 4).toFixed(1) + '" text-anchor="end" font-size="10" fill="#94a3b8">' + Math.round(yv) + '</text>\n';
+    }
+
+    // X axis base line
+    svg += '<line x1="' + padL + '" x2="' + (W - padR) + '" y1="' + (padT + innerH) + '" y2="' + (padT + innerH) + '" stroke="#cbd5e1" stroke-width="1"/>\n';
+
+    // X axis date labels
+    for (var xi = 0; xi < n; xi += labelStep) {
+      var xpx = xPos(xi);
+      var lbl = dates[xi] ? dates[xi].slice(5) : '';
+      svg += '<text x="' + xpx.toFixed(1) + '" y="' + (padT + innerH + 14) + '" text-anchor="middle" font-size="10" fill="#94a3b8">' + escapeHtml(lbl) + '</text>\n';
+    }
+    // Always show last date if not already shown
+    if ((n - 1) % labelStep !== 0 && n > 1) {
+      svg += '<text x="' + xPos(n - 1).toFixed(1) + '" y="' + (padT + innerH + 14) + '" text-anchor="middle" font-size="10" fill="#94a3b8">' + escapeHtml(dates[n - 1].slice(5)) + '</text>\n';
+    }
+
+    // Shaded areas + polylines
+    activeSeries.forEach(function (s) {
+      var pts = s.values.map(function (v, i) { return xPos(i).toFixed(1) + ',' + yPos(v).toFixed(1); }).join(' ');
+      // Light fill area
+      var areaFirst = xPos(0).toFixed(1) + ',' + (padT + innerH);
+      var areaLast  = xPos(n - 1).toFixed(1) + ',' + (padT + innerH);
+      svg += '<polygon points="' + areaFirst + ' ' + pts + ' ' + areaLast + '" fill="' + s.color + '" fill-opacity="0.08"/>\n';
+      // Line
+      svg += '<polyline points="' + pts + '" fill="none" stroke="' + s.color + '" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round"/>\n';
+      // Dots (only when few data points)
+      if (n <= 35) {
+        s.values.forEach(function (v, i) {
+          if (v === 0) return;
+          svg += '<circle cx="' + xPos(i).toFixed(1) + '" cy="' + yPos(v).toFixed(1) + '" r="3.5" fill="' + s.color + '" stroke="#fff" stroke-width="1.5"/>\n';
+        });
+      }
+    });
+
+    svg += '</svg>';
+
+    // Legend
+    var legend = '<div class="rrp-linechart-legend">';
+    activeSeries.forEach(function (s) {
+      legend += '<span class="rrp-lc-legend-item"><span class="rrp-lc-swatch" style="background:' + s.color + '"></span>' + escapeHtml(s.status) + '</span>';
+    });
+    legend += '</div>';
+
+    return svg + legend;
+  }
+
+  // ── Programs Management ───────────────────────────────────────────────────
+  function renderProgramManagement(container, backFn) {
+    container.innerHTML =
+      '<div class="rrp-mgmt-page-header">' +
+        '<button type="button" class="rrp-btn secondary" id="rrp-prog-back">&#8592; Back</button>' +
+        '<h1>&#127979; Program Management</h1>' +
+        '<span></span>' +
+      '</div>' +
+      '<p style="font-size:.88rem;color:var(--rrp-text-muted);margin-bottom:1rem">Manage program directors for each degree program. Changes are saved to the portal configuration.</p>' +
+      '<div id="rrp-programs-body"><p class="rrp-loading">Loading programs&hellip;</p></div>';
+
+    document.getElementById('rrp-prog-back').addEventListener('click', function () {
+      if (backFn) backFn(); else renderCoordinatorDashboard(container);
+    });
+
+    Promise.all([
+      api('GET', '/config'),
+      api('GET', '/reviewers')
+    ]).then(function (results) {
+      var config    = results[0];
+      var reviewers = (results[1].reviewers || results[1] || []);
+      var programs  = (config.programs || []).slice(); // copy
+
+      // Build reviewer id → object map
+      var reviewerMap = {};
+      reviewers.forEach(function (r) { reviewerMap[r.id] = r; });
+
+      var schools = ['Business', 'Education', 'Technology'];
+      var html = '';
+
+      schools.forEach(function (school) {
+        var schoolProgs = programs.filter(function (p) { return p.school === school; });
+        if (!schoolProgs.length) return;
+        html +=
+          '<div class="rrp-analytics-card rrp-prog-school-section">' +
+            '<h2 class="rrp-prog-school-title">School of ' + escapeHtml(school) + ' &nbsp;<small style="font-weight:400;color:var(--rrp-text-muted);font-size:.8rem">' + schoolProgs.length + ' programs</small></h2>' +
+            '<div class="rrp-prog-header"><span>Program</span><span>Level</span><span>Program Director</span><span>Actions</span></div>';
+
+        schoolProgs.forEach(function (prog) {
+          var dir  = reviewerMap[prog.programDirectorId];
+          var dirDisplay = dir
+            ? escapeHtml(dir.name)
+            : (prog.programDirectorId ? escapeHtml(prog.programDirectorId) : '<em style="color:var(--rrp-text-muted)">Not assigned</em>');
+          var levelBadge = LEVEL_BADGES[prog.level] || escapeHtml(prog.level || '');
+
+          var reviewerOptions = '<option value="">&#8212; None &#8212;</option>' +
+            reviewers.map(function (r) {
+              return '<option value="' + escapeHtml(r.id) + '"' + (r.id === prog.programDirectorId ? ' selected' : '') + '>' + escapeHtml(r.name) + '</option>';
+            }).join('');
+
+          html +=
+            '<div class="rrp-prog-row" data-prog-id="' + escapeHtml(prog.id) + '">' +
+              '<span class="rrp-prog-name">' + escapeHtml(prog.label) + '</span>' +
+              '<span>' + levelBadge + '</span>' +
+              '<span class="rrp-prog-director" data-field="director">' + dirDisplay + '</span>' +
+              '<span><button class="rrp-btn rrp-btn-sm" data-edit-prog="' + escapeHtml(prog.id) + '">&#9998; Edit</button></span>' +
+            '</div>' +
+            '<div class="rrp-prog-edit-row" id="rrp-prog-edit-' + escapeHtml(prog.id) + '" style="display:none;">' +
+              '<span class="rrp-prog-name" style="font-style:italic;color:var(--rrp-text-muted)">' + escapeHtml(prog.label) + '</span>' +
+              '<span>' + levelBadge + '</span>' +
+              '<span><select class="rrp-input rrp-prog-dir-select" style="font-size:.83rem;padding:.3rem .5rem;">' + reviewerOptions + '</select></span>' +
+              '<span style="display:flex;gap:.4rem;align-items:center;">' +
+                '<button class="rrp-btn rrp-btn-sm" data-save-prog="' + escapeHtml(prog.id) + '">&#10003; Save</button>' +
+                '<button class="rrp-btn secondary rrp-btn-sm" data-cancel-prog="' + escapeHtml(prog.id) + '">Cancel</button>' +
+                '<span class="rrp-prog-save-msg" style="font-size:.78rem;"></span>' +
+              '</span>' +
+            '</div>';
+        });
+
+        html += '</div>';
+      });
+
+      var body = document.getElementById('rrp-programs-body');
+      if (body) body.innerHTML = html;
+
+      // ── Event listeners ──────────────────────────────────────────────────
+      container.querySelectorAll('[data-edit-prog]').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          var id = btn.getAttribute('data-edit-prog');
+          // Collapse any other open edit rows first
+          container.querySelectorAll('.rrp-prog-edit-row').forEach(function (r) { r.style.display = 'none'; });
+          var editRow = document.getElementById('rrp-prog-edit-' + id);
+          if (editRow) editRow.style.display = 'grid';
+        });
+      });
+
+      container.querySelectorAll('[data-cancel-prog]').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          var editRow = document.getElementById('rrp-prog-edit-' + btn.getAttribute('data-cancel-prog'));
+          if (editRow) editRow.style.display = 'none';
+        });
+      });
+
+      container.querySelectorAll('[data-save-prog]').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          var id      = btn.getAttribute('data-save-prog');
+          var editRow = document.getElementById('rrp-prog-edit-' + id);
+          var select  = editRow ? editRow.querySelector('.rrp-prog-dir-select') : null;
+          var msgEl   = editRow ? editRow.querySelector('.rrp-prog-save-msg')   : null;
+          if (!select) return;
+
+          var newDirId = select.value;
+          var idx = -1;
+          for (var i = 0; i < programs.length; i++) { if (programs[i].id === id) { idx = i; break; } }
+          if (idx === -1) return;
+          programs[idx] = Object.assign({}, programs[idx], { programDirectorId: newDirId });
+
+          btn.disabled = true;
+          btn.textContent = 'Saving…';
+          if (msgEl) msgEl.innerHTML = '';
+
+          api('PUT', '/config', { programs: programs }).then(function () {
+            // Update display row
+            var row = container.querySelector('[data-prog-id="' + id + '"]');
+            if (row) {
+              var dirCell = row.querySelector('[data-field="director"]');
+              if (dirCell) {
+                var updatedDir = reviewerMap[newDirId];
+                dirCell.innerHTML = updatedDir ? escapeHtml(updatedDir.name) : (newDirId ? escapeHtml(newDirId) : '<em style="color:var(--rrp-text-muted)">Not assigned</em>');
+              }
+            }
+            if (editRow) editRow.style.display = 'none';
+            btn.disabled = false;
+            btn.textContent = '\u2713 Save';
+          }).catch(function (err) {
+            if (msgEl) msgEl.innerHTML = '<span class="rrp-error">' + escapeHtml((err && err.data && err.data.error) || 'Save failed') + '</span>';
+            btn.disabled = false;
+            btn.textContent = '\u2713 Save';
+          });
+        });
+      });
+
+    }).catch(function () {
+      var body = document.getElementById('rrp-programs-body');
+      if (body) body.innerHTML = '<div class="rrp-error">Failed to load programs. Please try again.</div>';
     });
   }
 

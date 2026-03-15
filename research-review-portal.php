@@ -477,8 +477,9 @@ class Research_Review_Portal {
 		$logo_url    = esc_url( RRP_PLUGIN_URL . 'assets/city-university-logo.svg' );
 		wp_enqueue_style( 'research-review-portal', RRP_PLUGIN_URL . 'assets/portal.css', array(), '1.0.0' );
 		wp_enqueue_script( 'research-review-portal', RRP_PLUGIN_URL . 'assets/portal.js', array(), '1.0.0', true );
+		$rrp_allowed_types = (array) ( get_user_meta( get_current_user_id(), 'rrp_allowed_submission_types', true ) ?: [] );
 		wp_add_inline_script( 'research-review-portal', sprintf(
-			'window.RRP = { restBase: %s, nonce: %s, isLoggedIn: true, loginUrl: %s, logoutUrl: %s, userName: %s, userRole: %s, userEmail: %s, profileUrl: %s };',
+			'window.RRP = { restBase: %s, nonce: %s, isLoggedIn: true, loginUrl: %s, logoutUrl: %s, userName: %s, userRole: %s, userEmail: %s, profileUrl: %s, allowedTypes: %s };',
 			wp_json_encode( rest_url( 'research-portal/v1' ) ),
 			wp_json_encode( wp_create_nonce( 'wp_rest' ) ),
 			wp_json_encode( '' ),
@@ -486,7 +487,8 @@ class Research_Review_Portal {
 			wp_json_encode( $user_name ),
 			wp_json_encode( $role_label ),
 			wp_json_encode( $current_user->user_email ),
-			wp_json_encode( admin_url( 'profile.php' ) )
+			wp_json_encode( admin_url( 'profile.php' ) ),
+			wp_json_encode( $rrp_allowed_types )
 		), 'before' );
 		?>
 <!DOCTYPE html><html <?php language_attributes(); ?>>

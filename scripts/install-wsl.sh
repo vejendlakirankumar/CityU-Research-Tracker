@@ -9,7 +9,9 @@ set -euo pipefail
 
 REPO_WIN="/mnt/d/Development/CityU-Research-Tracker"
 WP_ADMIN_PASS='Admin1234!'   # single quotes required — bash expands ! in double quotes
-WP_URL="http://localhost"
+# Override WP_URL before running this script to set a public hostname:
+#   WP_URL="http://rcgapimtest.eastus2.cloudapp.azure.com" ./scripts/install-wsl.sh
+WP_URL="${WP_URL:-http://localhost}"
 
 # ── 1. System packages ────────────────────────────────────────────────────────
 echo "==> Installing Apache, PHP 8.1, MySQL, and utilities..."
@@ -58,6 +60,12 @@ sudo wp config create \
   --dbhost=localhost \
   --force \
   --allow-root
+
+# Lock the URL in wp-config.php so the database value can never silently revert
+# to localhost (e.g. after a DB reset or import of a localhost backup).
+echo "==> Locking site URL in wp-config.php..."
+sudo wp config set WP_HOME    "$WP_URL" --type=constant --path=/var/www/html --allow-root
+sudo wp config set WP_SITEURL "$WP_URL" --type=constant --path=/var/www/html --allow-root
 
 # NOTE: WP_ADMIN_PASS must be single-quoted when passed to wp core install
 # because bash expands '!' in double quotes (history expansion → "event not found" error)

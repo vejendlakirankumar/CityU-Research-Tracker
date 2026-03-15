@@ -238,6 +238,7 @@ Edit via the portal's **Config** API (`PUT /wp-json/research-portal/v1/config`) 
 | "Portal API not configured" on page | The shortcode page was published but plugin is not activated — activate it in WP Admin → Plugins |
 | Roles not appearing in Add User dropdown | Deactivate and re-activate the plugin once (role registration runs on activation hook) |
 | File uploads silently fail | Check `data/uploads/` exists and is writable; max upload size in `php.ini` must be ≥ 2 MB |
+| URL changes to `localhost` when accessing via public DNS / Azure hostname | WordPress was installed with `--url=http://localhost`. Run `scripts/set-public-url.sh` — see **Exposing to the internet / Azure public DNS** section below |
 
 ---
 
@@ -431,3 +432,57 @@ sudo wp plugin activate research-review-portal --allow-root
 | Tail PHP error log | `sudo tail -f /var/log/apache2/error.log` |
 | Re-run permissions fix | `sudo chmod -R 777 /var/www/html/wp-content/plugins/research-review-portal/data` |
 | Reset to fresh WordPress | `sudo wp db reset --yes --allow-root && ~/install-portal.sh` |
+
+---
+
+## Exposing to the internet / Azure public DNS
+
+WordPress stores its own URL in the database (`siteurl` and `home` options). When the site
+was first installed with `--url=http://localhost`, every request coming in on a public
+hostname gets redirected back to `localhost`, making the site unreachable from the internet.
+
+### One-time fix for an existing install
+
+From inside WSL on the Azure VM, run the helper script:
+
+```bash
+cd /mnt/d/Development/CityU-Research-Tracker
+chmod +x scripts/set-public-url.sh
+./scripts/set-public-url.sh http://rcgapimtest.eastus2.cloudapp.azure.com
+```
+
+The script:
+1. Updates `siteurl` and `home` in the WordPress database
+2. Writes `WP_HOME` and `WP_SITEURL` PHP constants into `wp-config.php` — these
+   take priority over the database, so a DB reset cannot silently revert the URL
+3. Flushes WordPress rewrite rules
+
+### Fresh install with the correct URL from the start
+
+Pass `WP_URL` as an environment variable before running the install script:
+
+```bash
+WP_URL="http://rcgapimtest.eastus2.cloudapp.azure.com" ./scripts/install-wsl.sh
+```
+
+### Azure VM / NSG checklist
+
+Before the site is reachable from the internet, confirm the following in the Azure portal:
+
+| Check | Where |
+|-------|-------|
+| Inbound NSG rule allows **TCP port 80** from any source | VM → Networking → Inbound port rules |
+| (Optional) Inbound NSG rule allows **TCP port 443** if you add HTTPS later | same |
+| Public IP is **Static** (so the DNS name doesn't change after a VM restart) | VM → Overview → Public IP address |
+| DNS label matches `rcgapimtest.eastus2.cloudapp.azure.com` | Public IP → Configuration → DNS name label |
+
+### Adding HTTPS (optional but recommended)
+
+Once the site is reachable over HTTP, install Certbot to get a free Let's Encrypt certificate:
+
+```bash
+sudo apt-get install -y certbot python3-certbot-apache
+sudo certbot --apache -d rcgapimtest.eastus2.cloudapp.azure.com
+# Then update the site URL to use https://
+./scripts/set-public-url.sh https://rcgapimtest.eastus2.cloudapp.azure.com
+```
