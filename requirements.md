@@ -1,203 +1,209 @@
-# Research Review Portal - Requirements Document
+# Research Review Portal — Requirements & Implementation Status
 
-## Project Overview
+> **Last updated:** March 14, 2026  
+> **Environment:** WordPress plugin on Azure VM (`rcgapimtest.eastus2.cloudapp.azure.com`)  
+> **Plugin path:** `/mnt/c/Development/CityU-Research-Tracker`  
+> **Health check:** `GET /wp-json/research-portal/v1/health` → `{"ok":true}`
 
-The Research Review Portal is a comprehensive web-based application for managing the submission, review, and approval of research documents at City University. The system facilitates a multi-stage review process where researchers submit documents that must be approved by multiple reviewers in a sequential manner.
+---
 
-## Current System Status
+## Legend
+- ✅ **Implemented & deployed**  
+- 🔄 **Partially implemented**  
+- ❌ **Not yet implemented**
 
-The system is currently implemented as a **WordPress plugin** with the following existing capabilities:
-- Multi-stage review workflows for different submission types (Conference, Publication, Student Project, Grant)
-- JSON-based data storage for submissions, reviewers, and configuration
-- REST API endpoints for core functionality
-- Basic file attachment support
-- Sequential reviewer assignment and feedback system
+---
 
-## Scope of Work Required
+## 1. User Management & Authentication
 
-### 1. User Management & Authentication System
+| # | Requirement | Status | Notes |
+|---|---|---|---|
+| 1.1 | Student / Researcher role | ✅ | `rrp_student` WP role |
+| 1.2 | Reviewer role | ✅ | `rrp_reviewer` WP role |
+| 1.3 | Administrator role | ✅ | `rrp_admin` WP role |
+| 1.4 | Coordinator role | ✅ | `rrp_coordinator` WP role |
+| 1.5 | Faculty role | ✅ | `rrp_faculty` WP role |
+| 1.6 | Role-based access control (RBAC) | ✅ | Capability system across all REST endpoints |
+| 1.7 | WordPress login integration | ✅ | Nonce-authenticated REST API |
+| 1.8 | SSO / Microsoft Entra ID | ❌ | Not implemented |
+| 1.9 | Session timeout policies | ❌ | Relies on default WP session handling |
+| 1.10 | Add / edit portal users (admin UI) | ✅ | Full CRUD in coordinator dashboard |
+| 1.11 | User department field | ✅ | `rrp_department` user meta |
+| 1.12 | Department management (config) | ✅ | Departments list in `config.json` + admin UI |
+| 1.13 | Reviewer expertise + submission type mapping | ✅ | Stored in `reviewers.json` and user meta |
+| 1.14 | Password reset (admin) | ✅ | `POST /portal-users/{id}/reset-password` |
+| 1.15 | Reviewer onboarding wizard (student self-assign reviewers by stage) | ✅ | Step-3 of student onboarding form |
 
-#### 1.1 User Roles
-- **Students/Researchers** - Submit documents and track progress
-- **Reviewers** - Review assigned documents and provide feedback
-- **Administrators** - Manage the entire system and all submissions
-- **Coordinators** - Assign reviewers and manage workflow processes
+---
 
-#### 1.2 Authentication Features
-- **Secure login system** integrated with WordPress user management
-- **Role-based access control** with proper permissions
-- **Single Sign-On (SSO)** integration with university systems - Microsoft Entra Id
-- **Session management** with appropriate timeout policies
+## 2. Document Submission System
 
-### 2. Document Submission System
+| # | Requirement | Status | Notes |
+|---|---|---|---|
+| 2.1 | Submission form with validation | ✅ | Client + server-side validation |
+| 2.2 | Draft saving | ✅ | `status: Draft` supported |
+| 2.3 | Submission preview | ✅ | `GET /submissions/{id}/preview` |
+| 2.4 | Confirmation email on submit | ✅ | `wp_mail()` on non-draft submit |
+| 2.5 | Anonymous process documentation | ✅ | Public pages per submission type |
+| 2.6 | Conference paper submissions | ✅ | ARS-YYYY-NNN IDs |
+| 2.7 | Publication submissions | ✅ | PUB-YYYY-NNN IDs |
+| 2.8 | Student project submissions | ✅ | PROJ-YYYY-NNN IDs |
+| 2.9 | Grant proposal submissions | ✅ | GRN-YYYY-NNN IDs |
+| 2.10 | Automated ID generation | ✅ | Year-scoped with zero-padding |
+| 2.11 | Keywords & research area metadata | ✅ | Stored per submission |
+| 2.12 | File upload (multiple files, max 5, 2 MB each) | ✅ | `POST /submissions/{id}/attachments` |
+| 2.13 | File type restriction (PDF + DOCX only) | ✅ | MIME check via `finfo_file()` + extension whitelist |
+| 2.14 | Virus scanning on upload (ClamAV) | ✅ | ClamAV 1.4.3 installed; `clamscan` called on every upload |
+| 2.15 | Document viewer (inline PDF / DOCX) | ✅ | PDF via iframe; DOCX via mammoth.js → HTML |
+| 2.16 | Reviewer annotated file upload | ✅ | Reviewers can upload annotated copy from decision form; tagged `uploadedByReviewer` |
+| 2.17 | Version control / revision tracking | 🔄 | `revisionCount` incremented; full diff/history not implemented |
+| 2.18 | Submission deadlines per stage | ✅ | `GET /submissions/{id}/deadlines` |
+| 2.19 | Submission withdrawal | ✅ | `PATCH` with `status: Withdrawn` |
 
-#### 2.1 Enhanced Submission Process
-- **Improved submission form** with field validation and real-time feedback
-- **Multiple file upload support** with file type restrictions and size limits
-- **Draft saving capability** to allow users to save incomplete submissions
-- **Submission preview** before final submission
-- **Confirmation emails** upon successful submission
-- **Anonymous process documentation** - Public pages explaining submission and review process for each type
+---
 
-#### 2.2 Submission Types (Currently Supported)
-- **Conference Papers** - Academic conference submissions
-- **Publications** - Journal articles and research papers
-- **Student Projects** - Capstone projects and research proposals
-- **Grant Proposals** - Funding applications and research grants
+## 3. Multi-Stage Review Workflow
 
-#### 2.3 Metadata Management
-- **Automated ID generation** (already implemented: ARS, PUB, PROJ, GRN prefixes)
-- **Keywords and research area classification**
-- **Submission deadlines** and due date enforcement
-- **Version control** for revised submissions
+| # | Requirement | Status | Notes |
+|---|---|---|---|
+| 3.1 | Predefined stages per submission type | ✅ | Conference (6), Publication (6), Student (6), Grant (7) |
+| 3.2 | Automatic progression at full stage approval | ✅ | `derive_submission_status()` + next-stage email |
+| 3.3 | Revision handling (send back to submitter) | ✅ | `Needs Revision` → `Revision Required` status |
+| 3.4 | Parallel review (multiple reviewers per stage) | ✅ | `requiredCount` per stage |
+| 3.5 | Reviewer assignment — random pool | ✅ | `assignmentMode: random` |
+| 3.6 | Reviewer assignment — round-robin pool | ✅ | `assignmentMode: round_robin` |
+| 3.7 | Reviewer assignment — expertise-based | ❌ | Not implemented |
+| 3.8 | Reviewer assignment — workload-based | ❌ | Not implemented |
+| 3.9 | Stage skipping (coordinator / admin) | ✅ | `POST /submissions/{id}/skip-stage` |
+| 3.10 | Revision submitted → workflow reset | ✅ | All stage decisions cleared, round counter incremented |
+| 3.11 | Overdue submission detection | ✅ | `GET /analytics/overdue` |
+| 3.12 | Review templates per submission type | ✅ | `GET/PUT /config/review-templates` |
+| 3.13 | Conflict of interest management | ❌ | Not implemented |
+| 3.14 | Escalation procedures for overdue | ❌ | Detection exists; automated escalation not implemented |
+| 3.15 | Auto-assign reviewers on submission (pool) | ✅ | `auto_assign_submission()` on submit if pool configured |
+| 3.16 | Student personal reviewer defaults (by stage) | ✅ | `rrp_default_stage_reviewers` user meta applied at submit time |
 
-### 3. Multi-Stage Review Workflow
+---
 
-#### 3.1 Review Stage Configuration (Currently Partially Implemented)
-Each submission type has predefined stages with configurable reviewer requirements:
+## 4. Reviewer Management
 
-**Conference Submissions:**
-- Initial Screening (1 reviewer)
-- Reviewer Assignment (1 reviewer)  
-- Peer Review (2 reviewers)
-- Review Consolidation (2 reviewers)
-- Final Decision (1 reviewer)
-- Confirmation (1 reviewer)
+| # | Requirement | Status | Notes |
+|---|---|---|---|
+| 4.1 | Reviewer dashboard with pending reviews | ✅ | Filtered by assigned reviewer email |
+| 4.2 | Review history | 🔄 | Visible in submission detail; no dedicated history tab |
+| 4.3 | Streamlined decision interface (Approve / Needs Revision / Reject) | ✅ | `Record Your Decision` form |
+| 4.4 | Rich text feedback | ❌ | Plain textarea only |
+| 4.5 | Review criteria templates | ✅ | Stored in config; shown in decision form |
+| 4.6 | Reviewer workload tracking | ✅ | `GET /analytics/workload` |
+| 4.7 | Due date display in reviewer list | ✅ | Per-reviewer deadline from `assignedReviewers[].deadline` |
+| 4.8 | Reviewer annotation upload (annotated document) | ✅ | `#rrp-reviewer-file` input in decision form; amber badge in doc list |
+| 4.9 | Calendar integration (Google / Outlook) | ❌ | Not implemented |
+| 4.10 | Scoring / rating system | ❌ | Not implemented |
+| 4.11 | Collaborative multi-reviewer features | 🔄 | Multiple reviewers per stage exist; no real-time collaboration |
 
-**Publication Submissions:**
-- Administrative Check (1 reviewer)
-- Reviewer Matching (1 reviewer)
-- Expert Review (2 reviewers)
-- Director Assessment (2 reviewers)
-- Final Decision (1 reviewer)
-- Tracking (1 reviewer)
+---
 
-**Student Projects:**
-- Advisor Matching (1 reviewer)
-- Advisor Consultation (1 reviewer)
-- Feasibility Check (1 reviewer)
-- Director Approval (1 reviewer)
-- Project Setup (1 reviewer)
-- Milestone Tracking (1 reviewer)
+## 5. Status Tracking & Notifications
 
-**Grant Proposals:**
-- Compliance Check (1 reviewer)
-- Review Assignment (1 reviewer)
-- Multi-Criteria Review (2 reviewers)
-- Committee Meeting (2 reviewers)
-- Final Decision (1 reviewer)
-- Development Support (1 reviewer)
-- Submission Tracking (1 reviewer)
+| # | Requirement | Status | Notes |
+|---|---|---|---|
+| 5.1 | Real-time status dashboard (submitter) | ✅ | Student dashboard with status badges |
+| 5.2 | Timeline view of review stages | ✅ | `GET /submissions/{id}/timeline` rendered in detail view |
+| 5.3 | Audit / activity log per submission | ✅ | `GET /submissions/{id}/audit-log`; 📋 Log button in all panels; 10 event types tracked |
+| 5.4 | Email notifications (status changes, decisions) | ✅ | `wp_mail()` for confirmation + stage reviewer alerts |
+| 5.5 | In-app notification centre | ✅ | `GET /notifications` — pending review / revision alerts |
+| 5.6 | Configurable notification preferences | ❌ | Not implemented |
+| 5.7 | Automatic deadline reminder emails | ❌ | Not implemented |
+| 5.8 | Escalation notifications | ❌ | Not implemented |
+| 5.9 | Estimated completion dates | ❌ | Not implemented |
 
-#### 3.2 Workflow Management Requirements
-- **Automatic progression** to next stage when all reviewers approve
-- **Revision handling** - send back to submitter when revisions requested
-- **Parallel review support** for stages requiring multiple reviewers
-- **Reviewer assignment algorithms** (random, expertise-based, workload-based)
-- **Escalation procedures** for overdue reviews
-- **Stage skipping capability** for administrators
+---
 
-### 4. Reviewer Management System
+## 6. Administrative Features
 
-#### 4.1 Enhanced Reviewer Dashboard
-- **Pending reviews list** with submission details and due dates
-- **Review history** and workload tracking
-- **Calendar integration** for deadline management
-- **Easy access to submission documents** and attachments
-- **Streamlined decision interface** (Approve/Request Revision/Reject)
-- **Rich text feedback editor** with formatting options
+| # | Requirement | Status | Notes |
+|---|---|---|---|
+| 6.1 | Coordinator dashboard with all submissions | ✅ | Filter by All / Unassigned / In Review / Approved |
+| 6.2 | Submission filtering & search | 🔄 | Tab-based filter; free-text search not implemented |
+| 6.3 | Reviewer assignment UI (per stage) | ✅ | Assignment panel with pool suggest |
+| 6.4 | Bulk reviewer assignment from pool | ✅ | `POST /config/apply-pool-to-submissions` |
+| 6.5 | System configuration UI (stages, pools, programs, departments) | ✅ | Coordinator → Program Management card |
+| 6.6 | Review time analytics | ✅ | `GET /analytics/workflow` + `performance` |
+| 6.7 | Reviewer workload reports | ✅ | `GET /analytics/reviewer` + `workload` |
+| 6.8 | Submission trend analysis | ✅ | `GET /analytics/daily` (90-day rolling) |
+| 6.9 | Export CSV / XLSX | ✅ | `GET /reports/export` + client-side XLSX download |
+| 6.10 | Audit trail (per submission) | ✅ | See §5.3 |
+| 6.11 | Bulk status updates | ❌ | Not implemented |
+| 6.12 | Overdue submissions view | ✅ | Coordinator → Overdue tab |
+| 6.13 | Conflict of interest tracking | ❌ | Not implemented |
 
-#### 4.2 Review Process Features
-- **Conflict of interest declaration** and management
-- **Review criteria templates** specific to submission types
-- **Scoring/rating system** for quantitative assessments
-- **Collaborative review features** for multi-reviewer stages
-- **Review timeline tracking** and reminder system
+---
 
-### 5. Status Tracking & Notifications
+## 7. Deadline Management
 
-#### 5.1 Student/Submitter Features
-- **Real-time status dashboard** showing current stage and progress
-- **Detailed timeline view** of all review activities
-- **Document version tracking** with change history
-- **Notification system** for status updates and required actions
-- **Estimated completion dates** based on current stage
+| # | Requirement | Status | Notes |
+|---|---|---|---|
+| 7.1 | Configurable review deadlines per stage | 🔄 | Deadline calculation in `calculate_stage_deadline()`; not editable from UI |
+| 7.2 | Automatic deadline calculation from submission date | ✅ | Days-per-stage from config |
+| 7.3 | Grace period / escalation | ❌ | Not implemented |
+| 7.4 | Weekend / holiday consideration | ❌ | Not implemented |
+| 7.5 | Extension requests | ❌ | Not implemented |
+| 7.6 | Calendar view (deadline calendar) | ❌ | Not implemented |
+| 7.7 | Personal calendar sync (Google / Outlook) | ❌ | Not implemented |
 
-#### 5.2 Notification System
-- **Email notifications** for all stakeholders
-- **In-app notification center** with read/unread status
-- **Configurable notification preferences** by user role
-- **Automatic reminder system** for approaching deadlines
-- **Escalation notifications** for overdue items
+---
 
-### 6. Administrative Features
+## 8. Technical & Security
 
-#### 6.1 System Administration
-- **Comprehensive dashboard** with system-wide statistics
-- **All submissions overview** with filtering and search capabilities
-- **User management** for adding/removing reviewers and users
-- **System configuration** for review stages and requirements
-- **Bulk operations** for reviewer assignments and status updates
+| # | Requirement | Status | Notes |
+|---|---|---|---|
+| 8.1 | WordPress 5.0+ compatibility | ✅ | Tested on current WP |
+| 8.2 | PHP 7.4+ | ✅ | Uses PHP 8.x on VM |
+| 8.3 | Responsive / mobile design | ✅ | CSS grid + media queries |
+| 8.4 | Input validation & sanitisation (OWASP) | ✅ | All REST inputs sanitised; `escapeHtml()` in JS |
+| 8.5 | File virus scanning (ClamAV) | ✅ | See §2.14 |
+| 8.6 | Real MIME-type verification on upload | ✅ | `finfo_file()` check |
+| 8.7 | REST API nonce authentication | ✅ | `wp_create_nonce('wp_rest')` |
+| 8.8 | Role / capability checks on every endpoint | ✅ | `permission_callback` on all routes |
+| 8.9 | SSL/TLS | 🔄 | Azure VM; HTTPS not configured on current test env |
+| 8.10 | Data backup / recovery | ❌ | JSON files only; no automated backup |
+| 8.11 | REST API for external integrations | ✅ | Full REST surface exposed |
+| 8.12 | mammoth.js DOCX inline viewer | ✅ | Enqueued as WP script dependency |
 
-#### 6.2 Reporting & Analytics
-- **Review time analytics** and bottleneck identification
-- **Reviewer workload reports** and performance metrics
-- **Submission trend analysis** by type and time period
-- **Export capabilities** for data analysis
-- **Audit trail** for all system activities
+---
 
-### 7. Due Date & Deadline Management
+## 9. Pending / Future Work (priority order)
 
-#### 7.1 Deadline Enforcement
-- **Configurable review deadlines** per stage and submission type
-- **Automatic deadline calculation** based on submission date
-- **Grace period handling** with escalation procedures
-- **Holiday and weekend consideration** in deadline calculations
-- **Extension request system** for reviewers
+1. **Microsoft Entra ID SSO** — integrate WP OAuth plugin for university SSO
+2. **Automated deadline reminder emails** — WP-Cron job to email reviewers N days before deadline
+3. **Escalation notifications** — coordinator alert when review is overdue
+4. **Free-text search** across submission title / author / ID
+5. **Bulk status updates** for coordinators
+6. **Conflict of interest declaration** — reviewer self-declares before starting review
+7. **Expertise-based / workload-based reviewer auto-assignment**
+8. **Rich text feedback editor** (TipTap or TinyMCE)
+9. **Deadline edit UI** (coordinator sets per-submission stage deadlines)
+10. **Calendar view & personal calendar sync**
+11. **Scoring / rating system** for quantitative review criteria
+12. **Extension request workflow** for reviewers
+13. **HTTPS configuration** on Azure VM
+14. **Automated JSON backup** (WP-Cron → copy to Azure Blob or similar)
+15. **Configurable notification preferences** per user
 
-#### 7.2 Calendar Integration
-- **Deadline calendar view** for all stakeholders
-- **Personal calendar integration** (Google Calendar, Outlook)
-- **Meeting scheduling** for collaborative reviews
-- **Availability checking** for reviewer assignments
+---
 
-### 8. Technical Requirements
+## Deployment Reference
 
-#### 8.1 Platform & Compatibility
-- **WordPress 5.0+** compatibility (current requirement)
-- **PHP 7.4+** support (current requirement)
-- **Responsive design** for mobile and tablet access
-- **Cross-browser compatibility** (Chrome, Firefox, Safari, Edge)
-- **Accessibility compliance** (WCAG 2.1 standards)
+| Item | Value |
+|---|---|
+| VM | `rcgapimtest.eastus2.cloudapp.azure.com` |
+| WP admin | `admin` / `admin123` |
+| VM user | `azureadmin` / `Microsoft12345` |
+| Plugin path (VM) | `/mnt/c/Development/CityU-Research-Tracker` |
+| Local path | `d:\Development\CityU-Research-Tracker` |
+| Health endpoint | `GET /wp-json/research-portal/v1/health` |
+| ClamAV | `/usr/bin/clamscan` v1.4.3, defs 27940 |
 
-#### 8.2 Performance & Security
-- **Database optimization** for large data sets
-- **File security** with access control and virus scanning
-- **Data backup and recovery** procedures
-- **SSL/TLS encryption** for all communications
-- **Input validation and sanitization** for security
-
-#### 8.3 Integration Requirements
-- **REST API expansion** for external integrations
-- **WordPress user system integration** for authentication
-- **Email system integration** for notifications
-- **File storage optimization** with cleanup procedures
-- **Export/import functionality** for system migration
-
-### 9. Current System Enhancements Needed
-
-#### 9.1 Data Structure Improvements
-- **Enhanced user profiles** with department and expertise information
-- **Better review criteria storage** with templates
-- **Improved file metadata** and version tracking
-- **Performance optimization** for large submission volumes
-
-#### 9.2 User Interface Enhancements
-- **Modern, intuitive UI design** with improved user experience
-- **Dashboard customization** per user role
-- **Advanced search and filtering** capabilities
-- **Bulk action support** for administrators
-- **Mobile-responsive design** improvements
 
 ### 10. Implementation Priorities
 

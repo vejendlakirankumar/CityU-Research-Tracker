@@ -366,7 +366,7 @@
 }
 .rrp-prog-header {
   display: grid;
-  grid-template-columns: 1fr 110px 180px 130px;
+  grid-template-columns: 1fr 110px 160px 160px 120px;
   gap: .5rem;
   align-items: center;
   padding: .4rem .75rem;
@@ -379,7 +379,7 @@
 }
 .rrp-prog-row {
   display: grid;
-  grid-template-columns: 1fr 110px 180px 130px;
+  grid-template-columns: 1fr 110px 160px 160px 120px;
   gap: .5rem;
   align-items: center;
   padding: .55rem .75rem;
@@ -392,9 +392,9 @@
 .rrp-prog-row:hover { background: #f8fafc; }
 .rrp-prog-edit-row {
   display: grid;
-  grid-template-columns: 1fr 110px 180px 130px;
+  grid-template-columns: 1fr 110px 160px 160px 120px;
   gap: .5rem;
-  align-items: center;
+  align-items: start;
   padding: .55rem .75rem;
   border: 1px solid #bfdbfe;
   border-radius: 6px;
@@ -417,6 +417,12 @@
   display: inline-block;
   background: #fef3c7; color: #92400e; border: 1px solid #fde68a;
   border-radius: 10px; font-size: .72rem; padding: .15rem .45rem; font-weight: 600;
+}
+.rrp-chip {
+  display: inline-block;
+  background: #e0f2fe; color: #0369a1; border: 1px solid #bae6fd;
+  border-radius: 8px; font-size: .72rem; padding: .12rem .4rem; font-weight: 500;
+  white-space: nowrap;
 }
 
 @media (max-width: 640px) {
@@ -1352,6 +1358,10 @@
 .rrp-attach-date { font-size: .76rem; color: var(--rrp-text-muted, #6b7280); white-space: nowrap; }
 .rrp-attach-actions { display: flex; gap: .4rem; }
 
+/* Reviewer-uploaded annotated files */
+.rrp-attach-item.rrp-attach-reviewer { background: #fefce8; border-left: 3px solid #f59e0b; padding-left: .5rem; }
+.rrp-reviewer-annot-badge { display: inline-flex; align-items: center; gap: .25rem; font-size: .72rem; font-weight: 600; color: #92400e; background: #fef3c7; border: 1px solid #fde68a; border-radius: 4px; padding: .1rem .4rem; white-space: nowrap; }
+
 /* ── Attachment version groups ───── */
 .rrp-attach-group { border: 1px solid #e2e8f0; border-radius: 7px; margin-bottom: .75rem; overflow: hidden; }
 .rrp-attach-group-latest { border-color: #93c5fd; }
@@ -1627,3 +1637,68 @@
   .rrp-umr-row  span:nth-child(3),
   .rrp-umr-row  span:nth-child(4) { display: none; }
 }
+
+/* ── Audit / Activity Log modal ── */
+.rrp-audit-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.52);
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  z-index: 99999;
+  padding: 1rem;
+}
+.rrp-audit-modal {
+  background: #fff;
+  border-radius: 10px;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.22);
+  width: 100%;
+  max-width: 520px;
+  max-height: calc(100vh - 2rem);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: rrp-slide-in .18s ease-out;
+}
+@keyframes rrp-slide-in {
+  from { transform: translateX(40px); opacity: 0; }
+  to   { transform: translateX(0);    opacity: 1; }
+}
+.rrp-audit-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: .85rem 1.25rem;
+  border-bottom: 1px solid #e5e7eb;
+  background: #f0f6ff;
+  flex-shrink: 0;
+}
+.rrp-audit-modal-header h2 { margin: 0; font-size: .95rem; color: #1a202c; }
+.rrp-audit-sub-id { font-family: monospace; color: #003d66; font-weight: 700; }
+.rrp-audit-close {
+  background: none; border: none; font-size: 1.4rem;
+  cursor: pointer; line-height: 1; color: #6b7280; padding: 0 .25rem;
+}
+.rrp-audit-close:hover { color: #111; }
+.rrp-audit-modal-body { overflow-y: auto; padding: 1rem 1.25rem; flex: 1; }
+.rrp-audit-list {
+  list-style: none; margin: 0; padding: 0;
+  display: flex; flex-direction: column; gap: .6rem;
+}
+.rrp-audit-entry {
+  border-left: 3px solid #003d66;
+  padding: .45rem .75rem;
+  background: #f9fafb;
+  border-radius: 0 6px 6px 0;
+}
+.rrp-audit-entry-header {
+  display: flex; justify-content: space-between;
+  align-items: baseline; gap: .5rem; flex-wrap: wrap; margin-bottom: .15rem;
+}
+.rrp-audit-action { font-weight: 600; font-size: .85rem; color: #1a202c; }
+.rrp-audit-time   { font-size: .76rem; color: #6b7280; white-space: nowrap; }
+.rrp-audit-detail { font-size: .83rem; color: #374151; margin-bottom: .15rem; }
+.rrp-audit-actor  { font-size: .76rem; color: #9ca3af; font-style: italic; }
+.rrp-audit-empty  { text-align: center; color: #9ca3af; padding: 2rem 0; }
+.rrp-btn-log      { font-size: .78rem !important; padding: .2rem .5rem !important; }

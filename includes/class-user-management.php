@@ -59,6 +59,17 @@ class RRP_User_Management {
 				'rrp_bulk_operations'            => true,
 			),
 		),
+		'rrp_faculty'     => array(
+			'name'         => 'Research Faculty',
+			'capabilities' => array(
+				'read'                          => true,
+				'rrp_review_submissions'        => true,
+				'rrp_view_assigned_submissions' => true,
+				'rrp_provide_feedback'          => true,
+				'rrp_view_review_dashboard'     => true,
+				'rrp_view_all_submissions'      => true,
+			),
+		),
 	);
 
 	/**

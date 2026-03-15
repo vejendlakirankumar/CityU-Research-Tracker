@@ -1,7 +1,7 @@
 # Deployment Guide — Research Review Portal
 
-> **Goal:** Get the plugin running on a WordPress instance for local testing.  
-> Three options are covered — choose whichever fits your machine.
+> **Goal:** Get the plugin running on a WordPress instance.  
+> Options A–D cover local/development environments. **Option E** covers second-VM or disaster-recovery deployment using the database backup at `data/rrp-db-export.sql`.
 
 ---
 
@@ -205,12 +205,14 @@ wp user create rrpadmin rrpadmin@test.com --role=rrp_admin --user_pass=test123 -
 
 | Step | URL / action | Expected result |
 |------|-------------|-----------------|
-| 1 | `/wp-json/research-portal/v1/health` | `{"ok":true}` |
+| 1 | `/wp-json/research-portal/v1/health` | `{"ok":true,"bootId":"<number>"}` |
 | 2 | Log in as `student@test.com`, open portal | Submission form visible |
 | 3 | Submit a conference abstract | Confirmation with reference ID |
 | 4 | Log in as `reviewer@test.com`, open **Reviewer Dashboard** | Assigned submission listed |
-| 5 | Click **Review** on assignment | Detail view with "Record Your Decision" form |
-| 6 | Log in as `rrpadmin@test.com`, open **Dashboard** | All submissions listed with Details/Timeline buttons |
+| 5 | Click **Review** on assignment | Detail view with "Record Your Decision" form and reviewer file upload field |
+| 6 | Log in as `rrpadmin@test.com`, open **Dashboard** | All submissions listed with **Details / Timeline / 📋 Log** buttons |
+| 7 | Click **📋 Log** on any submission | Slide-in audit log panel opens with timestamped event entries |
+| 8 | Reviewer attaches a `.pdf` file and submits a decision | Decision saved; file stored under `data/uploads/<submission-id>/` |
 
 ---
 
@@ -435,7 +437,129 @@ sudo wp plugin activate research-review-portal --allow-root
 
 ---
 
+## Option E — Second VM from database backup (production / disaster recovery)
+
+> **When to use:** Deploying the portal to a second or replacement VM, or restoring after a VM failure.  
+> Imports `data/rrp-db-export.sql` (committed to this repository) to restore all users, roles, submissions, configuration and audit logs in a single step.
+
+### Prerequisites
+- New Ubuntu 22.04 VM with **TCP port 80** open in the Azure NSG (see checklist in the next section)
+- Plugin source on the new VM — clone from Git or copy from the source VM
+- `data/rrp-db-export.sql` present in the plugin directory *(already included in this repository)*
+
+To generate a fresh backup from the running source VM before provisioning:
+
+```bash
+wp --path=/var/www/html --allow-root db export \
+  /mnt/c/Development/CityU-Research-Tracker/data/rrp-db-export.sql
+```
+
+---
+
+### Steps
+
+**1. Install packages, WP-CLI, MySQL and Apache:**
+
+```bash
+sudo apt-get update -qq
+sudo apt-get install -y \
+  apache2 \
+  php8.1 php8.1-mysql php8.1-curl php8.1-mbstring php8.1-xml \
+  php8.1-zip php8.1-gd libapache2-mod-php8.1 \
+  mysql-server curl unzip
+
+curl -sO https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar
+chmod +x wp-cli.phar && sudo mv wp-cli.phar /usr/local/bin/wp
+
+sudo service mysql start && sudo service apache2 start
+```
+
+**2. Create the MySQL database and user:**
+
+```bash
+sudo mysql <<'SQL'
+CREATE DATABASE IF NOT EXISTS wordpress CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE USER IF NOT EXISTS 'wp'@'localhost' IDENTIFIED BY 'wp';
+GRANT ALL PRIVILEGES ON wordpress.* TO 'wp'@'localhost';
+FLUSH PRIVILEGES;
+SQL
+```
+
+**3. Get the plugin onto the new VM** (choose one):
+
+```bash
+# Clone from Git
+git clone https://github.com/<your-org>/CityU-Research-Tracker \
+  /mnt/c/Development/CityU-Research-Tracker
+
+# Or copy from the source VM (run from your local machine / jump host)
+scp -r azureadmin@<SOURCE-VM>:/mnt/c/Development/CityU-Research-Tracker \
+  azureadmin@<NEW-VM>:/mnt/c/Development/CityU-Research-Tracker
+```
+
+**4. Download WordPress core and create `wp-config.php`:**
+
+```bash
+cd /var/www/html
+sudo wp core download --allow-root --quiet
+sudo wp config create \
+  --dbname=wordpress --dbuser=wp --dbpass=wp --dbhost=localhost --allow-root
+```
+
+**5. Link the plugin and import the database:**
+
+```bash
+REPO="/mnt/c/Development/CityU-Research-Tracker"
+PLUGIN_DIR="/var/www/html/wp-content/plugins/research-review-portal"
+
+sudo ln -sfn "$REPO" "$PLUGIN_DIR"
+sudo chmod -R 777 "$PLUGIN_DIR/data"
+
+sudo wp --path=/var/www/html --allow-root db import "$PLUGIN_DIR/data/rrp-db-export.sql"
+```
+
+All users, roles, submissions, configuration and audit log entries are now restored.
+
+**6. Update the site URL to the new VM hostname:**
+
+```bash
+PLUGIN_DIR="/var/www/html/wp-content/plugins/research-review-portal"
+cd "$PLUGIN_DIR"
+chmod +x scripts/set-public-url.sh
+./scripts/set-public-url.sh http://<YOUR-NEW-VM-HOSTNAME>
+```
+
+**7. Enable mod_rewrite and restart Apache:**
+
+```bash
+sudo a2enmod rewrite
+sudo sed -i 's/AllowOverride None/AllowOverride All/g' /etc/apache2/apache2.conf
+sudo service apache2 restart
+sudo wp --path=/var/www/html --allow-root rewrite structure '/%postname%/'
+sudo wp --path=/var/www/html --allow-root rewrite flush
+```
+
+**8. Activate the plugin:**
+
+```bash
+sudo wp --path=/var/www/html --allow-root plugin activate research-review-portal
+```
+
+**9. Verify:**
+
+```bash
+curl http://<YOUR-NEW-VM-HOSTNAME>/wp-json/research-portal/v1/health
+# Expected: {"ok":true,"bootId":"<number>"}
+```
+
+All users log in with the same credentials as the source VM. No new user creation is needed.
+
+---
+
 ## Exposing to the internet / Azure public DNS
+
+> **Current source VM hostname:** `rcgapimtest.eastus2.cloudapp.azure.com`  
+> Replace this with your own VM's hostname in all commands below.
 
 WordPress stores its own URL in the database (`siteurl` and `home` options). When the site
 was first installed with `--url=http://localhost`, every request coming in on a public
@@ -446,9 +570,9 @@ hostname gets redirected back to `localhost`, making the site unreachable from t
 From inside WSL on the Azure VM, run the helper script:
 
 ```bash
-cd /mnt/d/Development/CityU-Research-Tracker
+cd /mnt/c/Development/CityU-Research-Tracker
 chmod +x scripts/set-public-url.sh
-./scripts/set-public-url.sh http://rcgapimtest.eastus2.cloudapp.azure.com
+./scripts/set-public-url.sh http://<YOUR-VM-HOSTNAME>
 ```
 
 The script:
@@ -462,7 +586,7 @@ The script:
 Pass `WP_URL` as an environment variable before running the install script:
 
 ```bash
-WP_URL="http://rcgapimtest.eastus2.cloudapp.azure.com" ./scripts/install-wsl.sh
+WP_URL="http://<YOUR-VM-HOSTNAME>" ./scripts/install-wsl.sh
 ```
 
 ### Azure VM / NSG checklist
@@ -474,7 +598,7 @@ Before the site is reachable from the internet, confirm the following in the Azu
 | Inbound NSG rule allows **TCP port 80** from any source | VM → Networking → Inbound port rules |
 | (Optional) Inbound NSG rule allows **TCP port 443** if you add HTTPS later | same |
 | Public IP is **Static** (so the DNS name doesn't change after a VM restart) | VM → Overview → Public IP address |
-| DNS label matches `rcgapimtest.eastus2.cloudapp.azure.com` | Public IP → Configuration → DNS name label |
+| DNS label matches your assigned hostname (e.g. `myvm.eastus2.cloudapp.azure.com`) | Public IP → Configuration → DNS name label |
 
 ### Adding HTTPS (optional but recommended)
 
@@ -482,7 +606,7 @@ Once the site is reachable over HTTP, install Certbot to get a free Let's Encryp
 
 ```bash
 sudo apt-get install -y certbot python3-certbot-apache
-sudo certbot --apache -d rcgapimtest.eastus2.cloudapp.azure.com
+sudo certbot --apache -d <YOUR-VM-HOSTNAME>
 # Then update the site URL to use https://
-./scripts/set-public-url.sh https://rcgapimtest.eastus2.cloudapp.azure.com
+./scripts/set-public-url.sh https://<YOUR-VM-HOSTNAME>
 ```

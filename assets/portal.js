@@ -232,6 +232,7 @@
             '</div>' +
             '<div class="rrp-sub-item-actions">' +
               '<button type="button" class="rrp-btn secondary" data-detail="' + escapeHtml(s.id) + '">View Details</button>' +
+              '<button type="button" class="rrp-btn secondary rrp-btn-log" data-audit-log="' + escapeHtml(s.id) + '">&#128221; Log</button>' +
             '</div>' +
             '</li>';
         }).join('') +
@@ -241,6 +242,9 @@
         btn.addEventListener('click', function () {
           renderSubmissionDetail(btn.getAttribute('data-detail'), container, function () { renderStudentDashboard(container); });
         });
+      });
+      listEl.querySelectorAll('[data-audit-log]').forEach(function (btn) {
+        btn.addEventListener('click', function () { openAuditLogModal(btn.getAttribute('data-audit-log')); });
       });
     }
   }
@@ -292,8 +296,8 @@
           '<input type="text" name="researchArea" required placeholder="e.g. Computer Science, Business Administration&#8230;">' +
         '</div>' +
         '<div class="rrp-form-block">' +
-          '<label>Document <span class="rrp-hint">(PDF, DOC, DOCX, TXT &#8211; max 2 MB)</span></label>' +
-          '<input type="file" name="files" id="rrp-file-input" accept=".pdf,.doc,.docx,.txt">' +
+          '<label>Document <span class="rrp-hint">(PDF or DOCX only &#8211; max 2 MB)</span></label>' +
+          '<input type="file" name="files" id="rrp-file-input" accept=".pdf,.docx">' +
           '<div id="rrp-file-list" class="rrp-file-list"></div>' +
         '</div>' +
         '<div class="rrp-form-actions">' +
@@ -469,6 +473,7 @@
               '<li><button type="button" class="rrp-nav-link" data-view="students">&#127891; Students</button></li>' +
               '<li><button type="button" class="rrp-nav-link" data-view="reviewers">&#128101; Reviewers</button></li>' +
               '<li><button type="button" class="rrp-nav-link" data-view="programs">&#127979; Programs</button></li>' +
+              '<li><button type="button" class="rrp-nav-link" data-view="users">&#128101; User Management</button></li>' +
               '<li><button type="button" class="rrp-nav-link" data-view="analytics">&#128202; Analytics</button></li>' +
               '<li><button type="button" class="rrp-nav-link" data-view="overdue">&#128680; Overdue Submissions</button></li>' +
               '<li><button type="button" class="rrp-nav-link" data-view="public">&#127760; Public submissions</button></li>' +
@@ -490,6 +495,7 @@
         if (view === 'students')  renderStudentManagement(container, function () { renderCoordinatorDashboard(container); });
         if (view === 'reviewers') renderReviewerManagement(container, function () { renderCoordinatorDashboard(container); });
         if (view === 'programs')  renderProgramManagement(container, function () { renderCoordinatorDashboard(container); });
+        if (view === 'users')     renderAdminUserManagement(container, function () { renderCoordinatorDashboard(container); });
       });
     });
 
@@ -513,13 +519,33 @@
     });
 
     // Load all submissions + assignment summary in parallel
+    // If coordinator has program assignments, also fetch students to scope submissions
+    var isCoordinator = (window.RRP && window.RRP.userRole) === 'Coordinator';
+    var myProgramIds  = (window.RRP && window.RRP.programIds) || [];
+    var coordFetch    = (isCoordinator && myProgramIds.length > 0)
+      ? api('GET', '/portal-users?role=student')
+      : Promise.resolve({ users: null });
+
     Promise.all([
       api('GET', '/submissions'),
-      api('GET', '/assignment-summary')
+      api('GET', '/assignment-summary'),
+      coordFetch
     ]).then(function (results) {
-      var all   = results[0].submissions || [];
+      var allRaw  = results[0].submissions || [];
       var summary = {};
       (results[1].submissions || []).forEach(function (s) { summary[s.id] = s; });
+
+      // Coordinator scoping: filter to submissions from students whose programId is in myProgramIds
+      var all = allRaw;
+      if (isCoordinator && myProgramIds.length > 0 && results[2].users !== null) {
+        var myStudents = (results[2].users || []).filter(function (u) {
+          return myProgramIds.indexOf(u.programId) !== -1;
+        });
+        var myStudentEmails = myStudents.map(function (u) { return (u.email || '').toLowerCase(); });
+        all = allRaw.filter(function (s) {
+          return myStudentEmails.indexOf((s.submitterEmail || '').toLowerCase()) !== -1;
+        });
+      }
 
       var unassigned = all.filter(function (s) {
         var sum = summary[s.id];
@@ -630,6 +656,7 @@
               '<button type="button" class="rrp-btn' + (hasAssignment ? ' secondary' : '') + '" data-assign="' + escapeHtml(s.id) + '">' +
                 (hasAssignment ? '&#9998; Edit Assignment' : '&#43; Assign Reviewers') +
               '</button>' +
+              '<button type="button" class="rrp-btn secondary rrp-btn-log" data-audit-log="' + escapeHtml(s.id) + '">&#128221; Log</button>' +
             '</div>' +
           '</li>';
         }).join('') +
@@ -639,6 +666,9 @@
         btn.addEventListener('click', function () {
           renderSubmissionDetail(btn.getAttribute('data-detail'), container, function () { renderCoordinatorDashboard(container); });
         });
+      });
+      listEl.querySelectorAll('[data-audit-log]').forEach(function (btn) {
+        btn.addEventListener('click', function () { openAuditLogModal(btn.getAttribute('data-audit-log')); });
       });
       listEl.querySelectorAll('[data-assign]').forEach(function (btn) {
         btn.addEventListener('click', function () {
@@ -777,6 +807,7 @@
                   '<span>' + escapeHtml(s.submitterEmail || '') + '</span>' +
                 '</div>' +
                 '<button type="button" class="rrp-btn secondary" data-detail="' + escapeHtml(s.id) + '">View</button>' +
+                '<button type="button" class="rrp-btn secondary rrp-btn-log" data-audit-log="' + escapeHtml(s.id) + '">&#128221; Log</button>' +
               '</li>';
             }).join('') +
             '</ul>';
@@ -784,6 +815,9 @@
             btn.addEventListener('click', function () {
               renderSubmissionDetail(btn.getAttribute('data-detail'), container, function () { renderCoordinatorDashboard(container); });
             });
+          });
+          el.querySelectorAll('[data-audit-log]').forEach(function (btn) {
+            btn.addEventListener('click', function () { openAuditLogModal(btn.getAttribute('data-audit-log')); });
           });
         })
         .catch(function () {
@@ -908,8 +942,8 @@
         (apiType === 'publication' ? '<div class="rrp-form-block"><label>Publication type *</label><input type="text" name="publicationType" required></div>' : '') +
         (apiType === 'student-project' ? '<div class="rrp-form-block"><label>Project type *</label><input type="text" name="projectType" required></div>' : '') +
         (apiType === 'grant' ? '<div class="rrp-form-block"><label>Funding agency *</label><input type="text" name="fundingAgency" required></div>' : '') +
-        '<div class="rrp-form-block"><label>Supporting files <span class="rrp-hint">(optional – PDF, DOC, DOCX, PPT, PPTX, TXT – max 2 MB each, up to 5)</span></label>' +
-          '<input type="file" name="files" id="rrp-file-input" multiple accept=".pdf,.doc,.docx,.ppt,.pptx,.txt">' +
+        '<div class="rrp-form-block"><label>Supporting files <span class="rrp-hint">(optional &#8211; PDF or DOCX only &#8211; max 2 MB each, up to 5)</span></label>' +
+          '<input type="file" name="files" id="rrp-file-input" multiple accept=".pdf,.docx">' +
           '<div id="rrp-file-list" class="rrp-file-list"></div>' +
         '</div>' +
         '<div class="rrp-form-actions">' +
@@ -1204,6 +1238,7 @@
                 ' · ' + escapeHtml(s.id) + '</span>' +
                 '<span class="rrp-status">' + escapeHtml(s.status || '') + '</span>' +
                 '<button type="button" class="rrp-btn secondary" style="margin-left:.5rem;" data-detail="' + escapeHtml(s.id) + '">View Details</button>' +
+                '<button type="button" class="rrp-btn secondary rrp-btn-log" style="margin-left:.25rem;" data-audit-log="' + escapeHtml(s.id) + '">&#128221; Log</button>' +
                 '</li>';
             }).join('') +
           '</ul>';
@@ -1211,6 +1246,9 @@
             btn.addEventListener('click', function () {
               renderSubmissionDetail(btn.getAttribute('data-detail'), container, function () { renderStatus(container); });
             });
+          });
+          listEl.querySelectorAll('[data-audit-log]').forEach(function (btn) {
+            btn.addEventListener('click', function () { openAuditLogModal(btn.getAttribute('data-audit-log')); });
           });
         })
         .catch(function () {
@@ -1572,6 +1610,7 @@
             '</div>' +
             '<div class="rrp-sub-item-actions">' +
               '<button type="button" class="rrp-btn secondary" data-review="' + escapeHtml(item.id) + '">Review</button>' +
+              '<button type="button" class="rrp-btn secondary rrp-btn-log" data-audit-log="' + escapeHtml(item.id) + '">&#128221; Log</button>' +
             '</div>' +
           '</li>';
         }).join('') +
@@ -1581,6 +1620,9 @@
         btn.addEventListener('click', function () {
           renderSubmissionDetail(btn.getAttribute('data-review'), container, function () { renderReviewerDashboard(container); });
         });
+      });
+      listEl.querySelectorAll('[data-audit-log]').forEach(function (btn) {
+        btn.addEventListener('click', function () { openAuditLogModal(btn.getAttribute('data-audit-log')); });
       });
     }
   }
@@ -1652,7 +1694,11 @@
         '<option value="Rejected">Rejected</option>' +
       '</select></div>' +
       '<div class="rrp-form-block"><label>Feedback <span class="rrp-hint">(required for Needs Revision / Rejected)</span></label>' +
-        '<textarea name="feedbackMsg" rows="3" placeholder="Your feedback to the submitter…"></textarea></div>' +
+        '<textarea name="feedbackMsg" rows="3" placeholder="Your feedback to the submitter\u2026"></textarea></div>' +
+      '<div class="rrp-form-block">' +
+        '<label>Annotated document <span class="rrp-hint">(optional &#8211; upload your copy with inline comments, PDF or DOCX, max 2 MB)</span></label>' +
+        '<input type="file" id="rrp-reviewer-file" accept=".pdf,.docx">' +
+      '</div>' +
       '<button type="submit" class="rrp-btn">Save Decision</button> ' +
       '<span id="rrp-decision-msg" style="margin-left:.5rem;"></span>' +
     '</form>';
@@ -1663,8 +1709,8 @@
     '<form id="rrp-revision-form">' +
       '<div class="rrp-form-block"><label>Title</label><input type="text" name="title" value="' + escapeHtml(sub.title || '') + '" maxlength="200"></div>' +
       '<div class="rrp-form-block"><label>Research area</label><input type="text" name="researchArea" value="' + escapeHtml(sub.researchArea || '') + '"></div>' +
-      '<div class="rrp-form-block"><label>Revised document <span class="rrp-hint">(optional — PDF, DOC, DOCX, max 2 MB)</span></label>' +
-        '<input type="file" name="revisionFile" accept=".pdf,.doc,.docx,.ppt,.pptx,.txt">' +
+      '<div class="rrp-form-block"><label>Revised document <span class="rrp-hint">(optional &#8211; PDF or DOCX only, max 2 MB)</span></label>' +
+        '<input type="file" name="revisionFile" accept=".pdf,.docx">' +
       '</div>' +
       '<button type="submit" class="rrp-btn">Submit Revision</button> ' +
       '<span id="rrp-revision-msg" style="margin-left:.5rem;"></span>' +
@@ -1791,16 +1837,23 @@
                 '</div>' +
                 '<ul class="rrp-list rrp-attachment-list">';
               groups[rr].forEach(function (a) {
-                var isPdf = (a.filename || a.name || '').toLowerCase().endsWith('.pdf');
+                var fname  = (a.filename || a.name || '').toLowerCase();
+                var ext    = fname.split('.').pop();
+                var isPdf  = ext === 'pdf';
+                var isDocx = ext === 'docx';
                 var fileUrl = escapeHtml(restBase + '/submissions/' + submissionId + '/attachments/' + encodeURIComponent(a.filename || a.name) + '?_wpnonce=' + nonce);
                 var inlineUrl = fileUrl + '&inline=1';
                 var uploadedDate = a.uploadedAt ? new Date(a.uploadedAt).toLocaleString() : null;
-                html += '<li class="rrp-attach-item">' +
+                var reviewerBadge = a.uploadedByReviewer
+                  ? ' <span class="rrp-reviewer-annot-badge" title="Annotated version uploaded by reviewer ' + escapeHtml(a.reviewerName || a.reviewerEmail || '') + '">&#128393; Reviewer annotation</span>'
+                  : '';
+                html += '<li class="rrp-attach-item' + (a.uploadedByReviewer ? ' rrp-attach-reviewer' : '') + '">' +
                   '<span class="rrp-attach-icon">&#128196;</span> ' +
                   '<span class="rrp-attach-name">' + escapeHtml(a.name || a.filename) + '</span>' +
+                  reviewerBadge +
                   (uploadedDate ? '<span class="rrp-attach-date">Uploaded: ' + escapeHtml(uploadedDate) + '</span>' : '') +
                   '<span class="rrp-attach-actions">' +
-                  (isPdf ? '<button type="button" class="rrp-btn secondary" data-inline-url="' + inlineUrl + '" data-inline-name="' + escapeHtml(a.name || a.filename) + '">&#128065; View</button> ' : '') +
+                  ((isPdf || isDocx) ? '<button type="button" class="rrp-btn secondary" data-inline-url="' + inlineUrl + '" data-inline-type="' + (isPdf ? 'pdf' : 'docx') + '" data-inline-name="' + escapeHtml(a.name || a.filename) + '">&#128065; View</button> ' : '') +
                   '<a class="rrp-btn secondary" target="_blank" href="' + fileUrl + '">&#8595; Download</a>' +
                   '</span></li>';
               });
@@ -1848,25 +1901,53 @@
           btn.addEventListener('click', function () {
             var url  = btn.getAttribute('data-inline-url');
             var name = btn.getAttribute('data-inline-name');
+            var type = btn.getAttribute('data-inline-type') || 'pdf';
             var isOpen = viewerEl.style.display !== 'none' && viewerEl.getAttribute('data-current') === url;
             if (isOpen) {
               viewerEl.style.display = 'none';
               viewerEl.innerHTML = '';
               viewerEl.removeAttribute('data-current');
               btn.textContent = '\u{1F441} View';
-            } else {
-              el.querySelectorAll('[data-inline-url]').forEach(function (b) { b.textContent = '\u{1F441} View'; });
-              viewerEl.style.display = '';
-              viewerEl.setAttribute('data-current', url);
-              viewerEl.innerHTML = '<div class="rrp-viewer-toolbar"><strong>' + escapeHtml(name) + '</strong>' +
-                '<button type="button" class="rrp-btn secondary" id="rrp-viewer-close">&#10005; Close</button></div>' +
-                '<iframe src="' + url + '" class="rrp-viewer-frame" title="' + escapeHtml(name) + '"></iframe>';
-              document.getElementById('rrp-viewer-close').addEventListener('click', function () {
+              return;
+            }
+            el.querySelectorAll('[data-inline-url]').forEach(function (b) { b.textContent = '\u{1F441} View'; });
+            viewerEl.style.display = '';
+            viewerEl.setAttribute('data-current', url);
+            btn.textContent = '\u2715 Close viewer';
+            var toolbar = '<div class="rrp-viewer-toolbar"><strong>' + escapeHtml(name) + '</strong>' +
+              '<button type="button" class="rrp-btn secondary rrp-viewer-close-btn">&#10005; Close</button></div>';
+            function wireClose() {
+              var closeBtn = viewerEl.querySelector('.rrp-viewer-close-btn');
+              if (closeBtn) closeBtn.addEventListener('click', function () {
                 viewerEl.style.display = 'none'; viewerEl.innerHTML = ''; viewerEl.removeAttribute('data-current');
                 btn.textContent = '\u{1F441} View';
               });
+            }
+            if (type === 'docx' && window.mammoth) {
+              viewerEl.innerHTML = toolbar + '<div style="padding:1rem;color:var(--rrp-text-muted);">Loading document&hellip;</div>';
+              wireClose();
+              fetch(url, { headers: { 'X-WP-Nonce': nonce } })
+                .then(function (r) {
+                  if (!r.ok) throw new Error('HTTP ' + r.status);
+                  return r.arrayBuffer();
+                })
+                .then(function (buf) { return window.mammoth.convertToHtml({ arrayBuffer: buf }); })
+                .then(function (result) {
+                  viewerEl.innerHTML = toolbar +
+                    '<div class="rrp-viewer-docx-content" style="padding:1.5rem 2rem;max-height:72vh;overflow-y:auto;background:#fff;font-family:Georgia,serif;line-height:1.7;">' +
+                    result.value + '</div>';
+                  wireClose();
+                  viewerEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                })
+                .catch(function () {
+                  viewerEl.innerHTML = toolbar + '<div class="rrp-error" style="padding:1rem;">Could not render document. Please use Download instead.</div>';
+                  wireClose();
+                });
+            } else {
+              viewerEl.innerHTML = toolbar +
+                '<iframe src="' + url + '" class="rrp-viewer-frame" title="' + escapeHtml(name) + '"></iframe>';
+              wireClose();
               viewerEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
-              btn.textContent = '&#x2715; Close viewer';
             }
           });
         });
@@ -1909,19 +1990,41 @@
           var stageName   = decForm.querySelector('[name="stageName"]').value;
           var decision    = decForm.querySelector('[name="decision"]').value;
           var feedbackMsg = decForm.querySelector('[name="feedbackMsg"]').value;
-          var body = { stageDecision: { stageName: stageName, reviewerEmail: userEmail, decision: decision } };
-          if (feedbackMsg && (decision === 'Needs Revision' || decision === 'Rejected')) {
-            body.stageFeedback = { stageName: stageName, role: 'reviewer', email: userEmail, name: (window.RRP && window.RRP.userName) || '', message: feedbackMsg };
-          }
+          var fileInput   = document.getElementById('rrp-reviewer-file');
+          var hasFile     = fileInput && fileInput.files && fileInput.files.length > 0;
           var msgEl = document.getElementById('rrp-decision-msg');
-          msgEl.innerHTML = '<span class="rrp-loading">Saving…</span>';
-          api('PATCH', '/submissions/' + encodeURIComponent(submissionId), body)
+          msgEl.innerHTML = '<span class="rrp-loading">Saving\u2026</span>';
+
+          // Step 1: optionally upload annotated file
+          var uploadStep = hasFile
+            ? (function () {
+                var fd = new FormData();
+                fd.append('files', fileInput.files[0]);
+                return fetch(restBase + '/submissions/' + encodeURIComponent(submissionId) + '/attachments', {
+                  method: 'POST',
+                  headers: { 'X-WP-Nonce': nonce },
+                  body: fd
+                }).then(function (r) {
+                  if (!r.ok) return r.json().then(function (d) { throw d; });
+                });
+              })()
+            : Promise.resolve();
+
+          // Step 2: save decision (and optional feedback)
+          uploadStep
+            .then(function () {
+              var body = { stageDecision: { stageName: stageName, reviewerEmail: userEmail, decision: decision } };
+              if (feedbackMsg && (decision === 'Needs Revision' || decision === 'Rejected')) {
+                body.stageFeedback = { stageName: stageName, role: 'reviewer', email: userEmail, name: (window.RRP && window.RRP.userName) || '', message: feedbackMsg };
+              }
+              return api('PATCH', '/submissions/' + encodeURIComponent(submissionId), body);
+            })
             .then(function () {
               msgEl.innerHTML = '<span class="rrp-success">Decision recorded.</span>';
               setTimeout(function () { renderSubmissionDetail(submissionId, container, backFn); }, 1400);
             })
             .catch(function (err) {
-              msgEl.innerHTML = '<span class="rrp-error">' + escapeHtml((err.data && err.data.error) || 'Failed to save.') + '</span>';
+              msgEl.innerHTML = '<span class="rrp-error">' + escapeHtml((err && err.error) || (err && err.data && err.data.error) || 'Failed to save.') + '</span>';
             });
         });
       }
@@ -2120,6 +2223,362 @@
     'specialist': '<span class="rrp-badge-specialist">Specialist</span>'
   };
 
+  var LEVEL_BADGES = {
+    'masters':    '<span class="rrp-badge-masters">Master&#x2019;s</span>',
+    'doctoral':   '<span class="rrp-badge-doctoral">Doctoral</span>',
+    'specialist': '<span class="rrp-badge-specialist">Specialist</span>'
+  };
+
+  // ── Admin User Management ─────────────────────────────────────────────────
+  function renderAdminUserManagement(container, backFn) {
+    var TABS = [
+      { key: 'student',     label: '&#127891; Students',     role: 'rrp_student' },
+      { key: 'reviewer',    label: '&#128064; Reviewers',    role: 'rrp_reviewer' },
+      { key: 'coordinator', label: '&#9994; Coordinators',  role: 'rrp_coordinator' },
+      { key: 'admin',       label: '&#128737; Admins',       role: 'rrp_admin' }
+    ];
+    var activeTab = TABS[0].key;
+
+    function renderPage() {
+      container.innerHTML =
+        '<div class="rrp-mgmt-page-header">' +
+          '<button type="button" class="rrp-btn secondary" id="rrp-ums-back">&#8592; Back</button>' +
+          '<h1>&#128101; User Management</h1>' +
+          '<span></span>' +
+        '</div>' +
+        '<div class="rrp-tabs" style="margin-bottom:1.25rem;">' +
+          TABS.map(function (t) {
+            return '<button class="rrp-tab' + (t.key === activeTab ? ' rrp-tab-active' : '') + '" data-ums-tab="' + t.key + '">' + t.label + '</button>';
+          }).join('') +
+        '</div>' +
+        '<div id="rrp-ums-add-wrap" style="display:none;"></div>' +
+        '<div id="rrp-ums-list"><p class="rrp-loading">Loading&hellip;</p></div>';
+
+      document.getElementById('rrp-ums-back').addEventListener('click', function () {
+        if (backFn) backFn(); else renderCoordinatorDashboard(container);
+      });
+
+      container.querySelectorAll('[data-ums-tab]').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          activeTab = btn.getAttribute('data-ums-tab');
+          container.querySelectorAll('[data-ums-tab]').forEach(function (b) {
+            b.classList.toggle('rrp-tab-active', b.getAttribute('data-ums-tab') === activeTab);
+          });
+          loadTab(activeTab);
+        });
+      });
+
+      loadTab(activeTab);
+    }
+
+    function loadTab(tabKey) {
+      var tab = TABS.find(function (t) { return t.key === tabKey; }) || TABS[0];
+      var addWrap = document.getElementById('rrp-ums-add-wrap');
+      var listEl  = document.getElementById('rrp-ums-list');
+      if (addWrap) addWrap.style.display = 'none';
+      if (listEl) listEl.innerHTML = '<p class="rrp-loading">Loading&hellip;</p>';
+
+      var addBtn = container.querySelector('[data-ums-add]');
+      if (addBtn) addBtn.remove();
+
+      // Insert "Add User" button into header area
+      var hdr = container.querySelector('.rrp-mgmt-page-header span:last-child');
+      if (hdr) {
+        hdr.innerHTML = '<button type="button" class="rrp-btn" data-ums-add="' + tab.key + '">&#43; Add ' + tab.key.charAt(0).toUpperCase() + tab.key.slice(1) + '</button>';
+        hdr.querySelector('[data-ums-add]').addEventListener('click', function () {
+          renderAddUserForm(tab);
+        });
+      }
+
+      api('GET', '/portal-users?role=' + tabKey).then(function (res) {
+        var users = res.users || [];
+        if (!listEl) return;
+        if (users.length === 0) {
+          listEl.innerHTML = '<div class="rrp-empty-state"><p>No ' + tab.key + ' accounts yet. Click <strong>&#43; Add ' + tab.key.charAt(0).toUpperCase() + tab.key.slice(1) + '</strong> to create one.</p></div>';
+          return;
+        }
+        listEl.innerHTML =
+          '<div class="rrp-user-mgmt-table">' +
+            '<div class="rrp-umr-head"><span>Name</span><span>Email</span><span>Info</span><span>Actions</span></div>' +
+            users.map(function (u) {
+              var info = '';
+              if (tabKey === 'student')     info = escapeHtml(u.degree || '—');
+              if (tabKey === 'reviewer' || tabKey === 'faculty') info = escapeHtml(u.department || '—');
+              if (tabKey === 'coordinator') info = (u.programIds && u.programIds.length) ? u.programIds.length + ' programs' : '—';
+              if (tabKey === 'admin')       info = 'Admin';
+              return '<div class="rrp-umr-row">' +
+                '<span class="rrp-umr-name"><strong>' + escapeHtml(u.name || u.email) + '</strong></span>' +
+                '<span class="rrp-umr-email">' + escapeHtml(u.email) + '</span>' +
+                '<span style="font-size:.85rem;">' + info + '</span>' +
+                '<span class="rrp-umr-actions">' +
+                  '<button type="button" class="rrp-btn secondary small" data-ums-edit="' + u.id + '">Edit</button> ' +
+                  '<button type="button" class="rrp-btn secondary small" data-ums-reset="' + u.id + '" title="Reset password">&#128274; Reset PW</button> ' +
+                  '<button type="button" class="rrp-btn danger small" data-ums-remove="' + u.id + '">Remove</button>' +
+                '</span>' +
+              '</div>';
+            }).join('') +
+          '</div>';
+
+        listEl.querySelectorAll('[data-ums-edit]').forEach(function (btn) {
+          var uid  = btn.getAttribute('data-ums-edit');
+          var user = users.find(function (u) { return String(u.id) === uid; });
+          btn.addEventListener('click', function () { renderEditUserForm(tab, user); });
+        });
+        listEl.querySelectorAll('[data-ums-reset]').forEach(function (btn) {
+          var uid  = btn.getAttribute('data-ums-reset');
+          var user = users.find(function (u) { return String(u.id) === uid; });
+          btn.addEventListener('click', function () { renderResetPasswordForm(user); });
+        });
+        listEl.querySelectorAll('[data-ums-remove]').forEach(function (btn) {
+          var uid  = btn.getAttribute('data-ums-remove');
+          var user = users.find(function (u) { return String(u.id) === uid; });
+          btn.addEventListener('click', function () {
+            if (!confirm('Remove portal access for ' + escapeHtml(user ? (user.name || user.email) : 'this user') + '?\nThey will lose the ' + tab.key + ' role but remain as a WordPress user.')) return;
+            api('DELETE', '/portal-users/' + uid)
+              .then(function () { loadTab(activeTab); })
+              .catch(function (err) { alert('Failed: ' + ((err && err.data && err.data.error) || 'Please try again.')); });
+          });
+        });
+
+      }).catch(function () {
+        if (listEl) listEl.innerHTML = '<div class="rrp-error">Unable to load users.</div>';
+      });
+    }
+
+    function renderAddUserForm(tab) {
+      var addWrap = document.getElementById('rrp-ums-add-wrap');
+      if (!addWrap) return;
+      addWrap.style.display = 'block';
+
+      var extraFields = '';
+      if (tab.key === 'student') {
+        extraFields =
+          '<div class="rrp-form-group"><label>Degree / Program</label>' +
+          '<select id="umf-degree" class="rrp-input">' +
+            '<option value="">&#8212; Select &#8212;</option>' +
+            OB_DEGREE_SCHOOLS.map(function (sch) {
+              return '<optgroup label="School of ' + sch + '">' +
+                OB_DEGREES.filter(function (d) { return d.school === sch; }).map(function (d) {
+                  return '<option value="' + escapeHtml(d.value) + '">' + escapeHtml(d.label) + '</option>';
+                }).join('') + '</optgroup>';
+            }).join('') +
+          '</select></div>';
+      } else if (tab.key === 'reviewer' || tab.key === 'faculty') {
+        extraFields =
+          '<div class="rrp-form-group"><label>Department</label><select id="umf-department" class="rrp-input" data-dept-select><option value="">Loading&#8230;</option></select></div>' +
+          '<div class="rrp-form-group"><label>Expertise</label><textarea id="umf-expertise" class="rrp-input" rows="2" placeholder="Areas of expertise, research interests\u2026"></textarea></div>';
+      } else if (tab.key === 'coordinator') {
+        extraFields =
+          '<div class="rrp-form-group"><label>Department</label><select id="umf-department" class="rrp-input" data-dept-select><option value="">Loading&#8230;</option></select></div>';
+      }
+
+      addWrap.innerHTML =
+        '<div class="rrp-analytics-card" style="margin-bottom:1.25rem;border:2px solid var(--rrp-primary);">' +
+          '<h3 style="margin:0 0 1rem;font-size:1rem;">Add New ' + tab.key.charAt(0).toUpperCase() + tab.key.slice(1) + '</h3>' +
+          '<div class="rrp-form-row">' +
+            '<div class="rrp-form-group"><label>First Name</label><input type="text" id="umf-first" class="rrp-input" placeholder="First name"></div>' +
+            '<div class="rrp-form-group"><label>Last Name</label><input type="text" id="umf-last" class="rrp-input" placeholder="Last name"></div>' +
+          '</div>' +
+          '<div class="rrp-form-group"><label>Email Address <em>*</em></label><input type="email" id="umf-email" class="rrp-input" placeholder="user@cityuniversity.edu"></div>' +
+          '<div class="rrp-form-group">' +
+            '<label>Temporary Password <em>(optional)</em></label>' +
+            '<input type="text" id="umf-password" class="rrp-input" placeholder="Leave blank to auto-generate">' +
+            '<small style="color:var(--rrp-text-muted)">A secure password is auto-generated if left blank.</small>' +
+          '</div>' +
+          extraFields +
+          '<div id="umf-msg" style="min-height:1.3rem;margin:.4rem 0;"></div>' +
+          '<div style="display:flex;gap:.6rem;">' +
+            '<button type="button" class="rrp-btn" id="umf-save-btn">&#10003; Create ' + tab.key.charAt(0).toUpperCase() + tab.key.slice(1) + '</button>' +
+            '<button type="button" class="rrp-btn secondary" id="umf-cancel-btn">Cancel</button>' +
+          '</div>' +
+        '</div>';
+
+      document.getElementById('umf-cancel-btn').addEventListener('click', function () {
+        addWrap.style.display = 'none';
+      });
+
+      // Populate department dropdown if present
+      var deptSelAdd = addWrap.querySelector('[data-dept-select]');
+      if (deptSelAdd) {
+        api('GET', '/config').then(function (cfg) {
+          var depts = cfg.departments || [];
+          deptSelAdd.innerHTML = '<option value="">&#8212; Select department &#8212;</option>' +
+            depts.map(function (d) { return '<option value="' + escapeHtml(d.id) + '">' + escapeHtml(d.label) + '</option>'; }).join('');
+        }).catch(function () { deptSelAdd.innerHTML = '<option value="">Unable to load departments</option>'; });
+      }
+
+      document.getElementById('umf-save-btn').addEventListener('click', function () {
+        var fn      = (document.getElementById('umf-first') ? document.getElementById('umf-first').value.trim() : '');
+        var ln      = (document.getElementById('umf-last')  ? document.getElementById('umf-last').value.trim()  : '');
+        var email   = (document.getElementById('umf-email') ? document.getElementById('umf-email').value.trim() : '');
+        var pw      = (document.getElementById('umf-password') ? document.getElementById('umf-password').value : '');
+        var msgEl   = document.getElementById('umf-msg');
+        var saveBtn = document.getElementById('umf-save-btn');
+        if (!email) { msgEl.innerHTML = '<span class="rrp-error">Email is required.</span>'; return; }
+        var payload = { firstName: fn, lastName: ln, email: email, role: tab.role };
+        if (pw) payload.password = pw;
+        if (tab.key === 'student') {
+          var degEl = document.getElementById('umf-degree');
+          if (degEl && degEl.value) payload.degree = degEl.value;
+        }
+        if (tab.key === 'reviewer' || tab.key === 'faculty' || tab.key === 'coordinator') {
+          var deptEl = document.getElementById('umf-department');
+          if (deptEl && deptEl.value) payload.department = deptEl.value;
+        }
+        if (tab.key === 'reviewer' || tab.key === 'faculty') {
+          var expEl = document.getElementById('umf-expertise');
+          if (expEl && expEl.value) payload.expertise = expEl.value;
+        }
+        saveBtn.disabled = true; saveBtn.textContent = 'Creating\u2026';
+        msgEl.innerHTML = '';
+        api('POST', '/portal-users', payload)
+          .then(function () {
+            addWrap.style.display = 'none';
+            loadTab(activeTab);
+          })
+          .catch(function (err) {
+            saveBtn.disabled = false; saveBtn.textContent = '\u2713 Create ' + tab.key.charAt(0).toUpperCase() + tab.key.slice(1);
+            msgEl.innerHTML = '<span class="rrp-error">' + escapeHtml((err && err.data && err.data.error) || 'Create failed.') + '</span>';
+          });
+      });
+    }
+
+    function renderEditUserForm(tab, user) {
+      if (!user) return;
+      var listEl = document.getElementById('rrp-ums-list');
+      if (!listEl) return;
+
+      var extraFields = '';
+      if (tab.key === 'student') {
+        extraFields =
+          '<div class="rrp-form-group"><label>Degree / Program</label>' +
+          '<select id="umf-degree" class="rrp-input">' +
+            '<option value="">&#8212; Select &#8212;</option>' +
+            OB_DEGREE_SCHOOLS.map(function (sch) {
+              return '<optgroup label="School of ' + sch + '">' +
+                OB_DEGREES.filter(function (d) { return d.school === sch; }).map(function (d) {
+                  return '<option value="' + escapeHtml(d.value) + '"' + (user.degree === d.value ? ' selected' : '') + '>' + escapeHtml(d.label) + '</option>';
+                }).join('') + '</optgroup>';
+            }).join('') +
+          '</select></div>';
+      } else if (tab.key === 'reviewer' || tab.key === 'faculty') {
+        extraFields =
+          '<div class="rrp-form-group"><label>Department</label><select id="umf-department" class="rrp-input" data-dept-select data-dept-val="' + escapeHtml(user.department || '') + '"><option value="">Loading&#8230;</option></select></div>' +
+          '<div class="rrp-form-group"><label>Expertise</label><textarea id="umf-expertise" class="rrp-input" rows="2">' + escapeHtml(user.expertise || '') + '</textarea></div>';
+      } else if (tab.key === 'coordinator') {
+        extraFields =
+          '<div class="rrp-form-group"><label>Department</label><select id="umf-department" class="rrp-input" data-dept-select data-dept-val="' + escapeHtml(user.department || '') + '"><option value="">Loading&#8230;</option></select></div>';
+      }
+
+      var nameParts = (user.name || '').split(' ');
+      var fn = nameParts[0] || ''; var ln = nameParts.slice(1).join(' ') || '';
+      listEl.innerHTML =
+        '<div class="rrp-analytics-card" style="border:2px solid var(--rrp-primary);">' +
+          '<h3 style="margin:0 0 1rem;font-size:1rem;">Edit ' + escapeHtml(user.name || user.email) + '</h3>' +
+          '<div class="rrp-form-row">' +
+            '<div class="rrp-form-group"><label>First Name</label><input type="text" id="umf-first" class="rrp-input" value="' + escapeHtml(fn) + '"></div>' +
+            '<div class="rrp-form-group"><label>Last Name</label><input type="text" id="umf-last" class="rrp-input" value="' + escapeHtml(ln) + '"></div>' +
+          '</div>' +
+          extraFields +
+          '<div id="umf-msg" style="min-height:1.3rem;margin:.4rem 0;"></div>' +
+          '<div style="display:flex;gap:.6rem;">' +
+            '<button type="button" class="rrp-btn" id="umf-save-btn">&#10003; Save Changes</button>' +
+            '<button type="button" class="rrp-btn secondary" id="umf-cancel-btn">&#8592; Back to List</button>' +
+          '</div>' +
+        '</div>';
+
+      document.getElementById('umf-cancel-btn').addEventListener('click', function () { loadTab(activeTab); });
+
+      // Populate department dropdown if present (edit form)
+      var deptSelEdit = listEl.querySelector('[data-dept-select]');
+      if (deptSelEdit) {
+        var savedDeptVal = deptSelEdit.getAttribute('data-dept-val') || '';
+        api('GET', '/config').then(function (cfg) {
+          var depts = cfg.departments || [];
+          deptSelEdit.innerHTML = '<option value="">&#8212; Select department &#8212;</option>' +
+            depts.map(function (d) {
+              return '<option value="' + escapeHtml(d.id) + '"' + (d.id === savedDeptVal ? ' selected' : '') + '>' + escapeHtml(d.label) + '</option>';
+            }).join('');
+        }).catch(function () { deptSelEdit.innerHTML = '<option value="">Unable to load departments</option>'; });
+      }
+
+      document.getElementById('umf-save-btn').addEventListener('click', function () {
+        var saveBtn = document.getElementById('umf-save-btn');
+        var msgEl   = document.getElementById('umf-msg');
+        var fnEl = document.getElementById('umf-first'); var lnEl = document.getElementById('umf-last');
+        var payload = {};
+        if (fnEl) payload.firstName = fnEl.value.trim();
+        if (lnEl) payload.lastName  = lnEl.value.trim();
+        if (tab.key === 'student') {
+          var degEl = document.getElementById('umf-degree');
+          if (degEl) payload.degree = degEl.value;
+        }
+        if (tab.key === 'reviewer' || tab.key === 'faculty' || tab.key === 'coordinator') {
+          var deptEl = document.getElementById('umf-department');
+          if (deptEl) payload.department = deptEl.value;
+        }
+        if (tab.key === 'reviewer' || tab.key === 'faculty') {
+          var expEl = document.getElementById('umf-expertise');
+          if (expEl) payload.expertise = expEl.value;
+        }
+        saveBtn.disabled = true; saveBtn.textContent = 'Saving\u2026';
+        msgEl.innerHTML = '';
+        api('PATCH', '/portal-users/' + user.id, payload)
+          .then(function () { loadTab(activeTab); })
+          .catch(function (err) {
+            saveBtn.disabled = false; saveBtn.textContent = '\u2713 Save Changes';
+            msgEl.innerHTML = '<span class="rrp-error">' + escapeHtml((err && err.data && err.data.error) || 'Save failed.') + '</span>';
+          });
+      });
+    }
+
+    function renderResetPasswordForm(user) {
+      if (!user) return;
+      var listEl = document.getElementById('rrp-ums-list');
+      if (!listEl) return;
+      listEl.innerHTML =
+        '<div class="rrp-analytics-card" style="border:2px solid #f59e0b;">' +
+          '<h3 style="margin:0 0 .5rem;font-size:1rem;">&#128274; Reset Password &mdash; ' + escapeHtml(user.name || user.email) + '</h3>' +
+          '<p style="font-size:.85rem;color:var(--rrp-text-muted);margin-bottom:1rem;">Enter a new password below, or leave blank to auto-generate a secure password.</p>' +
+          '<div class="rrp-form-group">' +
+            '<label>New Password</label>' +
+            '<input type="text" id="rp-password" class="rrp-input" placeholder="Leave blank to auto-generate">' +
+          '</div>' +
+          '<div id="rp-msg" style="min-height:1.3rem;margin:.4rem 0;"></div>' +
+          '<div style="display:flex;gap:.6rem;">' +
+            '<button type="button" class="rrp-btn" id="rp-save-btn" style="background:#f59e0b;border-color:#f59e0b;">&#128274; Reset Password</button>' +
+            '<button type="button" class="rrp-btn secondary" id="rp-cancel-btn">&#8592; Back to List</button>' +
+          '</div>' +
+        '</div>';
+
+      document.getElementById('rp-cancel-btn').addEventListener('click', function () { loadTab(activeTab); });
+      document.getElementById('rp-save-btn').addEventListener('click', function () {
+        var saveBtn  = document.getElementById('rp-save-btn');
+        var msgEl    = document.getElementById('rp-msg');
+        var password = (document.getElementById('rp-password').value || '').trim();
+        var payload  = {};
+        if (password) payload.password = password;
+        saveBtn.disabled = true; saveBtn.textContent = 'Resetting\u2026';
+        msgEl.innerHTML = '';
+        api('POST', '/portal-users/' + user.id + '/reset-password', payload)
+          .then(function (res) {
+            var pw = res.newPassword || '';
+            msgEl.innerHTML =
+              '<span class="rrp-success">Password reset. ' +
+              (pw ? 'New password: <code style="background:#f0f0f0;padding:.1rem .4rem;border-radius:3px;">' + escapeHtml(pw) + '</code> &mdash; provide this to the user.' : '') +
+              '</span>';
+            saveBtn.disabled = false; saveBtn.textContent = '\u128274 Reset Password';
+          })
+          .catch(function (err) {
+            saveBtn.disabled = false; saveBtn.textContent = '\u128274 Reset Password';
+            msgEl.innerHTML = '<span class="rrp-error">' + escapeHtml((err && err.data && err.data.error) || 'Reset failed.') + '</span>';
+          });
+      });
+    }
+
+    renderPage();
+  }
+
   // ── Student Management ────────────────────────────────────────────────────
   function renderStudentManagement(container, backFn) {
     container.innerHTML =
@@ -2224,12 +2683,14 @@
     var isEdit     = !!(editUser && editUser.id) && !isJsonOnly;
     var isImport   = isJsonOnly;
     var nameParts  = (isEdit || isImport) ? (editUser.name || '').split(' ') : [];
+    var initialProgram = isEdit ? (editUser.programId || editUser.degree || '') : '';
     var state = {
       firstName:             (isEdit || isImport) ? (nameParts[0] || '') : '',
       lastName:              (isEdit || isImport) ? (nameParts.slice(1).join(' ') || '') : '',
       email:                 (isEdit || isImport) ? (editUser.email || '') : '',
       password:              '',
-      degree:                isEdit ? (editUser.degree || '') : '',
+      degree:                initialProgram,
+      programId:             initialProgram,
       allowedTypes:          isEdit ? (editUser.allowedTypes || []) : [],
       defaultStageReviewers: isEdit ? (editUser.defaultStageReviewers || {}) : {},
       step: 1
@@ -2240,8 +2701,11 @@
       container.querySelectorAll('[name="ob-allowedTypes"]:checked').forEach(function (cb) {
         state.allowedTypes.push(cb.value);
       });
-      var degEl = container.querySelector('#ob-degree');
-      if (degEl) state.degree = degEl.value;
+      var progEl = container.querySelector('#ob-program-id');
+      if (progEl) {
+        state.degree    = progEl.value;
+        state.programId = progEl.value;
+      }
     }
 
     function captureStep3() {
@@ -2316,7 +2780,8 @@
       var payload = {
         firstName: state.firstName, lastName: state.lastName,
         degree: state.degree, allowedTypes: state.allowedTypes,
-        defaultStageReviewers: state.defaultStageReviewers
+        defaultStageReviewers: state.defaultStageReviewers,
+        programId: state.programId || ''
       };
       var method = isEdit ? 'PATCH' : 'POST';
       var endpoint = isEdit ? '/portal-users/' + editUser.id : '/portal-users';
@@ -2362,16 +2827,8 @@
         body =
           '<h2 class="rrp-ob-step-heading">Step 2: Academic Profile</h2>' +
           '<div class="rrp-form-group">' +
-            '<label>Program</label>' +
-            '<select id="ob-degree" class="rrp-input">' +
-              '<option value="">&#8212; Select program &#8212;</option>' +
-              OB_DEGREE_SCHOOLS.map(function (sch) {
-                var opts = OB_DEGREES.filter(function (d) { return d.school === sch; }).map(function (d) {
-                  return '<option value="' + escapeHtml(d.value) + '"' + (state.degree === d.value ? ' selected' : '') + '>' + escapeHtml(d.label) + '</option>';
-                }).join('');
-                return '<optgroup label="School of ' + sch + '">' + opts + '</optgroup>';
-              }).join('') +
-            '</select>' +
+            '<label>Degree Program</label>' +
+            '<select id="ob-program-id" class="rrp-input"><option value="">Loading&hellip;</option></select>' +
           '</div>' +
           '<div class="rrp-form-group">' +
             '<label>Allowed Submission Types</label>' +
@@ -2443,6 +2900,35 @@
             cb.closest('.rrp-check-chip').classList.toggle('checked', cb.checked);
           });
         });
+        // Populate program dropdown from config (single source for degree + coordinator scoping)
+        var progSelect = container.querySelector('#ob-program-id');
+        if (progSelect) {
+          api('GET', '/config').then(function (cfg) {
+            var programs = cfg.programs || [];
+            if (!programs.length) {
+              progSelect.innerHTML = '<option value="">No programs configured yet — add programs first</option>';
+              return;
+            }
+            var pSchools = {};
+            programs.forEach(function (p) {
+              var sch = p.school || 'Other';
+              if (!pSchools[sch]) pSchools[sch] = [];
+              pSchools[sch].push(p);
+            });
+            var LEVEL_ABBR = { doctoral: 'Doctoral', masters: "Master's", specialist: 'Specialist', undergraduate: 'Undergraduate', certificate: 'Certificate' };
+            progSelect.innerHTML = '<option value="">&#8212; Select degree program &#8212;</option>' +
+              Object.keys(pSchools).sort().map(function (sch) {
+                return '<optgroup label="School of ' + escapeHtml(sch) + '">' +
+                  pSchools[sch].map(function (p) {
+                    var lvl = LEVEL_ABBR[p.level] || p.level || '';
+                    return '<option value="' + escapeHtml(p.id) + '"' + (state.programId === p.id ? ' selected' : '') + '>' +
+                      escapeHtml(p.label) + (lvl ? ' — ' + lvl : '') +
+                    '</option>';
+                  }).join('') +
+                '</optgroup>';
+              }).join('');
+          }).catch(function () { progSelect.innerHTML = '<option value="">Unable to load programs</option>'; });
+        }
         container.querySelector('#rrp-ob-next-btn').addEventListener('click', function () {
           captureStep2();
           state.step = 3;
@@ -2581,7 +3067,7 @@
             '<div class="rrp-form-group"><label>Temporary Password</label><input type="text" id="ob-password" class="rrp-input" placeholder="Leave blank to auto-generate"><small style="color:var(--rrp-text-muted)">If blank, a secure password is generated.</small></div>'
           : '<div class="rrp-form-group"><label>Change Password <em>(optional)</em></label><input type="text" id="ob-password" class="rrp-input" value="" placeholder="Leave blank to keep current password"><small style="color:var(--rrp-text-muted)">Only fill this to set a new password.</small></div>') +
           '<div class="rrp-form-row">' +
-            '<div class="rrp-form-group"><label>Department / Unit</label><input type="text" id="ob-dept" class="rrp-input" value="' + escapeHtml(isEdit ? (editUser.department || '') : '') + '" placeholder="e.g. Computer Science"></div>' +
+            '<div class="rrp-form-group"><label>Department / Unit</label><select id="ob-dept" class="rrp-input" data-dept-select data-dept-val="' + escapeHtml(isEdit ? (editUser.department || '') : '') + '"><option value="">Loading&#8230;</option></select></div>' +
             '<div class="rrp-form-group"><label>Expertise / Specialization</label><input type="text" id="ob-expertise" class="rrp-input" value="' + escapeHtml(isEdit ? (editUser.expertise || '') : '') + '" placeholder="e.g. Machine Learning, HCI"></div>' +
           '</div>' +
           '<div class="rrp-form-group">' +
@@ -2608,6 +3094,19 @@
         cb.closest('.rrp-check-chip').classList.toggle('checked', cb.checked);
       });
     });
+
+    // Populate department dropdown in reviewer onboard form
+    var obDeptSel = container.querySelector('#ob-dept[data-dept-select]');
+    if (obDeptSel) {
+      var savedVal = obDeptSel.getAttribute('data-dept-val') || '';
+      api('GET', '/config').then(function (cfg) {
+        var depts = cfg.departments || [];
+        obDeptSel.innerHTML = '<option value="">&#8212; Select department &#8212;</option>' +
+          depts.map(function (d) {
+            return '<option value="' + escapeHtml(d.id) + '"' + (d.id === savedVal ? ' selected' : '') + '>' + escapeHtml(d.label) + '</option>';
+          }).join('');
+      }).catch(function () { obDeptSel.innerHTML = '<option value="">Unable to load departments</option>'; });
+    }
 
     container.querySelector('#rrp-ob-cancel-btn').addEventListener('click', function () {
       if (backFn) backFn(); else renderCoordinatorDashboard(container);
@@ -2736,29 +3235,180 @@
       '<div class="rrp-mgmt-page-header">' +
         '<button type="button" class="rrp-btn secondary" id="rrp-prog-back">&#8592; Back</button>' +
         '<h1>&#127979; Program Management</h1>' +
-        '<span></span>' +
+        '<button type="button" class="rrp-btn" id="rrp-prog-create-btn">&#43; New Program</button>' +
       '</div>' +
-      '<p style="font-size:.88rem;color:var(--rrp-text-muted);margin-bottom:1rem">Manage program directors for each degree program. Changes are saved to the portal configuration.</p>' +
+      '<p style="font-size:.88rem;color:var(--rrp-text-muted);margin-bottom:1rem">Manage degree programs: create, assign program directors and coordinators, or remove programs.</p>' +
+      '<div id="rrp-create-prog-wrap" style="display:none;"></div>' +
       '<div id="rrp-programs-body"><p class="rrp-loading">Loading programs&hellip;</p></div>';
 
     document.getElementById('rrp-prog-back').addEventListener('click', function () {
       if (backFn) backFn(); else renderCoordinatorDashboard(container);
     });
 
+    document.getElementById('rrp-prog-create-btn').addEventListener('click', function () {
+      var wrap = document.getElementById('rrp-create-prog-wrap');
+      if (!wrap) return;
+      if (wrap.style.display !== 'none') { wrap.style.display = 'none'; return; }
+      wrap.style.display = 'block';
+      var SCHOOL_OPTIONS = ['Business', 'Education', 'Technology'];
+      var LEVEL_OPTIONS  = [
+        { value: 'doctoral',       label: 'Doctoral' },
+        { value: 'masters',        label: "Master's" },
+        { value: 'undergraduate',  label: 'Undergraduate' },
+        { value: 'certificate',    label: 'Certificate' }
+      ];
+      wrap.innerHTML =
+        '<div class="rrp-analytics-card" style="margin-bottom:1.25rem;border:2px solid var(--rrp-primary);">' +
+          '<h3 style="margin:0 0 1rem;font-size:1rem;">Create New Program</h3>' +
+          '<div class="rrp-form-row">' +
+            '<div class="rrp-form-group">' +
+              '<label>Program ID <em style="font-size:.8rem;font-weight:400">(unique slug, e.g. mba)</em></label>' +
+              '<input type="text" id="np-id" class="rrp-input" placeholder="e.g. dba, mscis, bscs">' +
+            '</div>' +
+            '<div class="rrp-form-group">' +
+              '<label>School</label>' +
+              '<select id="np-school" class="rrp-input">' +
+                SCHOOL_OPTIONS.map(function(s){ return '<option value="' + s + '">' + s + '</option>'; }).join('') +
+              '</select>' +
+            '</div>' +
+          '</div>' +
+          '<div class="rrp-form-group">' +
+            '<label>Program Full Name</label>' +
+            '<input type="text" id="np-label" class="rrp-input" placeholder="e.g. Master of Science in Computer Information Systems">' +
+          '</div>' +
+          '<div class="rrp-form-row">' +
+            '<div class="rrp-form-group">' +
+              '<label>Level</label>' +
+              '<select id="np-level" class="rrp-input">' +
+                LEVEL_OPTIONS.map(function(l){ return '<option value="' + l.value + '">' + l.label + '</option>'; }).join('') +
+              '</select>' +
+            '</div>' +
+          '</div>' +
+          '<div id="rrp-np-msg" style="min-height:1.3rem;margin:.4rem 0;"></div>' +
+          '<div style="display:flex;gap:.6rem;">' +
+            '<button type="button" class="rrp-btn" id="rrp-np-save-btn">&#10003; Create Program</button>' +
+            '<button type="button" class="rrp-btn secondary" id="rrp-np-cancel-btn">Cancel</button>' +
+          '</div>' +
+        '</div>';
+
+      document.getElementById('rrp-np-cancel-btn').addEventListener('click', function () {
+        wrap.style.display = 'none';
+      });
+      document.getElementById('rrp-np-save-btn').addEventListener('click', function () {
+        var pid   = (document.getElementById('np-id').value || '').trim().toLowerCase().replace(/[^a-z0-9\-]/g, '');
+        var label = (document.getElementById('np-label').value || '').trim();
+        var school = document.getElementById('np-school').value;
+        var level  = document.getElementById('np-level').value;
+        var msgEl  = document.getElementById('rrp-np-msg');
+        if (!pid)   { msgEl.innerHTML = '<span class="rrp-error">Program ID is required.</span>'; return; }
+        if (!label) { msgEl.innerHTML = '<span class="rrp-error">Program name is required.</span>'; return; }
+        var saveBtn = document.getElementById('rrp-np-save-btn');
+        saveBtn.disabled = true; saveBtn.textContent = 'Saving\u2026';
+        api('GET', '/config').then(function (config) {
+          var programs = (config.programs || []).slice();
+          if (programs.some(function (p) { return p.id === pid; })) {
+            msgEl.innerHTML = '<span class="rrp-error">A program with this ID already exists.</span>';
+            saveBtn.disabled = false; saveBtn.textContent = '\u2713 Create Program';
+            return;
+          }
+          programs.push({ id: pid, label: label, level: level, school: school, programDirectorId: '', coordinatorIds: [] });
+          api('PUT', '/config', { programs: programs }).then(function () {
+            wrap.style.display = 'none';
+            renderProgramManagement(container, backFn);
+          }).catch(function (err) {
+            msgEl.innerHTML = '<span class="rrp-error">' + escapeHtml((err && err.data && err.data.error) || 'Save failed.') + '</span>';
+            saveBtn.disabled = false; saveBtn.textContent = '\u2713 Create Program';
+          });
+        }).catch(function () {
+          msgEl.innerHTML = '<span class="rrp-error">Failed to load config.</span>';
+          saveBtn.disabled = false; saveBtn.textContent = '\u2713 Create Program';
+        });
+      });
+    });
+
     Promise.all([
       api('GET', '/config'),
-      api('GET', '/reviewers')
+      api('GET', '/reviewers'),
+      api('GET', '/portal-users?role=coordinator')
     ]).then(function (results) {
-      var config    = results[0];
-      var reviewers = (results[1].reviewers || results[1] || []);
-      var programs  = (config.programs || []).slice(); // copy
+      var config      = results[0];
+      var reviewers   = (results[1].reviewers || results[1] || []);
+      var coordUsers  = (results[2].users || []);
+      var programs    = (config.programs || []).slice();
 
       // Build reviewer id → object map
       var reviewerMap = {};
       reviewers.forEach(function (r) { reviewerMap[r.id] = r; });
+      // Build WP user ID → name map for coordinators
+      var coordMap = {};
+      coordUsers.forEach(function (u) { coordMap[String(u.id)] = u.name || u.email; });
 
-      var schools = ['Business', 'Education', 'Technology'];
-      var html = '';
+      var schools     = ['Business', 'Education', 'Technology'];
+      var dissertDirId = config.dissertationDirectorId || '';
+      var departments  = (config.departments || []);
+
+      // Helper: build department options HTML
+      function deptOptions(selectedId) {
+        return '<option value="">&#8212; Select department &#8212;</option>' +
+          departments.map(function (d) {
+            return '<option value="' + escapeHtml(d.id) + '"' + (d.id === (selectedId || '') ? ' selected' : '') + '>' + escapeHtml(d.label) + '</option>';
+          }).join('');
+      }
+
+      var html =
+        // ── Departments card ───────────────────────────────────────────────
+        '<div class="rrp-analytics-card" style="margin-bottom:1.5rem;">' +
+          '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.75rem;">' +
+            '<h2 class="rrp-prog-school-title" style="margin:0;">&#127970; Departments</h2>' +
+            '<button class="rrp-btn rrp-btn-sm" id="rrp-dept-add-btn">&#43; Add Department</button>' +
+          '</div>' +
+          '<div id="rrp-dept-add-form" style="display:none;margin-bottom:.75rem;">' +
+            '<div style="display:flex;gap:.6rem;align-items:flex-end;flex-wrap:wrap;">' +
+              '<div class="rrp-form-group" style="margin:0;min-width:160px;">' +
+                '<label style="font-size:.82rem;">ID <em style="font-weight:400;">(slug)</em></label>' +
+                '<input type="text" id="rrp-dept-new-id" class="rrp-input" placeholder="e.g. nursing" style="font-size:.83rem;">' +
+              '</div>' +
+              '<div class="rrp-form-group" style="margin:0;flex:1;min-width:200px;">' +
+                '<label style="font-size:.82rem;">Display Name</label>' +
+                '<input type="text" id="rrp-dept-new-label" class="rrp-input" placeholder="e.g. School of Nursing" style="font-size:.83rem;">' +
+              '</div>' +
+              '<button class="rrp-btn rrp-btn-sm" id="rrp-dept-save-btn">&#10003; Save</button>' +
+              '<button class="rrp-btn secondary rrp-btn-sm" id="rrp-dept-cancel-btn">Cancel</button>' +
+              '<span id="rrp-dept-msg" style="font-size:.82rem;"></span>' +
+            '</div>' +
+          '</div>' +
+          (departments.length
+            ? '<div class="rrp-user-mgmt-table">' +
+                departments.map(function (d) {
+                  return '<div class="rrp-umr-row" style="grid-template-columns:1fr 2fr auto;">' +
+                    '<span style="font-size:.83rem;color:var(--rrp-text-muted);font-family:monospace;">' + escapeHtml(d.id) + '</span>' +
+                    '<span><strong>' + escapeHtml(d.label) + '</strong></span>' +
+                    '<span><button class="rrp-btn danger rrp-btn-sm" data-delete-dept="' + escapeHtml(d.id) + '">&#128465;</button></span>' +
+                  '</div>';
+                }).join('') +
+              '</div>'
+            : '<p style="color:var(--rrp-text-muted);font-size:.85rem;">No departments yet. Click <strong>+ Add Department</strong> to create one.</p>') +
+        '</div>' +
+        // ── University Roles card ──────────────────────────────────────────
+        '<div class="rrp-analytics-card" style="margin-bottom:1.5rem;">' +
+          '<h2 class="rrp-prog-school-title">&#127979; University Roles</h2>' +
+          '<p style="font-size:.85rem;color:var(--rrp-text-muted);margin:.25rem 0 .75rem;">Assign university-wide roles that apply across all programs.</p>' +
+          '<div style="display:flex;gap:1rem;align-items:flex-end;flex-wrap:wrap;">' +
+            '<div class="rrp-form-group" style="margin:0;flex:1;min-width:220px;">' +
+              '<label>Dissertation Director <small style="font-weight:400;color:var(--rrp-text-muted);">(university-wide, all dissertations)</small></label>' +
+              '<select id="rrp-diss-dir-sel" class="rrp-input" style="font-size:.85rem;">' +
+                '<option value="">&#8212; Not assigned &#8212;</option>' +
+                reviewers.map(function (r) {
+                  return '<option value="' + escapeHtml(r.id) + '"' + (r.id === dissertDirId ? ' selected' : '') + '>' + escapeHtml(r.name) + '</option>';
+                }).join('') +
+              '</select>' +
+            '</div>' +
+            '<div style="display:flex;align-items:center;gap:.5rem;">' +
+              '<button class="rrp-btn rrp-btn-sm" id="rrp-save-diss-dir">&#10003; Save</button>' +
+              '<span id="rrp-diss-dir-msg" style="font-size:.83rem;"></span>' +
+            '</div>' +
+          '</div>' +
+        '</div>';
 
       schools.forEach(function (school) {
         var schoolProgs = programs.filter(function (p) { return p.school === school; });
@@ -2766,7 +3416,7 @@
         html +=
           '<div class="rrp-analytics-card rrp-prog-school-section">' +
             '<h2 class="rrp-prog-school-title">School of ' + escapeHtml(school) + ' &nbsp;<small style="font-weight:400;color:var(--rrp-text-muted);font-size:.8rem">' + schoolProgs.length + ' programs</small></h2>' +
-            '<div class="rrp-prog-header"><span>Program</span><span>Level</span><span>Program Director</span><span>Actions</span></div>';
+            '<div class="rrp-prog-header"><span>Program</span><span>Level</span><span>Director</span><span>Coordinators</span><span>Actions</span></div>';
 
         schoolProgs.forEach(function (prog) {
           var dir  = reviewerMap[prog.programDirectorId];
@@ -2775,25 +3425,48 @@
             : (prog.programDirectorId ? escapeHtml(prog.programDirectorId) : '<em style="color:var(--rrp-text-muted)">Not assigned</em>');
           var levelBadge = LEVEL_BADGES[prog.level] || escapeHtml(prog.level || '');
 
-          var reviewerOptions = '<option value="">&#8212; None &#8212;</option>' +
+          var coordIds    = (prog.coordinatorIds || []).map(String);
+          var coordNames  = coordIds.map(function (cid) { return coordMap[cid] || cid; });
+          var coordDisplay = coordNames.length ? coordNames.map(function (n) { return '<span class="rrp-chip">' + escapeHtml(n) + '</span>'; }).join(' ') : '<em style="color:var(--rrp-text-muted)">None</em>';
+
+          // Director dropdown (reviewers)
+          var dirOptions = '<option value="">&#8212; None &#8212;</option>' +
             reviewers.map(function (r) {
-              return '<option value="' + escapeHtml(r.id) + '"' + (r.id === prog.programDirectorId ? ' selected' : '') + '>' + escapeHtml(r.name) + '</option>';
+              return '<option value="' + escapeHtml(r.id) + '"' + (r.id === (prog.programDirectorId || '') ? ' selected' : '') + '>' + escapeHtml(r.name) + '</option>';
             }).join('');
+
+          // Coordinator multi-checkboxes
+          var coordChecks = coordUsers.length
+            ? coordUsers.map(function (u) {
+                var uid = String(u.id);
+                var checked = coordIds.indexOf(uid) !== -1;
+                return '<label class="rrp-check-chip' + (checked ? ' checked' : '') + '" style="font-size:.82rem;">' +
+                  '<input type="checkbox" class="rrp-prog-coord-cb" value="' + escapeHtml(uid) + '"' + (checked ? ' checked' : '') + '> ' + escapeHtml(u.name || u.email) +
+                '</label>';
+              }).join('')
+            : '<em style="font-size:.82rem;color:var(--rrp-text-muted)">No coordinators created yet</em>';
 
           html +=
             '<div class="rrp-prog-row" data-prog-id="' + escapeHtml(prog.id) + '">' +
               '<span class="rrp-prog-name">' + escapeHtml(prog.label) + '</span>' +
               '<span>' + levelBadge + '</span>' +
               '<span class="rrp-prog-director" data-field="director">' + dirDisplay + '</span>' +
-              '<span><button class="rrp-btn rrp-btn-sm" data-edit-prog="' + escapeHtml(prog.id) + '">&#9998; Edit</button></span>' +
+              '<span data-field="coordinators" style="font-size:.82rem;">' + coordDisplay + '</span>' +
+              '<span>' +
+                '<button class="rrp-btn rrp-btn-sm" data-edit-prog="' + escapeHtml(prog.id) + '">&#9998; Edit</button> ' +
+                '<button class="rrp-btn danger rrp-btn-sm" data-delete-prog="' + escapeHtml(prog.id) + '">&#128465;</button>' +
+              '</span>' +
             '</div>' +
             '<div class="rrp-prog-edit-row" id="rrp-prog-edit-' + escapeHtml(prog.id) + '" style="display:none;">' +
               '<span class="rrp-prog-name" style="font-style:italic;color:var(--rrp-text-muted)">' + escapeHtml(prog.label) + '</span>' +
               '<span>' + levelBadge + '</span>' +
-              '<span><select class="rrp-input rrp-prog-dir-select" style="font-size:.83rem;padding:.3rem .5rem;">' + reviewerOptions + '</select></span>' +
-              '<span style="display:flex;gap:.4rem;align-items:center;">' +
-                '<button class="rrp-btn rrp-btn-sm" data-save-prog="' + escapeHtml(prog.id) + '">&#10003; Save</button>' +
-                '<button class="rrp-btn secondary rrp-btn-sm" data-cancel-prog="' + escapeHtml(prog.id) + '">Cancel</button>' +
+              '<span><select class="rrp-input rrp-prog-dir-select" style="font-size:.83rem;padding:.3rem .5rem;">' + dirOptions + '</select></span>' +
+              '<span style="display:flex;flex-wrap:wrap;gap:.3rem;align-items:center;" class="rrp-prog-coord-checks">' + coordChecks + '</span>' +
+              '<span style="display:flex;flex-direction:column;gap:.3rem;">' +
+                '<span style="display:flex;gap:.4rem;align-items:center;">' +
+                  '<button class="rrp-btn rrp-btn-sm" data-save-prog="' + escapeHtml(prog.id) + '">&#10003; Save</button>' +
+                  '<button class="rrp-btn secondary rrp-btn-sm" data-cancel-prog="' + escapeHtml(prog.id) + '">Cancel</button>' +
+                '</span>' +
                 '<span class="rrp-prog-save-msg" style="font-size:.78rem;"></span>' +
               '</span>' +
             '</div>';
@@ -2802,14 +3475,133 @@
         html += '</div>';
       });
 
+      // Also show any programs not matching a known school
+      var otherProgs = programs.filter(function (p) { return schools.indexOf(p.school) === -1; });
+      if (otherProgs.length) {
+        html +=
+          '<div class="rrp-analytics-card rrp-prog-school-section">' +
+            '<h2 class="rrp-prog-school-title">Other &nbsp;<small style="font-weight:400;color:var(--rrp-text-muted);font-size:.8rem">' + otherProgs.length + ' programs</small></h2>' +
+            '<div class="rrp-prog-header"><span>Program</span><span>Level</span><span>Director</span><span>Coordinators</span><span>Actions</span></div>';
+        otherProgs.forEach(function (prog) {
+          var dir  = reviewerMap[prog.programDirectorId];
+          var dirDisplay = dir ? escapeHtml(dir.name) : (prog.programDirectorId ? escapeHtml(prog.programDirectorId) : '<em style="color:var(--rrp-text-muted)">Not assigned</em>');
+          var levelBadge = LEVEL_BADGES[prog.level] || escapeHtml(prog.level || '');
+          var coordIds    = (prog.coordinatorIds || []).map(String);
+          var coordNames  = coordIds.map(function (cid) { return coordMap[cid] || cid; });
+          var coordDisplay = coordNames.length ? coordNames.map(function (n) { return '<span class="rrp-chip">' + escapeHtml(n) + '</span>'; }).join(' ') : '<em style="color:var(--rrp-text-muted)">None</em>';
+          var dirOptions = '<option value="">&#8212; None &#8212;</option>' +
+            reviewers.map(function (r) { return '<option value="' + escapeHtml(r.id) + '"' + (r.id === (prog.programDirectorId || '') ? ' selected' : '') + '>' + escapeHtml(r.name) + '</option>'; }).join('');
+          var coordChecks = coordUsers.length
+            ? coordUsers.map(function (u) {
+                var uid = String(u.id); var checked = coordIds.indexOf(uid) !== -1;
+                return '<label class="rrp-check-chip' + (checked ? ' checked' : '') + '" style="font-size:.82rem;">' +
+                  '<input type="checkbox" class="rrp-prog-coord-cb" value="' + escapeHtml(uid) + '"' + (checked ? ' checked' : '') + '> ' + escapeHtml(u.name || u.email) + '</label>';
+              }).join('')
+            : '<em style="font-size:.82rem;color:var(--rrp-text-muted)">No coordinators created yet</em>';
+          html +=
+            '<div class="rrp-prog-row" data-prog-id="' + escapeHtml(prog.id) + '">' +
+              '<span class="rrp-prog-name">' + escapeHtml(prog.label) + '</span>' +
+              '<span>' + levelBadge + '</span>' +
+              '<span class="rrp-prog-director" data-field="director">' + dirDisplay + '</span>' +
+              '<span data-field="coordinators" style="font-size:.82rem;">' + coordDisplay + '</span>' +
+              '<span>' +
+                '<button class="rrp-btn rrp-btn-sm" data-edit-prog="' + escapeHtml(prog.id) + '">&#9998; Edit</button> ' +
+                '<button class="rrp-btn danger rrp-btn-sm" data-delete-prog="' + escapeHtml(prog.id) + '">&#128465;</button>' +
+              '</span>' +
+            '</div>' +
+            '<div class="rrp-prog-edit-row" id="rrp-prog-edit-' + escapeHtml(prog.id) + '" style="display:none;">' +
+              '<span class="rrp-prog-name" style="font-style:italic;color:var(--rrp-text-muted)">' + escapeHtml(prog.label) + '</span>' +
+              '<span>' + levelBadge + '</span>' +
+              '<span><select class="rrp-input rrp-prog-dir-select" style="font-size:.83rem;padding:.3rem .5rem;">' + dirOptions + '</select></span>' +
+              '<span style="display:flex;flex-wrap:wrap;gap:.3rem;align-items:center;" class="rrp-prog-coord-checks">' + coordChecks + '</span>' +
+              '<span style="display:flex;flex-direction:column;gap:.3rem;">' +
+                '<span style="display:flex;gap:.4rem;align-items:center;">' +
+                  '<button class="rrp-btn rrp-btn-sm" data-save-prog="' + escapeHtml(prog.id) + '">&#10003; Save</button>' +
+                  '<button class="rrp-btn secondary rrp-btn-sm" data-cancel-prog="' + escapeHtml(prog.id) + '">Cancel</button>' +
+                '</span>' +
+                '<span class="rrp-prog-save-msg" style="font-size:.78rem;"></span>' +
+              '</span>' +
+            '</div>';
+        });
+        html += '</div>';
+      }
+
       var body = document.getElementById('rrp-programs-body');
-      if (body) body.innerHTML = html;
+      if (body) body.innerHTML = html || '<div class="rrp-empty-state"><p>No programs yet. Click <strong>&#43; New Program</strong> to create one.</p></div>';
+
+      // ── Dissertation Director save ───────────────────────────────────────
+      var saveDDBtn = document.getElementById('rrp-save-diss-dir');
+      if (saveDDBtn) {
+        saveDDBtn.addEventListener('click', function () {
+          var sel   = document.getElementById('rrp-diss-dir-sel');
+          var msgEl = document.getElementById('rrp-diss-dir-msg');
+          saveDDBtn.disabled = true; saveDDBtn.textContent = 'Saving\u2026';
+          api('PUT', '/config', { dissertationDirectorId: sel ? sel.value : '' })
+            .then(function () {
+              msgEl.innerHTML = '<span class="rrp-success">Saved.</span>';
+              saveDDBtn.disabled = false; saveDDBtn.textContent = '\u2713 Save';
+              setTimeout(function () { msgEl.innerHTML = ''; }, 2500);
+            })
+            .catch(function () {
+              msgEl.innerHTML = '<span class="rrp-error">Save failed.</span>';
+              saveDDBtn.disabled = false; saveDDBtn.textContent = '\u2713 Save';
+            });
+        });
+      }
+
+      // ── Departments CRUD ─────────────────────────────────────────────────
+      var deptAddBtn  = document.getElementById('rrp-dept-add-btn');
+      var deptAddForm = document.getElementById('rrp-dept-add-form');
+      if (deptAddBtn && deptAddForm) {
+        deptAddBtn.addEventListener('click', function () {
+          deptAddForm.style.display = deptAddForm.style.display === 'none' ? 'block' : 'none';
+        });
+        document.getElementById('rrp-dept-cancel-btn').addEventListener('click', function () {
+          deptAddForm.style.display = 'none';
+        });
+        document.getElementById('rrp-dept-save-btn').addEventListener('click', function () {
+          var idVal    = (document.getElementById('rrp-dept-new-id').value || '').trim().toLowerCase().replace(/[^a-z0-9\-]/g, '-');
+          var labelVal = (document.getElementById('rrp-dept-new-label').value || '').trim();
+          var msgEl    = document.getElementById('rrp-dept-msg');
+          var btn      = document.getElementById('rrp-dept-save-btn');
+          if (!idVal)    { msgEl.innerHTML = '<span class="rrp-error">ID required.</span>'; return; }
+          if (!labelVal) { msgEl.innerHTML = '<span class="rrp-error">Name required.</span>'; return; }
+          if (departments.some(function (d) { return d.id === idVal; })) {
+            msgEl.innerHTML = '<span class="rrp-error">ID already exists.</span>'; return;
+          }
+          btn.disabled = true; btn.textContent = 'Saving\u2026';
+          var updated = departments.concat([{ id: idVal, label: labelVal }]);
+          api('PUT', '/config', { departments: updated })
+            .then(function () { renderProgramManagement(container, backFn); })
+            .catch(function () {
+              btn.disabled = false; btn.textContent = '\u2713 Save';
+              msgEl.innerHTML = '<span class="rrp-error">Save failed.</span>';
+            });
+        });
+      }
+      container.querySelectorAll('[data-delete-dept]').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          var did  = btn.getAttribute('data-delete-dept');
+          var dept = departments.find(function (d) { return d.id === did; });
+          if (!confirm('Delete department "' + (dept ? dept.label : did) + '"?')) return;
+          var remaining = departments.filter(function (d) { return d.id !== did; });
+          api('PUT', '/config', { departments: remaining })
+            .then(function () { renderProgramManagement(container, backFn); })
+            .catch(function () { alert('Delete failed.'); });
+        });
+      });
+
+      // ── Checkbox chip toggle ──────────────────────────────────────────────
+      container.querySelectorAll('.rrp-prog-coord-checks input').forEach(function (cb) {
+        cb.addEventListener('change', function () {
+          cb.closest('.rrp-check-chip').classList.toggle('checked', cb.checked);
+        });
+      });
 
       // ── Event listeners ──────────────────────────────────────────────────
       container.querySelectorAll('[data-edit-prog]').forEach(function (btn) {
         btn.addEventListener('click', function () {
           var id = btn.getAttribute('data-edit-prog');
-          // Collapse any other open edit rows first
           container.querySelectorAll('.rrp-prog-edit-row').forEach(function (r) { r.style.display = 'none'; });
           var editRow = document.getElementById('rrp-prog-edit-' + id);
           if (editRow) editRow.style.display = 'grid';
@@ -2823,26 +3615,41 @@
         });
       });
 
+      container.querySelectorAll('[data-delete-prog]').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          var id   = btn.getAttribute('data-delete-prog');
+          var prog = programs.find(function (p) { return p.id === id; });
+          if (!confirm('Delete program "' + (prog ? prog.label : id) + '"?\nThis cannot be undone.')) return;
+          var remaining = programs.filter(function (p) { return p.id !== id; });
+          api('PUT', '/config', { programs: remaining }).then(function () {
+            renderProgramManagement(container, backFn);
+          }).catch(function () { alert('Delete failed. Please try again.'); });
+        });
+      });
+
       container.querySelectorAll('[data-save-prog]').forEach(function (btn) {
         btn.addEventListener('click', function () {
           var id      = btn.getAttribute('data-save-prog');
           var editRow = document.getElementById('rrp-prog-edit-' + id);
           var select  = editRow ? editRow.querySelector('.rrp-prog-dir-select') : null;
           var msgEl   = editRow ? editRow.querySelector('.rrp-prog-save-msg')   : null;
-          if (!select) return;
+          if (!editRow) return;
 
-          var newDirId = select.value;
+          var newDirId = select ? select.value : '';
+          var newCoordIds = [];
+          editRow.querySelectorAll('.rrp-prog-coord-cb:checked').forEach(function (cb) {
+            newCoordIds.push(cb.value);
+          });
+
           var idx = -1;
           for (var i = 0; i < programs.length; i++) { if (programs[i].id === id) { idx = i; break; } }
           if (idx === -1) return;
-          programs[idx] = Object.assign({}, programs[idx], { programDirectorId: newDirId });
+          programs[idx] = Object.assign({}, programs[idx], { programDirectorId: newDirId, coordinatorIds: newCoordIds });
 
-          btn.disabled = true;
-          btn.textContent = 'Saving…';
+          btn.disabled = true; btn.textContent = 'Saving\u2026';
           if (msgEl) msgEl.innerHTML = '';
 
           api('PUT', '/config', { programs: programs }).then(function () {
-            // Update display row
             var row = container.querySelector('[data-prog-id="' + id + '"]');
             if (row) {
               var dirCell = row.querySelector('[data-field="director"]');
@@ -2850,14 +3657,17 @@
                 var updatedDir = reviewerMap[newDirId];
                 dirCell.innerHTML = updatedDir ? escapeHtml(updatedDir.name) : (newDirId ? escapeHtml(newDirId) : '<em style="color:var(--rrp-text-muted)">Not assigned</em>');
               }
+              var coordCell = row.querySelector('[data-field="coordinators"]');
+              if (coordCell) {
+                var names = newCoordIds.map(function (cid) { return coordMap[cid] || cid; });
+                coordCell.innerHTML = names.length ? names.map(function (n) { return '<span class="rrp-chip">' + escapeHtml(n) + '</span>'; }).join(' ') : '<em style="color:var(--rrp-text-muted)">None</em>';
+              }
             }
             if (editRow) editRow.style.display = 'none';
-            btn.disabled = false;
-            btn.textContent = '\u2713 Save';
+            btn.disabled = false; btn.textContent = '\u2713 Save';
           }).catch(function (err) {
             if (msgEl) msgEl.innerHTML = '<span class="rrp-error">' + escapeHtml((err && err.data && err.data.error) || 'Save failed') + '</span>';
-            btn.disabled = false;
-            btn.textContent = '\u2713 Save';
+            btn.disabled = false; btn.textContent = '\u2713 Save';
           });
         });
       });
@@ -2866,6 +3676,79 @@
       var body = document.getElementById('rrp-programs-body');
       if (body) body.innerHTML = '<div class="rrp-error">Failed to load programs. Please try again.</div>';
     });
+  }
+
+  // ── Audit Log modal ──────────────────────────────────────────────────────
+  function openAuditLogModal(subId) {
+    var existing = document.getElementById('rrp-audit-modal');
+    if (existing) existing.remove();
+
+    var overlay = document.createElement('div');
+    overlay.id = 'rrp-audit-modal';
+    overlay.className = 'rrp-audit-overlay';
+    overlay.innerHTML =
+      '<div class="rrp-audit-modal" role="dialog" aria-modal="true" aria-label="Audit log">' +
+        '<div class="rrp-audit-modal-header">' +
+          '<h2>&#128221; Activity Log &mdash; <span class="rrp-audit-sub-id">' + escapeHtml(subId) + '</span></h2>' +
+          '<button type="button" class="rrp-audit-close" aria-label="Close">&times;</button>' +
+        '</div>' +
+        '<div class="rrp-audit-modal-body" id="rrp-audit-body">' +
+          '<p class="rrp-loading">Loading&hellip;</p>' +
+        '</div>' +
+      '</div>';
+
+    document.body.appendChild(overlay);
+
+    overlay.querySelector('.rrp-audit-close').addEventListener('click', function () { overlay.remove(); });
+    overlay.addEventListener('click', function (e) { if (e.target === overlay) overlay.remove(); });
+    document.addEventListener('keydown', function esc(e) {
+      if (e.key === 'Escape') { overlay.remove(); document.removeEventListener('keydown', esc); }
+    });
+
+    api('GET', '/submissions/' + encodeURIComponent(subId) + '/audit-log')
+      .then(function (res) {
+        var log  = res.auditLog || [];
+        var body = document.getElementById('rrp-audit-body');
+        if (!body) return;
+        if (!log.length) {
+          body.innerHTML = '<p class="rrp-audit-empty">No activity recorded yet for this submission.</p>';
+          return;
+        }
+        var actionLabels = {
+          submission_created: '&#128196; Submission Created',
+          status_changed:     '&#128260; Status Changed',
+          reviewers_assigned: '&#128100; Reviewers Assigned',
+          decision_recorded:  '&#9989; Decision Recorded',
+          feedback_added:     '&#128172; Feedback Added',
+          revision_submitted: '&#128260; Revision Submitted',
+          content_updated:    '&#9998; Content Updated',
+          stage_skipped:      '&#9193; Stage Skipped',
+          file_uploaded:      '&#128206; File Uploaded',
+        };
+        body.innerHTML =
+          '<ol class="rrp-audit-list">' +
+          log.map(function (entry) {
+            var dt    = entry.at ? new Date(entry.at) : null;
+            var dtStr = dt ? dt.toLocaleString() : '\u2014';
+            var actor = (entry.actor && (entry.actor.name || entry.actor.email))
+                          ? escapeHtml(entry.actor.name || entry.actor.email)
+                          : 'System';
+            var label = actionLabels[entry.action] || escapeHtml(entry.action || '');
+            return '<li class="rrp-audit-entry">' +
+              '<div class="rrp-audit-entry-header">' +
+                '<span class="rrp-audit-action">' + label + '</span>' +
+                '<time class="rrp-audit-time" datetime="' + escapeHtml(entry.at || '') + '">' + escapeHtml(dtStr) + '</time>' +
+              '</div>' +
+              '<div class="rrp-audit-detail">' + escapeHtml(entry.detail || '') + '</div>' +
+              '<div class="rrp-audit-actor">by ' + actor + '</div>' +
+            '</li>';
+          }).join('') +
+          '</ol>';
+      })
+      .catch(function () {
+        var body = document.getElementById('rrp-audit-body');
+        if (body) body.innerHTML = '<div class="rrp-error">Could not load activity log.</div>';
+      });
   }
 
   if (document.readyState === 'loading') {

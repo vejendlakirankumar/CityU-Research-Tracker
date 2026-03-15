@@ -15,6 +15,13 @@
   "activeCohort": null,
   "defaultReviewersByStage": {},
   "defaultProgramDirectorId": "r4",
+  "departments": [
+    {"id":"business",          "label":"School of Business"},
+    {"id":"education",         "label":"School of Education"},
+    {"id":"technology",        "label":"School of Technology and Computing"},
+    {"id":"research-office",   "label":"Research Office"},
+    {"id":"graduate-studies",  "label":"Graduate Studies"}
+  ],
   "programs": [
     {"id":"emba",                     "label":"Executive Master's in Business Administration",                          "level":"masters",    "school":"Business",   "programDirectorId":"r4"},
     {"id":"mba",                      "label":"Master of Business Administration",                                      "level":"masters",    "school":"Business",   "programDirectorId":"r4"},

@@ -1,1 +1,145 @@
-﻿{"submissions":[]}
+{
+    "submissions": [
+        {
+            "type": "student-project",
+            "submissionType": "dissertation",
+            "title": "test document 1",
+            "researchArea": "Business administration",
+            "submitterName": "student",
+            "submitterEmail": "student@test.com",
+            "affiliation": "City University of Seattle",
+            "id": "PROJ-2026-001",
+            "status": "Revision Required",
+            "createdAt": "2026-03-15T04:42:20+00:00",
+            "reviewStages": [
+                {
+                    "stageName": "Chair Review",
+                    "stageIndex": 1,
+                    "reviewers": [
+                        {
+                            "id": "wp_7",
+                            "name": "Cris Ewell",
+                            "email": "cewell@cityu.edu"
+                        }
+                    ],
+                    "decisions": {
+                        "cewell@cityu.edu": "Approved"
+                    },
+                    "feedback": [],
+                    "revisionSubmittedAt": "2026-03-15T05:11:25+00:00"
+                },
+                {
+                    "stageName": "Committee Review",
+                    "stageIndex": 2,
+                    "reviewers": [
+                        {
+                            "id": "wp_10",
+                            "name": "Jemell Garris",
+                            "email": "garrisjemell@cityu.edu"
+                        }
+                    ],
+                    "decisions": {
+                        "garrisjemell@cityu.edu": "Approved"
+                    },
+                    "feedback": [],
+                    "revisionSubmittedAt": null
+                },
+                {
+                    "stageName": "Program Director Approval",
+                    "stageIndex": 3,
+                    "reviewers": [
+                        {
+                            "id": "wp_13",
+                            "name": "Morgan Zantua",
+                            "email": "mzantua@cityu.edu"
+                        }
+                    ],
+                    "decisions": {
+                        "mzantua@cityu.edu": "Needs Revision"
+                    },
+                    "feedback": [
+                        {
+                            "role": "reviewer",
+                            "email": "mzantua@cityu.edu",
+                            "name": "Morgan Zantua",
+                            "message": "MAnhy APA7 errros. fix al of them",
+                            "createdAt": "2026-03-15T05:18:37+00:00"
+                        }
+                    ],
+                    "revisionSubmittedAt": null
+                },
+                {
+                    "stageName": "Dissertation Director Sign-Off",
+                    "stageIndex": 4,
+                    "reviewers": [
+                        {
+                            "id": "wp_13",
+                            "name": "Morgan Zantua",
+                            "email": "mzantua@cityu.edu"
+                        }
+                    ],
+                    "decisions": [],
+                    "feedback": [],
+                    "revisionSubmittedAt": null
+                }
+            ],
+            "assignedReviewers": [
+                {
+                    "id": "wp_7",
+                    "name": "Cris Ewell",
+                    "email": "cewell@cityu.edu"
+                },
+                {
+                    "id": "wp_10",
+                    "name": "Jemell Garris",
+                    "email": "garrisjemell@cityu.edu"
+                },
+                {
+                    "id": "wp_13",
+                    "name": "Morgan Zantua",
+                    "email": "mzantua@cityu.edu"
+                }
+            ],
+            "attachments": [
+                {
+                    "name": "Review-Article-Template-2024V1.docx",
+                    "filename": "Review-Article-Template-2024V1.docx",
+                    "size": 58775,
+                    "uploadedAt": "2026-03-15T04:42:21+00:00",
+                    "revisionRound": 0
+                },
+                {
+                    "name": "Review-Article-Template-2024V1.docx",
+                    "filename": "Review-Article-Template-2024V1.docx",
+                    "size": 58775,
+                    "uploadedAt": "2026-03-15T05:10:01+00:00",
+                    "revisionRound": 0,
+                    "uploadedByReviewer": true,
+                    "reviewerEmail": "cewell@cityu.edu",
+                    "reviewerName": "Cris Ewell"
+                },
+                {
+                    "name": "Review-Article-Template-2024V1.docx",
+                    "filename": "Review-Article-Template-2024V1.docx",
+                    "size": 58775,
+                    "uploadedAt": "2026-03-15T05:11:15+00:00",
+                    "revisionRound": 1
+                },
+                {
+                    "name": "Review-Article-Template-2024V1.docx",
+                    "filename": "Review-Article-Template-2024V1.docx",
+                    "size": 58775,
+                    "uploadedAt": "2026-03-15T05:18:27+00:00",
+                    "revisionRound": 1,
+                    "uploadedByReviewer": true,
+                    "reviewerEmail": "mzantua@cityu.edu",
+                    "reviewerName": "Morgan Zantua"
+                }
+            ],
+            "revisionCount": 1
+        }
+    ],
+    "nextIds": {
+        "student-project-2026": 1
+    }
+}

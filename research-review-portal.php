@@ -47,6 +47,8 @@ class Research_Review_Portal {
 			$role_label = 'Student';
 		} elseif ( in_array( 'rrp_reviewer', $user_roles, true ) ) {
 			$role_label = 'Reviewer';
+		} elseif ( in_array( 'rrp_faculty', $user_roles, true ) ) {
+			$role_label = 'Faculty';
 		} elseif ( in_array( 'rrp_coordinator', $user_roles, true ) ) {
 			$role_label = 'Coordinator';
 		} elseif ( in_array( 'rrp_admin', $user_roles, true ) || in_array( 'administrator', $user_roles, true ) ) {
@@ -118,9 +120,16 @@ class Research_Review_Portal {
 			'1.0.0'
 		);
 		wp_enqueue_script(
+			'mammoth-js',
+			'https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.7.0/mammoth.browser.min.js',
+			array(),
+			'1.7.0',
+			true
+		);
+		wp_enqueue_script(
 			'research-review-portal',
 			RRP_PLUGIN_URL . 'assets/portal.js',
-			array(),
+			array( 'mammoth-js' ),
 			'1.0.0',
 			true
 		);
@@ -467,6 +476,8 @@ class Research_Review_Portal {
 			$role_label = 'Student';
 		} elseif ( in_array( 'rrp_reviewer', $user_roles, true ) ) {
 			$role_label = 'Reviewer';
+		} elseif ( in_array( 'rrp_faculty', $user_roles, true ) ) {
+			$role_label = 'Faculty';
 		} elseif ( in_array( 'rrp_coordinator', $user_roles, true ) ) {
 			$role_label = 'Coordinator';
 		} elseif ( in_array( 'rrp_admin', $user_roles, true ) || in_array( 'administrator', $user_roles, true ) ) {
@@ -476,10 +487,12 @@ class Research_Review_Portal {
 		$profile_url = esc_url( admin_url( 'profile.php' ) );
 		$logo_url    = esc_url( RRP_PLUGIN_URL . 'assets/city-university-logo.svg' );
 		wp_enqueue_style( 'research-review-portal', RRP_PLUGIN_URL . 'assets/portal.css', array(), '1.0.0' );
-		wp_enqueue_script( 'research-review-portal', RRP_PLUGIN_URL . 'assets/portal.js', array(), '1.0.0', true );
+		wp_enqueue_script( 'mammoth-js', 'https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.7.0/mammoth.browser.min.js', array(), '1.7.0', true );
+		wp_enqueue_script( 'research-review-portal', RRP_PLUGIN_URL . 'assets/portal.js', array( 'mammoth-js' ), '1.0.0', true );
 		$rrp_allowed_types = (array) ( get_user_meta( get_current_user_id(), 'rrp_allowed_submission_types', true ) ?: [] );
+		$rrp_program_ids   = (array) ( get_user_meta( get_current_user_id(), 'rrp_program_ids', true ) ?: [] );
 		wp_add_inline_script( 'research-review-portal', sprintf(
-			'window.RRP = { restBase: %s, nonce: %s, isLoggedIn: true, loginUrl: %s, logoutUrl: %s, userName: %s, userRole: %s, userEmail: %s, profileUrl: %s, allowedTypes: %s };',
+			'window.RRP = { restBase: %s, nonce: %s, isLoggedIn: true, loginUrl: %s, logoutUrl: %s, userName: %s, userRole: %s, userEmail: %s, profileUrl: %s, allowedTypes: %s, userId: %s, programIds: %s };',
 			wp_json_encode( rest_url( 'research-portal/v1' ) ),
 			wp_json_encode( wp_create_nonce( 'wp_rest' ) ),
 			wp_json_encode( '' ),
@@ -488,7 +501,9 @@ class Research_Review_Portal {
 			wp_json_encode( $role_label ),
 			wp_json_encode( $current_user->user_email ),
 			wp_json_encode( admin_url( 'profile.php' ) ),
-			wp_json_encode( $rrp_allowed_types )
+			wp_json_encode( $rrp_allowed_types ),
+			wp_json_encode( (int) get_current_user_id() ),
+			wp_json_encode( $rrp_program_ids )
 		), 'before' );
 		?>
 <!DOCTYPE html><html <?php language_attributes(); ?>>

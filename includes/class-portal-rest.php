@@ -150,6 +150,12 @@ class Portal_REST {
 			'permission_callback' => array( __CLASS__, 'can_view_submission' ),
 			'args'                => array( 'id' => array( 'required' => true ) ),
 		) );
+		register_rest_route( self::NAMESPACE, '/submissions/(?P<id>[a-zA-Z0-9\-]+)/audit-log', array(
+			'methods'             => 'GET',
+			'callback'            => array( __CLASS__, 'audit_log_get' ),
+			'permission_callback' => array( __CLASS__, 'can_view_submission' ),
+			'args'                => array( 'id' => array( 'required' => true ) ),
+		) );
 		register_rest_route( self::NAMESPACE, '/assignment-summary', array(
 			'methods'             => 'GET',
 			'callback'            => array( __CLASS__, 'assignment_summary' ),
@@ -239,6 +245,13 @@ class Portal_REST {
 			'permission_callback' => array( __CLASS__, 'can_manage_workflow' ),
 			'args'                => array( 'email' => array( 'required' => true ) ),
 		) );
+		// Admin-only password reset
+		register_rest_route( self::NAMESPACE, '/portal-users/(?P<id>\d+)/reset-password', array(
+			'methods'             => 'POST',
+			'callback'            => array( __CLASS__, 'portal_users_reset_password' ),
+			'permission_callback' => array( __CLASS__, 'can_manage_config' ),
+			'args'                => array( 'id' => array( 'required' => true ) ),
+		) );
 	}
 
 	public static function health( WP_REST_Request $request ) {
@@ -256,7 +269,7 @@ class Portal_REST {
 
 	public static function can_view_submissions( WP_REST_Request $request ) {
 		// Users can view their own submissions or reviewers/admins can view assigned ones
-		return current_user_can( 'rrp_view_own_submissions' ) || current_user_can( 'rrp_view_all_submissions' ) || current_user_can( 'rrp_review_submissions' );
+		return current_user_can( 'rrp_view_own_submissions' ) || current_user_can( 'rrp_view_all_submissions' ) || current_user_can( 'rrp_review_submissions' ) || current_user_can( 'rrp_full_admin_access' );
 	}
 
 	public static function can_view_submission( WP_REST_Request $request ) {
@@ -416,12 +429,9 @@ class Portal_REST {
 	}
 
 	public static function can_upload_attachments( WP_REST_Request $request ) {
-		// Only the original submitter and admins/coordinators may upload files — not reviewers.
+		// Admins and coordinators can always upload.
 		if ( current_user_can( 'rrp_edit_any_submission' ) || current_user_can( 'rrp_full_admin_access' ) ) {
 			return true;
-		}
-		if ( ! current_user_can( 'rrp_edit_own_submissions' ) ) {
-			return false;
 		}
 		$submission_id = $request->get_param( 'id' );
 		$submission    = self::get_submission_by_id( $submission_id );
@@ -430,8 +440,22 @@ class Portal_REST {
 		}
 		$current_user = wp_get_current_user();
 		$user_email   = strtolower( trim( (string) $current_user->user_email ) );
-		return isset( $submission['submitterEmail'] ) &&
-			strtolower( trim( (string) $submission['submitterEmail'] ) ) === $user_email;
+		// Submitter can upload (own submission).
+		if ( current_user_can( 'rrp_edit_own_submissions' ) &&
+			isset( $submission['submitterEmail'] ) &&
+			strtolower( trim( (string) $submission['submitterEmail'] ) ) === $user_email ) {
+			return true;
+		}
+		// Assigned reviewer can upload an annotated version.
+		if ( current_user_can( 'rrp_review_submissions' ) ) {
+			$assigned = $submission['assignedReviewers'] ?? array();
+			foreach ( $assigned as $r ) {
+				if ( strtolower( trim( (string) ( $r['email'] ?? '' ) ) ) === $user_email ) {
+					return true;
+				}
+			}
+		}
+		return false;
 	}
 
 	public static function can_download_attachments( WP_REST_Request $request ) {
@@ -451,7 +475,10 @@ class Portal_REST {
 	}
 
 	public static function can_view_config( WP_REST_Request $request ) {
-		return current_user_can( 'rrp_view_all_submissions' ) || current_user_can( 'rrp_full_admin_access' );
+		return current_user_can( 'rrp_view_all_submissions' )
+			|| current_user_can( 'rrp_full_admin_access' )
+			|| current_user_can( 'rrp_review_submissions' )
+			|| current_user_can( 'rrp_submit_research' );
 	}
 
 	public static function can_manage_config( WP_REST_Request $request ) {
@@ -811,6 +838,8 @@ class Portal_REST {
 		}
 		$data = Portal_Data::read_submissions();
 		$data['submissions'][] = $submission;
+		$new_idx = count( $data['submissions'] ) - 1;
+		self::append_audit_log( $data, $new_idx, 'submission_created', $is_draft ? 'Draft saved.' : 'Submission created (type: ' . $type . ').' );
 		Portal_Data::write_submissions( $data );
 
 		// Send confirmation email for non-draft submissions
@@ -1015,18 +1044,21 @@ class Portal_REST {
 				return new WP_REST_Response( array( 'error' => 'Submission can no longer be withdrawn at this stage.' ), 400 );
 			}
 			$data['submissions'][ $idx ] = array_merge( $sub, array( 'status' => 'Withdrawn' ) );
+			self::append_audit_log( $data, $idx, 'status_changed', 'Submission withdrawn.' );
 			Portal_Data::write_submissions( $data );
 			return new WP_REST_Response( $data['submissions'][ $idx ], 200 );
 		}
 
 		if ( ! empty( $body['status'] ) && is_string( $body['status'] ) && in_array( trim( $body['status'] ), Portal_Data::PUBLIC_STATUSES, true ) ) {
 			$data['submissions'][ $idx ] = array_merge( $sub, array( 'status' => trim( $body['status'] ) ) );
+			self::append_audit_log( $data, $idx, 'status_changed', 'Status set to "' . trim( $body['status'] ) . '".' );
 			Portal_Data::write_submissions( $data );
 			return new WP_REST_Response( $data['submissions'][ $idx ], 200 );
 		}
 
 		if ( isset( $body['assignedReviewers'] ) && is_array( $body['assignedReviewers'] ) ) {
 			$data['submissions'][ $idx ] = array_merge( $sub, array( 'assignedReviewers' => $body['assignedReviewers'] ) );
+			self::append_audit_log( $data, $idx, 'reviewers_assigned', 'Assigned reviewers updated.' );
 			Portal_Data::write_submissions( $data );
 			return new WP_REST_Response( $data['submissions'][ $idx ], 200 );
 		}
@@ -1067,6 +1099,7 @@ class Portal_REST {
 				);
 			}
 			$data['submissions'][ $idx ] = array_merge( $sub, array( 'reviewStages' => $merged, 'assignedReviewers' => $assigned ) );
+			self::append_audit_log( $data, $idx, 'reviewers_assigned', 'Review stages and reviewers configured.' );
 			Portal_Data::write_submissions( $data );
 			return new WP_REST_Response( $data['submissions'][ $idx ], 200 );
 		}
@@ -1138,6 +1171,7 @@ class Portal_REST {
 			}
 			$data['submissions'][ $idx ] = array_merge( $sub, array( 'reviewStages' => $review_stages, 'status' => $new_status ) );
 			$data['submissions'][ $idx ]['status'] = Portal_Data::derive_submission_status( $data['submissions'][ $idx ] );
+			self::append_audit_log( $data, $idx, 'decision_recorded', 'Decision "' . $decision . '" recorded for stage "' . $stage_name . '" by ' . $reviewer_email . '.' );
 			Portal_Data::write_submissions( $data );
 			$updated = $data['submissions'][ $idx ];
 			// Auto-advance: notify next-stage reviewers when this stage is now fully approved
@@ -1164,6 +1198,7 @@ class Portal_REST {
 							);
 							$stages[ $sti ] = $st;
 							$data['submissions'][ $idx ] = array_merge( $updated, array( 'reviewStages' => $stages ) );
+							self::append_audit_log( $data, $idx, 'feedback_added', 'Reviewer feedback added for stage "' . $fn . '".' );
 							Portal_Data::write_submissions( $data );
 							$updated = $data['submissions'][ $idx ];
 							break;
@@ -1204,6 +1239,7 @@ class Portal_REST {
 				return new WP_REST_Response( array( 'error' => 'Stage not found.' ), 400 );
 			}
 			$data['submissions'][ $idx ] = array_merge( $sub, array( 'reviewStages' => $review_stages ) );
+			self::append_audit_log( $data, $idx, 'feedback_added', ucfirst( (string) $role ) . ' feedback added for stage "' . $stage_name . '".' );
 			Portal_Data::write_submissions( $data );
 			return new WP_REST_Response( $data['submissions'][ $idx ], 200 );
 		}
@@ -1238,6 +1274,7 @@ class Portal_REST {
 				'status'        => 'Revision Submitted',
 				'revisionCount' => $revision_count,
 			) );
+			self::append_audit_log( $data, $idx, 'revision_submitted', 'Revision submitted (round ' . $revision_count . ').' );
 			Portal_Data::write_submissions( $data );
 			return new WP_REST_Response( $data['submissions'][ $idx ], 200 );
 		}
@@ -1266,6 +1303,7 @@ class Portal_REST {
 			if ( array_key_exists( 'keywords', $body ) ) $updated['keywords'] = trim( (string) $body['keywords'] ) !== '' ? trim( (string) $body['keywords'] ) : ( $sub['keywords'] ?? '' );
 			if ( array_key_exists( 'researchArea', $body ) ) $updated['researchArea'] = trim( (string) $body['researchArea'] ) !== '' ? trim( (string) $body['researchArea'] ) : ( $sub['researchArea'] ?? '' );
 			$data['submissions'][ $idx ] = $updated;
+			self::append_audit_log( $data, $idx, 'content_updated', 'Submission content revised.' );
 			Portal_Data::write_submissions( $data );
 			return new WP_REST_Response( $data['submissions'][ $idx ], 200 );
 		}
@@ -1348,6 +1386,44 @@ class Portal_REST {
 		return new WP_REST_Response( $data['submissions'][ $idx ], 200 );
 	}
 
+	/**
+	 * Validate an uploaded temp file: confirms real MIME type matches extension and scans with ClamAV if available.
+	 *
+	 * @param string $tmp Temp path of the uploaded file.
+	 * @param string $ext Lowercase extension ('pdf' or 'docx').
+	 * @return bool True if file is safe and valid.
+	 */
+	private static function validate_upload_file( string $tmp, string $ext ): bool {
+		$allowed_mimes = array(
+			'pdf'  => 'application/pdf',
+			'docx' => 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+		);
+		// Verify actual MIME type matches declared extension
+		if ( function_exists( 'finfo_open' ) && isset( $allowed_mimes[ $ext ] ) ) {
+			$finfo = finfo_open( FILEINFO_MIME_TYPE );
+			if ( $finfo ) {
+				$detected = (string) finfo_file( $finfo, $tmp );
+				finfo_close( $finfo );
+				if ( $detected !== $allowed_mimes[ $ext ] ) {
+					return false;
+				}
+			}
+		}
+		// ClamAV virus scan (only if clamscan binary is present)
+		$clamscan = '';
+		if ( function_exists( 'shell_exec' ) ) {
+			$clamscan = trim( (string) ( shell_exec( 'which clamscan 2>/dev/null' ) ?? '' ) );
+		}
+		if ( $clamscan ) {
+			$exit_code = 0;
+			exec( escapeshellarg( $clamscan ) . ' --no-summary --stdout ' . escapeshellarg( $tmp ) . ' 2>&1', $scan_lines, $exit_code );
+			if ( $exit_code !== 0 ) {
+				return false;
+			}
+		}
+		return true;
+	}
+
 	public static function attachments_upload( WP_REST_Request $request ) {
 		$id = $request['id'];
 		$data = Portal_Data::read_submissions();
@@ -1388,16 +1464,25 @@ class Portal_REST {
 				if ( $err !== UPLOAD_ERR_OK || ! is_uploaded_file( $tmp ) || $size > $max_size ) continue;
 				$base = Portal_Data::sanitize_filename( pathinfo( $orig, PATHINFO_FILENAME ) );
 				$ext = strtolower( pathinfo( $orig, PATHINFO_EXTENSION ) );
-				$allowed_exts = array( 'pdf', 'doc', 'docx', 'ppt', 'pptx', 'txt' );
-				if ( $ext && ! in_array( $ext, $allowed_exts, true ) ) continue;
-				$ext = $ext ? '.' . $ext : '';
+				$allowed_exts = array( 'pdf', 'docx' );
+				if ( ! $ext || ! in_array( $ext, $allowed_exts, true ) ) continue;
+				if ( ! self::validate_upload_file( $tmp, $ext ) ) continue;
+				$ext = '.' . $ext;
 				$filename = $base ? $base . $ext : 'file-' . time() . $ext;
 				Portal_Data::ensure_data_dir();
 				$dir = RRP_UPLOADS_DIR . $id . '/';
 				if ( ! file_exists( $dir ) ) wp_mkdir_p( $dir );
 				$dest = $dir . $filename;
 				if ( move_uploaded_file( $tmp, $dest ) ) {
-					$new_attachments[] = array( 'name' => $orig, 'filename' => $filename, 'size' => $size, 'uploadedAt' => $uploaded_at, 'revisionRound' => $revision_round );
+					$cu   = wp_get_current_user();
+					$is_rev = current_user_can( 'rrp_review_submissions' ) && ! current_user_can( 'rrp_edit_any_submission' ) && ! current_user_can( 'rrp_full_admin_access' );
+					$entry = array( 'name' => $orig, 'filename' => $filename, 'size' => $size, 'uploadedAt' => $uploaded_at, 'revisionRound' => $revision_round );
+					if ( $is_rev ) {
+						$entry['uploadedByReviewer'] = true;
+						$entry['reviewerEmail']      = strtolower( trim( (string) $cu->user_email ) );
+						$entry['reviewerName']       = $cu->display_name ?: $cu->user_login;
+					}
+					$new_attachments[] = $entry;
 				}
 			}
 		} else {
@@ -1408,18 +1493,26 @@ class Portal_REST {
 			if ( $err === UPLOAD_ERR_OK && is_uploaded_file( $tmp ) && $size <= $max_size ) {
 				$base = Portal_Data::sanitize_filename( pathinfo( $orig, PATHINFO_FILENAME ) );
 				$ext = strtolower( pathinfo( $orig, PATHINFO_EXTENSION ) );
-				$allowed_exts = array( 'pdf', 'doc', 'docx', 'ppt', 'pptx', 'txt' );
-				if ( $ext && ! in_array( $ext, $allowed_exts, true ) ) {
-					$ext = '';
+				$allowed_exts = array( 'pdf', 'docx' );
+				if ( ! $ext || ! in_array( $ext, $allowed_exts, true ) || ! self::validate_upload_file( $tmp, $ext ) ) {
+					return new WP_REST_Response( array( 'error' => 'Only PDF and DOCX files are accepted.' ), 400 );
 				}
-				$ext = $ext ? '.' . $ext : '';
+				$ext = '.' . $ext;
 				$filename = $base ? $base . $ext : 'file-' . time() . $ext;
 				Portal_Data::ensure_data_dir();
 				$dir = RRP_UPLOADS_DIR . $id . '/';
 				if ( ! file_exists( $dir ) ) wp_mkdir_p( $dir );
 				$dest = $dir . $filename;
 				if ( move_uploaded_file( $tmp, $dest ) ) {
-					$new_attachments[] = array( 'name' => $orig, 'filename' => $filename, 'size' => $size, 'uploadedAt' => $uploaded_at, 'revisionRound' => $revision_round );
+					$cu   = wp_get_current_user();
+					$is_rev = current_user_can( 'rrp_review_submissions' ) && ! current_user_can( 'rrp_edit_any_submission' ) && ! current_user_can( 'rrp_full_admin_access' );
+					$entry = array( 'name' => $orig, 'filename' => $filename, 'size' => $size, 'uploadedAt' => $uploaded_at, 'revisionRound' => $revision_round );
+					if ( $is_rev ) {
+						$entry['uploadedByReviewer'] = true;
+						$entry['reviewerEmail']      = strtolower( trim( (string) $cu->user_email ) );
+						$entry['reviewerName']       = $cu->display_name ?: $cu->user_login;
+					}
+					$new_attachments[] = $entry;
 				}
 			}
 		}
@@ -1428,6 +1521,11 @@ class Portal_REST {
 		}
 		$attachments = array_merge( $attachments, $new_attachments );
 		$data['submissions'][ $idx ] = array_merge( $sub, array( 'attachments' => $attachments ) );
+		foreach ( $new_attachments as $_na ) {
+			$_fn    = (string) ( $_na['name'] ?? $_na['filename'] ?? 'file' );
+			$_label = ! empty( $_na['uploadedByReviewer'] ) ? ' (reviewer annotation)' : '';
+			self::append_audit_log( $data, $idx, 'file_uploaded', 'File uploaded: "' . $_fn . '"' . $_label . '.' );
+		}
 		Portal_Data::write_submissions( $data );
 		return new WP_REST_Response( $data['submissions'][ $idx ], 200 );
 	}
@@ -1460,25 +1558,23 @@ class Portal_REST {
 		}
 		$name = ( $att['name'] ?? $att['filename'] ?? 'download' );
 		$name = str_replace( '"', '%22', $name );
-		$content  = file_get_contents( $file_path );
 		$ext      = strtolower( (string) pathinfo( $att['filename'] ?? '', PATHINFO_EXTENSION ) );
 		$mime_map = array(
 			'pdf'  => 'application/pdf',
-			'txt'  => 'text/plain; charset=utf-8',
-			'doc'  => 'application/msword',
 			'docx' => 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-			'png'  => 'image/png',
-			'jpg'  => 'image/jpeg',
-			'jpeg' => 'image/jpeg',
 		);
-		$mime     = $mime_map[ $ext ] ?? 'application/octet-stream';
-		$inline   = $request->get_param( 'inline' ) ? true : false;
-		$disp     = $inline ? 'inline' : 'attachment';
-		$response = new WP_REST_Response( $content, 200 );
-		$response->header( 'Content-Disposition', $disp . '; filename="' . $name . '"' );
-		$response->header( 'Content-Type', $mime );
-		$response->header( 'X-Content-Type-Options', 'nosniff' );
-		return $response;
+		$mime   = $mime_map[ $ext ] ?? 'application/octet-stream';
+		$inline = $request->get_param( 'inline' ) ? true : false;
+		$disp   = $inline ? 'inline' : 'attachment';
+		// Stream file bytes directly — bypasses WP REST JSON serialisation so binary content is served correctly.
+		if ( ob_get_level() ) { ob_end_clean(); }
+		header( 'Content-Type: ' . $mime );
+		header( 'Content-Disposition: ' . $disp . '; filename="' . $name . '"' );
+		header( 'X-Content-Type-Options: nosniff' );
+		header( 'Cache-Control: private, no-cache, no-store, must-revalidate' );
+		header( 'Content-Length: ' . filesize( $file_path ) );
+		readfile( $file_path );
+		exit;
 	}
 
 	public static function assignment_summary( WP_REST_Request $request ) {
@@ -1614,6 +1710,12 @@ class Portal_REST {
 		if ( array_key_exists( 'defaultProgramDirectorId', $body ) ) {
 			$config['defaultProgramDirectorId'] = sanitize_text_field( (string) $body['defaultProgramDirectorId'] );
 		}
+		if ( array_key_exists( 'dissertationDirectorId', $body ) ) {
+			$config['dissertationDirectorId'] = sanitize_text_field( (string) $body['dissertationDirectorId'] );
+		}
+		if ( isset( $body['departments'] ) && is_array( $body['departments'] ) ) {
+			$config['departments'] = $body['departments'];
+		}
 		Portal_Data::write_config( $config );
 		return new WP_REST_Response( $config, 200 );
 	}
@@ -1725,6 +1827,7 @@ class Portal_REST {
 		$sub['reviewStages'] = $stages;
 		$sub['status']       = Portal_Data::derive_submission_status( $sub );
 		$data['submissions'][ $idx ] = $sub;
+		self::append_audit_log( $data, $idx, 'stage_skipped', 'Stage "' . ( $stages[ $si ]['stageName'] ?? $stage_name ) . '" skipped.' );
 		Portal_Data::write_submissions( $data );
 		return new WP_REST_Response( $sub, 200 );
 	}
@@ -1784,6 +1887,8 @@ class Portal_REST {
 		$roles = (array) $u->roles;
 		if ( in_array( 'rrp_reviewer', $roles, true ) ) {
 			$portal_role = 'Reviewer';
+		} elseif ( in_array( 'rrp_faculty', $roles, true ) ) {
+			$portal_role = 'Faculty';
 		} elseif ( in_array( 'rrp_coordinator', $roles, true ) ) {
 			$portal_role = 'Coordinator';
 		} elseif ( in_array( 'rrp_admin', $roles, true ) || in_array( 'administrator', $roles, true ) ) {
@@ -1792,7 +1897,7 @@ class Portal_REST {
 			$portal_role = 'Student';
 		}
 		$wp_role = 'rrp_student';
-		foreach ( array( 'rrp_admin', 'administrator', 'rrp_coordinator', 'rrp_reviewer', 'rrp_student' ) as $r ) {
+		foreach ( array( 'rrp_admin', 'administrator', 'rrp_coordinator', 'rrp_faculty', 'rrp_reviewer', 'rrp_student' ) as $r ) {
 			if ( in_array( $r, $roles, true ) ) { $wp_role = $r; break; }
 		}
 		return array(
@@ -1807,6 +1912,8 @@ class Portal_REST {
 			'submissionTypes'       => (array) ( get_user_meta( $u->ID, 'rrp_submission_types', true ) ?: array() ),
 			'department'            => (string) ( get_user_meta( $u->ID, 'rrp_department', true ) ?: '' ),
 			'expertise'             => (string) ( get_user_meta( $u->ID, 'rrp_expertise', true ) ?: '' ),
+			'programIds'            => (array) ( get_user_meta( $u->ID, 'rrp_program_ids', true ) ?: array() ),
+			'programId'             => (string) ( get_user_meta( $u->ID, 'rrp_program_id', true ) ?: '' ),
 			'registeredAt'          => $u->user_registered,
 		);
 	}
@@ -1818,6 +1925,12 @@ class Portal_REST {
 			$roles_to_query = array( 'rrp_student' );
 		} elseif ( $role_filter === 'reviewer' ) {
 			$roles_to_query = array( 'rrp_reviewer' );
+		} elseif ( $role_filter === 'coordinator' ) {
+			$roles_to_query = array( 'rrp_coordinator' );
+		} elseif ( $role_filter === 'admin' ) {
+			$roles_to_query = array( 'rrp_admin' );
+		} elseif ( $role_filter === 'faculty' ) {
+			$roles_to_query = array( 'rrp_faculty' );
 		} else {
 			$roles_to_query = array( 'rrp_student', 'rrp_reviewer' );
 		}
@@ -1880,8 +1993,13 @@ class Portal_REST {
 		if ( ! $email || ! is_email( $email ) ) {
 			return new WP_REST_Response( array( 'error' => 'A valid email address is required.' ), 400 );
 		}
-		if ( ! in_array( $role, array( 'rrp_student', 'rrp_reviewer' ), true ) ) {
-			return new WP_REST_Response( array( 'error' => 'Role must be rrp_student or rrp_reviewer.' ), 400 );
+		$allowed_roles = array( 'rrp_student', 'rrp_reviewer', 'rrp_coordinator', 'rrp_admin', 'rrp_faculty' );
+		if ( ! in_array( $role, $allowed_roles, true ) ) {
+			return new WP_REST_Response( array( 'error' => 'Invalid role. Must be one of: ' . implode( ', ', $allowed_roles ) ), 400 );
+		}
+		// Only admins can create coordinator or admin accounts
+		if ( in_array( $role, array( 'rrp_coordinator', 'rrp_admin' ), true ) && ! current_user_can( 'rrp_full_admin_access' ) ) {
+			return new WP_REST_Response( array( 'error' => 'Only admins can create coordinator or admin accounts.' ), 403 );
 		}
 		if ( email_exists( $email ) ) {
 			$existing     = get_user_by( 'email', $email );
@@ -1945,8 +2063,14 @@ class Portal_REST {
 		}
 
 		// Sync to reviewers.json so the assignment panel sees this reviewer
-		if ( $role === 'rrp_reviewer' ) {
+		if ( $role === 'rrp_reviewer' || $role === 'rrp_faculty' ) {
 			Portal_Data::sync_reviewer_to_json( $user_id );
+		}
+		if ( ! empty( $body['programIds'] ) && is_array( $body['programIds'] ) ) {
+			update_user_meta( $user_id, 'rrp_program_ids', array_map( 'sanitize_text_field', $body['programIds'] ) );
+		}
+		if ( ! empty( $body['programId'] ) ) {
+			update_user_meta( $user_id, 'rrp_program_id', sanitize_text_field( $body['programId'] ) );
 		}
 
 		return new WP_REST_Response( array( 'user' => self::format_portal_user( get_userdata( $user_id ) ), 'created' => true ), 201 );
@@ -1993,9 +2117,28 @@ class Portal_REST {
 		if ( array_key_exists( 'expertise', $body ) ) {
 			update_user_meta( $id, 'rrp_expertise', sanitize_textarea_field( $body['expertise'] ) );
 		}
+		if ( array_key_exists( 'programIds', $body ) && is_array( $body['programIds'] ) ) {
+			update_user_meta( $id, 'rrp_program_ids', array_map( 'sanitize_text_field', $body['programIds'] ) );
+		}
+		if ( array_key_exists( 'programId', $body ) ) {
+			update_user_meta( $id, 'rrp_program_id', sanitize_text_field( (string) $body['programId'] ) );
+		}
 
-		// Sync to reviewers.json if this is a reviewer
-		if ( in_array( 'rrp_reviewer', (array) get_userdata( $id )->roles, true ) ) {
+		// Allow admin to change user role
+		if ( ! empty( $body['role'] ) && current_user_can( 'rrp_full_admin_access' ) ) {
+			$new_role      = sanitize_key( (string) $body['role'] );
+			$allowed_roles = array( 'rrp_student', 'rrp_reviewer', 'rrp_coordinator', 'rrp_admin', 'rrp_faculty' );
+			if ( in_array( $new_role, $allowed_roles, true ) ) {
+				$user->set_role( $new_role );
+				if ( $new_role === 'rrp_reviewer' || $new_role === 'rrp_faculty' ) {
+					Portal_Data::sync_reviewer_to_json( $id );
+				}
+			}
+		}
+
+		// Sync to reviewers.json if this is a reviewer or faculty
+		$updated_roles = (array) get_userdata( $id )->roles;
+		if ( in_array( 'rrp_reviewer', $updated_roles, true ) || in_array( 'rrp_faculty', $updated_roles, true ) ) {
 			Portal_Data::sync_reviewer_to_json( $id );
 		}
 
@@ -2014,8 +2157,8 @@ class Portal_REST {
 		if ( user_can( $id, 'rrp_full_admin_access' ) && ! current_user_can( 'rrp_full_admin_access' ) ) {
 			return new WP_REST_Response( array( 'error' => 'You cannot remove an administrator.' ), 403 );
 		}
-		$was_reviewer = in_array( 'rrp_reviewer', (array) $user->roles, true );
-		foreach ( array( 'rrp_student', 'rrp_reviewer', 'rrp_coordinator', 'rrp_admin' ) as $r ) {
+		$was_reviewer = in_array( 'rrp_reviewer', (array) $user->roles, true ) || in_array( 'rrp_faculty', (array) $user->roles, true );
+		foreach ( array( 'rrp_student', 'rrp_reviewer', 'rrp_coordinator', 'rrp_admin', 'rrp_faculty' ) as $r ) {
 			$user->remove_role( $r );
 		}
 		if ( empty( $user->roles ) ) {
@@ -2071,5 +2214,54 @@ class Portal_REST {
 		}
 		Portal_Data::write_reviewers( $filtered );
 		return new WP_REST_Response( array( 'removed' => true, 'jsonId' => $json_id ), 200 );
+	}
+
+	public static function portal_users_reset_password( WP_REST_Request $request ) {
+		$id   = (int) $request->get_param( 'id' );
+		$body = $request->get_json_params() ?: array();
+		$user = get_userdata( $id );
+		if ( ! $user ) {
+			return new WP_REST_Response( array( 'error' => 'User not found.' ), 404 );
+		}
+		// Never reset another admin's password unless you are also admin
+		if ( user_can( $id, 'rrp_full_admin_access' ) && ! current_user_can( 'rrp_full_admin_access' ) ) {
+			return new WP_REST_Response( array( 'error' => 'Cannot reset an administrator password.' ), 403 );
+		}
+		$new_password = isset( $body['password'] ) && (string) $body['password'] !== '' ? (string) $body['password'] : wp_generate_password( 12, true, false );
+		wp_set_password( $new_password, $id );
+		return new WP_REST_Response( array( 'reset' => true, 'userId' => $id, 'newPassword' => $new_password ), 200 );
+	}
+
+	// ─── Audit Log ────────────────────────────────────────────────────────────
+
+	/**
+	 * Append an audit log entry to the in-memory submission record.
+	 * Caller is responsible for calling Portal_Data::write_submissions() afterwards.
+	 */
+	private static function append_audit_log( array &$data, int $idx, string $action, string $detail ): void {
+		$user  = wp_get_current_user();
+		$entry = array(
+			'at'     => gmdate( 'c' ),
+			'action' => $action,
+			'actor'  => array(
+				'name'  => $user->display_name ?: ( $user->user_login ?: 'System' ),
+				'email' => strtolower( trim( (string) ( $user->user_email ?? '' ) ) ),
+			),
+			'detail' => $detail,
+		);
+		if ( ! isset( $data['submissions'][ $idx ]['auditLog'] ) || ! is_array( $data['submissions'][ $idx ]['auditLog'] ) ) {
+			$data['submissions'][ $idx ]['auditLog'] = array();
+		}
+		$data['submissions'][ $idx ]['auditLog'][] = $entry;
+	}
+
+	public static function audit_log_get( WP_REST_Request $request ): WP_REST_Response {
+		$id  = $request->get_param( 'id' );
+		$sub = self::get_submission_by_id( $id );
+		if ( ! $sub ) {
+			return new WP_REST_Response( array( 'error' => 'Submission not found.' ), 404 );
+		}
+		$log = isset( $sub['auditLog'] ) && is_array( $sub['auditLog'] ) ? $sub['auditLog'] : array();
+		return new WP_REST_Response( array( 'id' => $id, 'auditLog' => array_reverse( $log ) ), 200 );
 	}
 }
