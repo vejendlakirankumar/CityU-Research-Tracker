@@ -315,11 +315,16 @@ class RRP_User_Management {
 	 * Display user statistics
 	 */
 	private static function display_user_stats() {
-		$stats = array();
+		$stats   = array();
+		$all_ids = array();
 		foreach ( self::ROLES as $role_slug => $role_data ) {
 			$users = get_users( array( 'role' => $role_slug ) );
 			$stats[ $role_data['name'] ] = count( $users );
+			foreach ( $users as $u ) {
+				$all_ids[ $u->ID ] = true; // dedup multi-role users
+			}
 		}
+		$total_unique = count( $all_ids );
 		?>
 		<div class="stats-grid">
 			<?php foreach ( $stats as $role_name => $count ) : ?>
@@ -328,6 +333,10 @@ class RRP_User_Management {
 					<div class="stat-label"><?php echo esc_html( $role_name ); ?></div>
 				</div>
 			<?php endforeach; ?>
+			<div class="stat-card" style="border:2px solid #0066aa;">
+				<div class="stat-number"><?php echo esc_html( $total_unique ); ?></div>
+				<div class="stat-label">Total Unique Users</div>
+			</div>
 		</div>
 		<?php
 	}
@@ -359,9 +368,15 @@ class RRP_User_Management {
 	 */
 	private static function display_user_list() {
 		$portal_users = array();
+		$seen_ids     = array();
 		foreach ( self::ROLES as $role_slug => $role_data ) {
 			$users = get_users( array( 'role' => $role_slug ) );
-			$portal_users = array_merge( $portal_users, $users );
+			foreach ( $users as $u ) {
+				if ( ! isset( $seen_ids[ $u->ID ] ) ) {
+					$seen_ids[ $u->ID ] = true;
+					$portal_users[]     = $u;
+				}
+			}
 		}
 		?>
 		<table class="wp-list-table widefat fixed striped">
@@ -378,10 +393,13 @@ class RRP_User_Management {
 			<tbody>
 				<?php foreach ( $portal_users as $user ) : ?>
 					<?php
-					$department = get_user_meta( $user->ID, 'rrp_department', true );
+					$department  = get_user_meta( $user->ID, 'rrp_department', true );
 					$reviewer_id = get_user_meta( $user->ID, 'rrp_reviewer_id', true );
-					$role_names = array_intersect_key( self::ROLES, array_flip( $user->roles ) );
-					$role_name = !empty( $role_names ) ? reset( $role_names )['name'] : implode( ', ', $user->roles );
+					// Show all portal roles the user holds (multi-role aware)
+					$matched_roles = array_intersect_key( self::ROLES, array_flip( $user->roles ) );
+					$role_name = ! empty( $matched_roles )
+						? implode( ', ', array_column( array_values( $matched_roles ), 'name' ) )
+						: implode( ', ', $user->roles );
 					?>
 					<tr>
 						<td><?php echo esc_html( $user->display_name ); ?></td>
@@ -495,22 +513,55 @@ class RRP_User_Management {
 	 * Get user's research portal role
 	 */
 	public static function get_user_portal_role( $user_id = null ) {
+		// Returns the first matched role slug for backward compatibility.
+		// Prefer get_user_portal_roles() for multi-role aware code.
+		$roles = self::get_user_portal_roles( $user_id );
+		return $roles ? $roles[0] : false;
+	}
+
+	/**
+	 * Get all portal role slugs assigned to a user.
+	 * Returns an array such as ['rrp_student', 'rrp_reviewer'] for multi-role users.
+	 *
+	 * @param int|null $user_id  Defaults to the current user.
+	 * @return string[]  Array of role slugs (may be empty).
+	 */
+	public static function get_user_portal_roles( $user_id = null ) {
 		if ( ! $user_id ) {
 			$user_id = get_current_user_id();
 		}
-		
 		$user = get_userdata( $user_id );
 		if ( ! $user ) {
-			return false;
+			return array();
 		}
+		return array_values( array_intersect( array_keys( self::ROLES ), $user->roles ) );
+	}
 
-		foreach ( self::ROLES as $role_slug => $role_data ) {
-			if ( in_array( $role_slug, $user->roles, true ) ) {
-				return $role_slug;
+	/**
+	 * Return display labels for every portal role a user holds.
+	 * Used by research-review-portal.php to populate window.RRP.userRoles.
+	 *
+	 * Example: user with rrp_student + rrp_reviewer → ['Student', 'Reviewer']
+	 *
+	 * @param string[] $user_roles  Array of WP role slugs from $current_user->roles.
+	 * @return string[]  Ordered array of display labels.
+	 */
+	public static function get_role_labels( array $user_roles ) {
+		$map = array(
+			'rrp_student'     => 'Student',
+			'rrp_reviewer'    => 'Reviewer',
+			'rrp_faculty'     => 'Faculty',
+			'rrp_coordinator' => 'Coordinator',
+			'rrp_admin'       => 'Admin',
+			'administrator'   => 'Admin',
+		);
+		$labels = array();
+		foreach ( $map as $slug => $label ) {
+			if ( in_array( $slug, $user_roles, true ) && ! in_array( $label, $labels, true ) ) {
+				$labels[] = $label;
 			}
 		}
-
-		return false;
+		return $labels;
 	}
 
 	/**

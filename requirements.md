@@ -1,7 +1,7 @@
 # Research Review Portal — Requirements & Implementation Status
 
 > **Last updated:** March 14, 2026  
-> **Environment:** WordPress plugin on Azure VM (`rcgapimtest.eastus2.cloudapp.azure.com`)  
+> **Environment:** WordPress plugin on Azure VM (`deployvm.cityu.edu`)  
 > **Plugin path:** `/mnt/c/Development/CityU-Research-Tracker`  
 > **Health check:** `GET /wp-json/research-portal/v1/health` → `{"ok":true}`
 
@@ -196,7 +196,7 @@
 
 | Item | Value |
 |---|---|
-| VM | `rcgapimtest.eastus2.cloudapp.azure.com` |
+| VM | `deployvm.cityu.edu` |
 | WP admin | `admin` / `admin123` |
 | VM user | `azureadmin` / `Microsoft12345` |
 | Plugin path (VM) | `/mnt/c/Development/CityU-Research-Tracker` |

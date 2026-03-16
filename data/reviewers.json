@@ -1,15 +1,5 @@
 [
     {
-        "id": "wp_7",
-        "name": "Cris Ewell",
-        "email": "cewell@cityu.edu",
-        "submissionTypes": [
-            "grant",
-            "publication",
-            "conference"
-        ]
-    },
-    {
         "id": "wp_8",
         "name": "George Bragg",
         "email": "gbragg@cityu.edu",

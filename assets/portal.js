@@ -1,16 +1,27 @@
 (function () {
   'use strict';
 
-  var restBase = (window.RRP && window.RRP.restBase) ? window.RRP.restBase.replace(/\/$/, '') : '';
+  // Normalize the stored WP restBase to the actual browser origin so external
+  // browsers (Chrome, etc.) don't resolve "localhost" to their own machine.
+  function _normalizeOrigin(url) {
+    if (!url || !window.location || !window.location.origin) return url || '';
+    return url.replace(/^https?:\/\/[^\/]+/, window.location.origin);
+  }
+
+  var restBase = _normalizeOrigin(
+    (window.RRP && window.RRP.restBase) ? window.RRP.restBase.replace(/\/$/, '') : ''
+  );
   var nonce = (window.RRP && window.RRP.nonce) || '';
   var isLoggedIn = (window.RRP && window.RRP.isLoggedIn) || false;
-  var loginUrl = (window.RRP && window.RRP.loginUrl) || '/wp-login.php';
-  var logoutUrl = (window.RRP && window.RRP.logoutUrl) || '/wp-login.php?action=logout';
+  var loginUrl  = _normalizeOrigin((window.RRP && window.RRP.loginUrl)  || '/wp-login.php');
+  var logoutUrl = _normalizeOrigin((window.RRP && window.RRP.logoutUrl) || '/wp-login.php?action=logout');
+  var _viewerIsAdmin = window.RRP && Array.isArray(window.RRP.userRoles) && window.RRP.userRoles.indexOf('Admin') !== -1;
 
   function api(method, path, body) {
     var url = restBase + path;
     var opts = {
       method: method,
+      credentials: 'same-origin',
       headers: {
         'Content-Type': 'application/json',
         'X-WP-Nonce': nonce
@@ -27,6 +38,44 @@
         return data;
       });
     });
+  }
+
+  // ── Dynamic submission types (loaded from /submission-types once on boot) ────
+  // Seeded with the legacy static types so pages work before the API resolves.
+  var _dynTypes = [
+    { id: 'conference',    label: 'Conference Paper',          stages: ['Initial Screening','Reviewer Assignment','Peer Review','Review Consolidation','Final Decision','Confirmation'] },
+    { id: 'publication',   label: 'Publication',               stages: ['Administrative Check','Reviewer Matching','Expert Review','Director Assessment','Final Decision','Tracking'] },
+    { id: 'student-project', label: 'Student Project',         stages: ['Advisor Matching','Advisor Consultation','Feasibility Check','Director Approval','Project Setup','Milestone Tracking'] },
+    { id: 'grant',         label: 'Grant Proposal',            stages: ['Compliance Check','Review Assignment','Multi-Criteria Review','Committee Meeting','Final Decision','Development Support','Submission Tracking'] },
+    { id: 'dissertation',  label: 'Doctoral Dissertation',     stages: ['Chair Review','Committee Review','Program Director Approval','Dissertation Director Sign-Off'] },
+    { id: 'capstone',      label: 'Capstone Project',          stages: ['Advisor Review','Program Director Approval'] },
+    { id: 'research-paper', label: 'Research Paper',           stages: ['Peer Review','Program Director Approval'] },
+    { id: 'grant-proposal', label: 'Grant Proposal (Detailed)', stages: ['Multi-Criteria Review','Program Director Approval'] }
+  ];
+  var _dynTypesLoaded = false;
+
+  function _refreshDynTypes(callback) {
+    api('GET', '/submission-types').then(function (res) {
+      if (res.submissionTypes && res.submissionTypes.length) {
+        _dynTypes = res.submissionTypes;
+        _dynTypesLoaded = true;
+        // Rebuild legacy alias maps used in static places
+        TYPE_LABEL_MAP = {};
+        _dynTypes.forEach(function (t) { TYPE_LABEL_MAP[t.id] = t.label; });
+        // Backward-compat aliases
+        TYPE_LABEL_MAP['student'] = TYPE_LABEL_MAP['student-project'] || 'Student Project';
+        TYPE_LABEL_MAP['conference paper'] = TYPE_LABEL_MAP['conference'] || 'Conference Paper';
+      }
+      if (callback) callback();
+    }).catch(function () { if (callback) callback(); });
+  }
+
+  function dynTypeById(id) {
+    return _dynTypes.find(function (t) { return t.id === id; }) || null;
+  }
+
+  function dynStagesForType(id) {
+    var t = dynTypeById(id); return t ? t.stages : ['Initial Review', 'Final Approval'];
   }
 
   var SUBMISSION_TYPES = [
@@ -50,7 +99,11 @@
   };
 
   function typeLabel(raw) {
-    return TYPE_LABEL_MAP[(raw || '').toLowerCase()] || (raw || '—');
+    var k = (raw || '').toLowerCase();
+    // Dynamic lookup first
+    var dt = dynTypeById(k);
+    if (dt) return dt.label;
+    return TYPE_LABEL_MAP[k] || (raw || '—');
   }
 
   function statusBadgeCls(status) {
@@ -75,6 +128,31 @@
            s === 'approved-for-submission' || s === 'accepted' || s === 'conditionally-accepted';
   }
 
+  function applyDateRange(arr, range) {
+    if (!range || range === 'all') return arr;
+    var ms = { today: 86400000, week: 7 * 86400000, month: 30 * 86400000, year: 365 * 86400000 }[range];
+    if (!ms) return arr;
+    var cutoff = Date.now() - ms;
+    return arr.filter(function (s) { return s.createdAt && new Date(s.createdAt).getTime() >= cutoff; });
+  }
+
+  function sortSubmissions(arr) {
+    var active = arr.filter(function (s) { return !isApprovedStatus(s.status) && (s.status || '').toLowerCase() !== 'rejected'; });
+    var done   = arr.filter(function (s) { return  isApprovedStatus(s.status) || (s.status || '').toLowerCase() === 'rejected'; });
+    active.sort(function (a, b) { return new Date(a.createdAt || 0) - new Date(b.createdAt || 0); });
+    done.sort(function (a, b)   { return new Date(b.createdAt || 0) - new Date(a.createdAt || 0); });
+    return active.concat(done);
+  }
+
+  var _drLabels = { today: 'Today', week: 'This Week', month: 'This Month', year: 'This Year', all: 'All Time' };
+  function dateRangeBar(current) {
+    return '<div class="rrp-date-range-bar">' +
+      ['today', 'week', 'month', 'year', 'all'].map(function (r) {
+        return '<button type="button" class="rrp-date-range-btn' + (current === r ? ' active' : '') + '" data-daterange="' + r + '">' + _drLabels[r] + '</button>';
+      }).join('') +
+    '</div>';
+  }
+
   var typeToApi = { conference: 'conference', publication: 'publication', student: 'student-project', grant: 'grant' };
 
   function getQueryParam(name) {
@@ -82,12 +160,185 @@
     return match ? decodeURIComponent(match[1].replace(/\+/g, ' ')) : null;
   }
 
+  // ── In-portal Profile Editor ──────────────────────────────────────────────
+  function renderProfilePanel(container, backFn) {
+    var _backFn = backFn || function () {};
+
+    // Seed from window.RRP (fast, no round-trip needed for initial render)
+    var _profile = {
+      id:         (window.RRP && window.RRP.userId)     || 0,
+      name:       (window.RRP && window.RRP.userName)   || '',
+      email:      (window.RRP && window.RRP.userEmail)  || '',
+      firstName:  (window.RRP && window.RRP.firstName)  || '',
+      lastName:   (window.RRP && window.RRP.lastName)   || '',
+      degree:     (window.RRP && window.RRP.degree)     || '',
+      department: (window.RRP && window.RRP.department) || '',
+      expertise:  (window.RRP && window.RRP.expertise)  || '',
+      portalRole: (window.RRP && (Array.isArray(window.RRP.userRoles) ? window.RRP.userRoles.join(' · ') : window.RRP.userRole)) || ''
+    };
+
+    function render(programs, departments) {
+      // Build degree/program dropdown
+      var degreeOptions = '<option value="">&#8212; Select program &#8212;</option>';
+      if (programs && programs.length) {
+        // Group by school
+        var schools = [];
+        programs.forEach(function(p) { if (schools.indexOf(p.school) === -1) schools.push(p.school); });
+        schools.forEach(function(sch) {
+          degreeOptions += '<optgroup label="' + escapeHtml(sch || 'Other') + '">';
+          programs.filter(function(p) { return p.school === sch; }).forEach(function(p) {
+            degreeOptions += '<option value="' + escapeHtml(p.id) + '"' + (_profile.degree === p.id || _profile.degree === p.label ? ' selected' : '') + '>' + escapeHtml(p.label) + '</option>';
+          });
+          degreeOptions += '</optgroup>';
+        });
+      } else {
+        // Fallback: pre-fill what we have as a plain option
+        if (_profile.degree) degreeOptions += '<option value="' + escapeHtml(_profile.degree) + '" selected>' + escapeHtml(_profile.degree) + '</option>';
+      }
+      // Build department dropdown
+      var deptOptions = '<option value="">&#8212; Select department &#8212;</option>';
+      if (departments && departments.length) {
+        departments.forEach(function(d) {
+          deptOptions += '<option value="' + escapeHtml(d.id) + '"' + (_profile.department === d.id || _profile.department === d.label ? ' selected' : '') + '>' + escapeHtml(d.label) + '</option>';
+        });
+      } else {
+        if (_profile.department) deptOptions += '<option value="' + escapeHtml(_profile.department) + '" selected>' + escapeHtml(_profile.department) + '</option>';
+      }
+      container.innerHTML =
+        '<div class="rrp-dashboard">' +
+          '<div class="rrp-dash-header">' +
+            '<button type="button" class="rrp-btn secondary" id="rrp-profile-back">&#8592; Back</button>' +
+            '<h1>&#128100; Edit Profile</h1>' +
+          '</div>' +
+          '<div class="rrp-card" style="max-width:560px;">' +
+            // Avatar + identity row
+            '<div style="display:flex;align-items:center;gap:1rem;margin-bottom:1.5rem;padding-bottom:1.25rem;border-bottom:1px solid #e5e7eb;">' +
+              '<div style="width:56px;height:56px;border-radius:50%;background:#003d66;color:#fff;font-size:1.5rem;display:flex;align-items:center;justify-content:center;flex-shrink:0;">&#128100;</div>' +
+              '<div>' +
+                '<div style="font-weight:700;font-size:1.05rem;color:#1a202c;" id="rrp-profile-display-name">' + escapeHtml(_profile.name) + '</div>' +
+                '<div style="font-size:.83rem;color:#6b7280;">' + escapeHtml(_profile.email) + '</div>' +
+                '<div style="font-size:.78rem;color:#9ca3af;margin-top:.15rem;">' + escapeHtml(_profile.portalRole) + ' &middot; CityU STC</div>' +
+              '</div>' +
+            '</div>' +
+            '<form id="rrp-profile-form">' +
+              '<div style="display:grid;grid-template-columns:1fr 1fr;gap:.75rem;">' +
+                '<label class="rrp-label">First Name<br><input type="text" class="rrp-input" id="rrp-pf-first" value="' + escapeHtml(_profile.firstName) + '" placeholder="First name" /></label>' +
+                '<label class="rrp-label">Last Name<br><input type="text" class="rrp-input" id="rrp-pf-last" value="' + escapeHtml(_profile.lastName) + '" placeholder="Last name" /></label>' +
+              '</div>' +
+              '<label class="rrp-label" style="margin-top:.75rem;">Email (read-only)<br>' +
+                '<input type="email" class="rrp-input" value="' + escapeHtml(_profile.email) + '" readonly style="background:#f1f5f9;cursor:not-allowed;color:#6b7280;" /></label>' +
+              '<label class="rrp-label" style="margin-top:.75rem;">Degree / Program<br>' +
+                '<select class="rrp-input" id="rrp-pf-degree">' + degreeOptions + '</select></label>' +
+              '<label class="rrp-label" style="margin-top:.75rem;">Department / School<br>' +
+                '<select class="rrp-input" id="rrp-pf-dept">' + deptOptions + '</select></label>' +
+              '<label class="rrp-label" style="margin-top:.75rem;">Research Interests / Expertise<br>' +
+                '<textarea class="rrp-input" id="rrp-pf-expertise" rows="3" placeholder="Briefly describe your research interests or area of expertise">' + escapeHtml(_profile.expertise) + '</textarea></label>' +
+              '<details style="margin-top:1rem;">' +
+                '<summary style="cursor:pointer;font-size:.88rem;font-weight:600;color:#475569;user-select:none;">Change Password</summary>' +
+                '<div style="margin-top:.75rem;display:flex;flex-direction:column;gap:.5rem;">' +
+                  '<label class="rrp-label">New Password (min 8 characters)<br>' +
+                    '<input type="password" class="rrp-input" id="rrp-pf-pass" autocomplete="new-password" placeholder="Leave blank to keep current" /></label>' +
+                  '<label class="rrp-label">Confirm Password<br>' +
+                    '<input type="password" class="rrp-input" id="rrp-pf-pass2" autocomplete="new-password" placeholder="Re-enter new password" /></label>' +
+                '</div>' +
+              '</details>' +
+              '<div style="margin-top:1.25rem;display:flex;gap:.6rem;align-items:center;">' +
+                '<button type="submit" class="rrp-btn primary" id="rrp-pf-save">Save Changes</button>' +
+                '<button type="button" class="rrp-btn secondary" id="rrp-pf-cancel">Cancel</button>' +
+                '<span id="rrp-pf-msg" style="font-size:.85rem;display:none;"></span>' +
+              '</div>' +
+            '</form>' +
+          '</div>' +
+        '</div>';
+
+      document.getElementById('rrp-profile-back').addEventListener('click', _backFn);
+      document.getElementById('rrp-pf-cancel').addEventListener('click', _backFn);
+
+      document.getElementById('rrp-profile-form').addEventListener('submit', function (e) {
+        e.preventDefault();
+        var msgEl   = document.getElementById('rrp-pf-msg');
+        var saveBtn = document.getElementById('rrp-pf-save');
+        var pass1   = document.getElementById('rrp-pf-pass').value;
+        var pass2   = document.getElementById('rrp-pf-pass2').value;
+
+        if (pass1 && pass1.length < 8) {
+          msgEl.style.display = 'inline'; msgEl.style.color = '#ef4444';
+          msgEl.textContent = 'Password must be at least 8 characters.'; return;
+        }
+        if (pass1 && pass1 !== pass2) {
+          msgEl.style.display = 'inline'; msgEl.style.color = '#ef4444';
+          msgEl.textContent = 'Passwords do not match.'; return;
+        }
+
+        var payload = {
+          firstName:  document.getElementById('rrp-pf-first').value.trim(),
+          lastName:   document.getElementById('rrp-pf-last').value.trim(),
+          degree:     document.getElementById('rrp-pf-degree').value.trim(),
+          department: document.getElementById('rrp-pf-dept').value.trim(),
+          expertise:  document.getElementById('rrp-pf-expertise').value.trim()
+        };
+        if (pass1) payload.password = pass1;
+
+        saveBtn.disabled = true; saveBtn.textContent = 'Saving\u2026';
+        msgEl.style.display = 'none';
+
+        api('PATCH', '/portal-users/me', payload).then(function (res) {
+          var u = res.user || {};
+          // Update window.RRP so the rest of the portal reflects the name change immediately
+          if (window.RRP) {
+            if (u.name)  window.RRP.userName   = u.name;
+            if (payload.firstName) window.RRP.firstName  = payload.firstName;
+            if (payload.lastName)  window.RRP.lastName   = payload.lastName;
+            if (payload.degree)    window.RRP.degree     = payload.degree;
+            if (payload.department) window.RRP.department = payload.department;
+            if (payload.expertise)  window.RRP.expertise  = payload.expertise;
+          }
+          // Update displayed name in card header
+          if (u.name) {
+            var dn = document.getElementById('rrp-profile-display-name');
+            if (dn) dn.textContent = u.name;
+          }
+          saveBtn.disabled    = false;
+          saveBtn.textContent = 'Save Changes';
+          msgEl.style.display = 'inline'; msgEl.style.color = '#16a34a';
+          msgEl.textContent   = 'Profile updated successfully.';
+          // Clear password fields
+          document.getElementById('rrp-pf-pass').value  = '';
+          document.getElementById('rrp-pf-pass2').value = '';
+        }).catch(function (err) {
+          saveBtn.disabled    = false;
+          saveBtn.textContent = 'Save Changes';
+          msgEl.style.display = 'inline'; msgEl.style.color = '#ef4444';
+          msgEl.textContent   = 'Save failed: ' + (err && err.message ? err.message : 'Please try again.');
+        });
+      });
+    }
+
+    // Fetch fresh profile data and config (for dropdowns) in parallel, then render
+    Promise.all([
+      api('GET', '/portal-users/me').catch(function() { return {}; }),
+      api('GET', '/config').catch(function() { return {}; })
+    ]).then(function(results) {
+      var meRes  = results[0];
+      var cfgRes = results[1];
+      var u = meRes.user || {};
+      if (u.name)       _profile.name       = u.name;
+      if (u.email)      _profile.email      = u.email;
+      if (u.firstName !== undefined) _profile.firstName  = u.firstName  || '';
+      if (u.lastName  !== undefined) _profile.lastName   = u.lastName   || '';
+      if (u.degree    !== undefined) _profile.degree     = u.degree     || '';
+      if (u.department !== undefined) _profile.department = u.department || '';
+      if (u.expertise !== undefined)  _profile.expertise  = u.expertise  || '';
+      render(cfgRes.programs || [], cfgRes.departments || []);
+    });
+  }
+
   // ── Student Dashboard ──────────────────────────────────────────────────────
   function renderStudentDashboard(container, activeFilter) {
     var userName   = (window.RRP && window.RRP.userName)   || 'Student';
     var userEmail  = ((window.RRP && window.RRP.userEmail) || '').toLowerCase();
-    var profileUrl = (window.RRP && window.RRP.profileUrl) || '/wp-admin/profile.php';
     activeFilter   = activeFilter || 'all';
+    var activeDateRange = 'all';
 
     container.innerHTML =
       '<div class="rrp-student-banner">' +
@@ -110,7 +361,7 @@
             '<div class="rrp-profile-name">' + escapeHtml(userName) + '</div>' +
             '<div class="rrp-profile-email">' + escapeHtml(userEmail) + '</div>' +
             '<div class="rrp-profile-role">Student &middot; CityU STC</div>' +
-            '<a class="rrp-btn secondary" style="margin-top:0.75rem;display:block;text-align:center;" href="' + escapeHtml(profileUrl) + '">Edit Profile</a>' +
+            '<button type="button" class="rrp-btn secondary" id="rrp-edit-profile-btn" style="margin-top:0.75rem;width:100%;">&#9998; Edit Profile</button>' +
           '</div>' +
           '<div class="rrp-nav-card">' +
             '<div class="rrp-nav-card-title">Quick links</div>' +
@@ -124,6 +375,9 @@
 
     document.getElementById('rrp-student-new-btn').addEventListener('click', function () {
       renderStudentForm(container);
+    });
+    document.getElementById('rrp-edit-profile-btn').addEventListener('click', function () {
+      renderProfilePanel(container, function () { renderStudentDashboard(container); });
     });
 
     container.querySelectorAll('[data-view]').forEach(function (btn) {
@@ -169,20 +423,21 @@
         document.querySelectorAll('[data-stat-filter]').forEach(function (btn) {
           btn.addEventListener('click', function () {
             var f = btn.getAttribute('data-stat-filter');
-            renderSubmissionList(mine, f);
+            renderSubmissionList(mine, f, activeDateRange);
             document.querySelectorAll('[data-stat-filter]').forEach(function (b) {
               b.classList.toggle('rrp-stat-active', b.getAttribute('data-stat-filter') === f);
             });
           });
         });
 
-        renderSubmissionList(mine, activeFilter);
+        renderSubmissionList(mine, activeFilter, activeDateRange);
       })
       .catch(function () {
         document.getElementById('rrp-student-stats').innerHTML = '<div class="rrp-error">Unable to load your submissions.</div>';
       });
 
-    function renderSubmissionList(mine, filter) {
+    function renderSubmissionList(mine, filter, dateRange) {
+      dateRange = dateRange || 'all';
       var filtered = mine;
       if (filter === 'inreview') {
         filtered = mine.filter(function (s) { var st = (s.status || '').toLowerCase(); return st !== 'draft' && st !== 'approved' && st !== 'rejected'; });
@@ -191,6 +446,8 @@
       } else if (filter === 'draft') {
         filtered = mine.filter(function (s) { return (s.status || '').toLowerCase() === 'draft'; });
       }
+      filtered = applyDateRange(filtered, dateRange);
+      filtered = sortSubmissions(filtered);
 
       var listEl = document.getElementById('rrp-student-submissions');
       var heading = filter === 'inreview' ? 'Under Review' :
@@ -199,6 +456,7 @@
 
       if (filtered.length === 0) {
         listEl.innerHTML =
+          dateRangeBar(dateRange) +
           '<h2>' + heading + '</h2>' +
           '<div class="rrp-empty-state">' +
             '<p>' + (mine.length === 0 ? 'You have no submissions yet.' : 'No submissions match this filter.') + '</p>' +
@@ -206,19 +464,25 @@
           '</div>';
         var emptyBtn = document.getElementById('rrp-empty-new-btn');
         if (emptyBtn) emptyBtn.addEventListener('click', function () { renderStudentForm(container); });
+        listEl.querySelectorAll('[data-daterange]').forEach(function (b) {
+          b.addEventListener('click', function () { activeDateRange = b.getAttribute('data-daterange'); renderSubmissionList(mine, filter, activeDateRange); });
+        });
         return;
       }
 
       listEl.innerHTML =
+        dateRangeBar(dateRange) +
         '<h2>' + heading + ' <span class="rrp-count-badge">' + filtered.length + '</span></h2>' +
         '<ul class="rrp-list rrp-submissions-list">' +
         filtered.map(function (s) {
           var firstReviewer = '';
-          (s.reviewStages || []).forEach(function (rs) {
-            if (!firstReviewer && rs.reviewers && rs.reviewers.length) {
-              firstReviewer = rs.reviewers[0].name || rs.reviewers[0].email;
+          var _stagesS = s.reviewStages || [];
+          if (_stagesS.length) {
+            var _activeS = getActiveStage(_stagesS);
+            if (_activeS && (_activeS.reviewers || []).length) {
+              firstReviewer = _activeS.reviewers[0].name || _activeS.reviewers[0].email;
             }
-          });
+          }
           return '<li class="rrp-sub-item">' +
             '<div class="rrp-sub-item-header">' +
               '<strong>' + escapeHtml(s.title || 'Untitled') + '</strong>' +
@@ -246,6 +510,9 @@
       listEl.querySelectorAll('[data-audit-log]').forEach(function (btn) {
         btn.addEventListener('click', function () { openAuditLogModal(btn.getAttribute('data-audit-log')); });
       });
+      listEl.querySelectorAll('[data-daterange]').forEach(function (btn) {
+        btn.addEventListener('click', function () { activeDateRange = btn.getAttribute('data-daterange'); renderSubmissionList(mine, filter, activeDateRange); });
+      });
     }
   }
 
@@ -261,17 +528,12 @@
       'grant-proposal':  'grant'
     };
 
-    var STUDENT_FORM_TYPES = {
-      'dissertation':   'Doctoral Dissertation',
-      'capstone':       'Capstone Project',
-      'research-paper': 'Research Paper',
-      'grant-proposal': 'Grant Proposal'
-    };
+    // Build type options from dynamic types, filtered to student's allowed types
     var allowedTypes = (window.RRP && window.RRP.allowedTypes && window.RRP.allowedTypes.length)
       ? window.RRP.allowedTypes
-      : Object.keys(STUDENT_FORM_TYPES);
+      : _dynTypes.map(function(t) { return t.id; });
     var typeOptions = allowedTypes.map(function (t) {
-      return '<option value="' + t + '">' + (STUDENT_FORM_TYPES[t] || t) + '</option>';
+      return '<option value="' + t + '">' + escapeHtml(dynTypeById(t) ? dynTypeById(t).label : t) + '</option>';
     }).join('');
 
     container.innerHTML =
@@ -391,6 +653,7 @@
             for (var i = 0; i < files.length; i++) { fileData.append('files[]', files[i]); }
             return fetch(restBase + '/submissions/' + encodeURIComponent(res.id) + '/attachments', {
               method: 'POST',
+              credentials: 'same-origin',
               headers: { 'X-WP-Nonce': nonce },
               body: fileData
             }).then(function () { return res; });
@@ -424,25 +687,13 @@
   function renderCoordinatorDashboard(container, activeFilter) {
     var userName   = (window.RRP && window.RRP.userName)   || 'Coordinator';
     var userRole   = (window.RRP && window.RRP.userRole)   || 'Coordinator';
-    var profileUrl = (window.RRP && window.RRP.profileUrl) || '/wp-admin/profile.php';
     activeFilter   = activeFilter || 'all';
+    var activeDateRange = 'all';
 
-    // Stage labels per submission type (for the assignment UI)
-    var TYPE_STAGES = {
-      'dissertation':    ['Chair Review', 'Committee Review', 'Program Director Approval', 'Dissertation Director Sign-Off'],
-      'capstone':        ['Advisor Review', 'Program Director Approval'],
-      'student-project': ['Advisor Review', 'Program Director Approval'],
-      'research-paper':  ['Peer Review', 'Program Director Approval'],
-      'publication':     ['Peer Review', 'Program Director Approval'],
-      'conference':      ['Peer Review', 'Program Director Approval'],
-      'grant':           ['Multi-Criteria Review', 'Program Director Approval'],
-      'grant-proposal':  ['Multi-Criteria Review', 'Program Director Approval']
-    };
-    var DEFAULT_STAGES = ['Initial Review', 'Final Approval'];
-
+    // Stage labels per submission type — reads from dynamic _dynTypes
     function stagesForSub(sub) {
       var key = (sub.submissionType || sub.type || '').toLowerCase().replace(/\s+/g, '-');
-      return TYPE_STAGES[key] || TYPE_STAGES[sub.type] || DEFAULT_STAGES;
+      return dynStagesForType(key);
     }
 
     container.innerHTML =
@@ -465,18 +716,38 @@
             '<div class="rrp-profile-icon">&#128101;</div>' +
             '<div class="rrp-profile-name">' + escapeHtml(userName) + '</div>' +
             '<div class="rrp-profile-role rrp-profile-role-coord">' + escapeHtml(userRole) + ' &middot; CityU STC</div>' +
-            '<a class="rrp-btn secondary" style="margin-top:0.75rem;display:block;text-align:center;" href="' + escapeHtml(profileUrl) + '">Edit Profile</a>' +
+            '<button type="button" class="rrp-btn secondary" id="rrp-edit-profile-btn" style="margin-top:0.75rem;width:100%;">&#9998; Edit Profile</button>' +
           '</div>' +
           '<div class="rrp-nav-card">' +
-            '<div class="rrp-nav-card-title">Quick links</div>' +
+            '<div class="rrp-nav-card-title">Users</div>' +
+            '<ul class="rrp-nav-list">' +
+              '<li><button type="button" class="rrp-nav-link" data-view="users">&#128101; All Users</button></li>' +
+            '</ul>' +
+          '</div>' +
+          '<div class="rrp-nav-card">' +
+            '<div class="rrp-nav-card-title">Groups</div>' +
             '<ul class="rrp-nav-list">' +
               '<li><button type="button" class="rrp-nav-link" data-view="students">&#127891; Students</button></li>' +
-              '<li><button type="button" class="rrp-nav-link" data-view="reviewers">&#128101; Reviewers</button></li>' +
+              '<li><button type="button" class="rrp-nav-link" data-view="reviewers">&#128064; Reviewers</button></li>' +
+              '<li><button type="button" class="rrp-nav-link" data-view="faculty">&#127979; Faculty</button></li>' +
+              '<li><button type="button" class="rrp-nav-link" data-view="coordinators">&#128203; Coordinators</button></li>' +
+              '<li><button type="button" class="rrp-nav-link" data-view="admins">&#128081; Admins</button></li>' +
+            '</ul>' +
+          '</div>' +
+          '<div class="rrp-nav-card">' +
+            '<div class="rrp-nav-card-title">Config</div>' +
+            '<ul class="rrp-nav-list">' +
+              '<li><button type="button" class="rrp-nav-link" data-view="workflow-stages">&#9881; Workflow Stages</button></li>' +
+              '<li><button type="button" class="rrp-nav-link" data-view="submission-types">&#128196; Submission Types</button></li>' +
               '<li><button type="button" class="rrp-nav-link" data-view="programs">&#127979; Programs</button></li>' +
-              '<li><button type="button" class="rrp-nav-link" data-view="users">&#128101; User Management</button></li>' +
+            '</ul>' +
+          '</div>' +
+          '<div class="rrp-nav-card">' +
+            '<div class="rrp-nav-card-title">Tools</div>' +
+            '<ul class="rrp-nav-list">' +
               '<li><button type="button" class="rrp-nav-link" data-view="analytics">&#128202; Analytics</button></li>' +
-              '<li><button type="button" class="rrp-nav-link" data-view="overdue">&#128680; Overdue Submissions</button></li>' +
-              '<li><button type="button" class="rrp-nav-link" data-view="public">&#127760; Public submissions</button></li>' +
+              '<li><button type="button" class="rrp-nav-link" data-view="overdue">&#128680; Overdue</button></li>' +
+              '<li><button type="button" class="rrp-nav-link" data-view="public">&#127760; Public</button></li>' +
             '</ul>' +
           '</div>' +
           '<div id="rrp-coord-reviewer-pool"></div>' +
@@ -492,14 +763,24 @@
         if (view === 'analytics') renderAnalytics(container, function () { renderCoordinatorDashboard(container); });
         if (view === 'public')    renderPublic(container,    function () { renderCoordinatorDashboard(container); });
         if (view === 'overdue')   renderOverdue(container);
-        if (view === 'students')  renderStudentManagement(container, function () { renderCoordinatorDashboard(container); });
+        if (view === 'students')  renderStudentManagement(container,  function () { renderCoordinatorDashboard(container); });
         if (view === 'reviewers') renderReviewerManagement(container, function () { renderCoordinatorDashboard(container); });
-        if (view === 'programs')  renderProgramManagement(container, function () { renderCoordinatorDashboard(container); });
-        if (view === 'users')     renderAdminUserManagement(container, function () { renderCoordinatorDashboard(container); });
+        if (view === 'programs')  renderProgramManagement(container,  function () { renderCoordinatorDashboard(container); });
+        if (view === 'users')             renderUsersPanel(container,            function () { renderCoordinatorDashboard(container); });
+        if (view === 'faculty')            renderUsersPanel(container,            function () { renderCoordinatorDashboard(container); }, 'rrp_faculty');
+        if (view === 'coordinators')       renderUsersPanel(container,            function () { renderCoordinatorDashboard(container); }, 'rrp_coordinator');
+        if (view === 'admins')             renderUsersPanel(container,            function () { renderCoordinatorDashboard(container); }, 'rrp_admin');
+        if (view === 'workflow-stages')    renderWorkflowStagesPanel(container,   function () { renderCoordinatorDashboard(container); });
+        if (view === 'submission-types')   renderSubmissionTypesPanel(container,  function () { renderCoordinatorDashboard(container); });
       });
     });
 
     // Manage Reviewer Pool toggle — removed (use Reviewers quick link instead)
+
+    // Edit Profile
+    document.getElementById('rrp-edit-profile-btn').addEventListener('click', function () {
+      renderProfilePanel(container, function () { renderCoordinatorDashboard(container); });
+    });
 
     // Auto-assign all submissions
     document.getElementById('rrp-coord-auto-assign-btn').addEventListener('click', function () {
@@ -520,7 +801,8 @@
 
     // Load all submissions + assignment summary in parallel
     // If coordinator has program assignments, also fetch students to scope submissions
-    var isCoordinator = (window.RRP && window.RRP.userRole) === 'Coordinator';
+    var _cRoles       = (window.RRP && Array.isArray(window.RRP.userRoles)) ? window.RRP.userRoles : [(window.RRP && window.RRP.userRole) || ''];
+    var isCoordinator = _cRoles.indexOf('Coordinator') !== -1;
     var myProgramIds  = (window.RRP && window.RRP.programIds) || [];
     var coordFetch    = (isCoordinator && myProgramIds.length > 0)
       ? api('GET', '/portal-users?role=student')
@@ -575,20 +857,21 @@
       document.querySelectorAll('[data-stat-filter]').forEach(function (btn) {
         btn.addEventListener('click', function () {
           var f = btn.getAttribute('data-stat-filter');
-          renderSubmissionList(all, summary, f);
+          renderSubmissionList(all, summary, f, activeDateRange);
           document.querySelectorAll('[data-stat-filter]').forEach(function (b) {
             b.classList.toggle('rrp-stat-active', b.getAttribute('data-stat-filter') === f);
           });
         });
       });
 
-      renderSubmissionList(all, summary, activeFilter);
+      renderSubmissionList(all, summary, activeFilter, activeDateRange);
 
     }).catch(function () {
       document.getElementById('rrp-coord-stats').innerHTML = '<div class="rrp-error">Unable to load submissions.</div>';
     });
 
-    function renderSubmissionList(all, summary, filter) {
+    function renderSubmissionList(all, summary, filter, dateRange) {
+      dateRange = dateRange || 'all';
       var filtered = all;
       if (filter === 'unassigned') {
         filtered = all.filter(function (s) {
@@ -604,6 +887,8 @@
       } else if (filter === 'approved') {
         filtered = all.filter(function (s) { return isApprovedStatus(s.status); });
       }
+      filtered = applyDateRange(filtered, dateRange);
+      filtered = sortSubmissions(filtered);
 
       var heading = filter === 'unassigned' ? 'Needs Assignment' :
                     filter === 'inreview'   ? 'In Review' :
@@ -613,25 +898,31 @@
       if (!listEl) return;
 
       if (filtered.length === 0) {
-        listEl.innerHTML = '<h2>' + heading + '</h2><div class="rrp-empty-state"><p>No submissions match this filter.</p></div>';
+        listEl.innerHTML = dateRangeBar(dateRange) + '<h2>' + heading + '</h2><div class="rrp-empty-state"><p>No submissions match this filter.</p></div>';
+        listEl.querySelectorAll('[data-daterange]').forEach(function (b) {
+          b.addEventListener('click', function () { activeDateRange = b.getAttribute('data-daterange'); renderSubmissionList(all, summary, filter, activeDateRange); });
+        });
         return;
       }
 
       listEl.innerHTML =
+        dateRangeBar(dateRange) +
         '<h2>' + heading + ' <span class="rrp-count-badge">' + filtered.length + '</span></h2>' +
         '<ul class="rrp-list rrp-submissions-list">' +
         filtered.map(function (s) {
           var sum = summary[s.id];
           var hasAssignment = sum && (sum.reviewStages || []).some(function (rs) { return (rs.reviewers || []).length > 0; });
+          var isFinal = isApprovedStatus(s.status) || (s.status || '').toLowerCase() === 'rejected';
           var firstReviewer = '';
           var currentStage  = '';
-          if (sum) {
-            (sum.reviewStages || []).forEach(function (rs) {
-              if (!firstReviewer && rs.reviewers && rs.reviewers.length) {
-                firstReviewer = rs.reviewers[0].name || rs.reviewers[0].email;
-                currentStage  = rs.stageName;
+          if (!isFinal && sum && (sum.reviewStages || []).length) {
+            var _activeC = getActiveStage(sum.reviewStages);
+            if (_activeC) {
+              currentStage = _activeC.stageName;
+              if ((_activeC.reviewers || []).length) {
+                firstReviewer = _activeC.reviewers[0].name || _activeC.reviewers[0].email;
               }
-            });
+            }
           }
           return '<li class="rrp-sub-item">' +
             '<div class="rrp-sub-item-header">' +
@@ -644,13 +935,16 @@
               '<span><span class="rrp-meta-lbl">Submitted by</span>' + escapeHtml(s.submitterName || s.submitterEmail || '\u2014') + '</span>' +
               (s.createdAt ? '<span><span class="rrp-meta-lbl">Date</span>' + new Date(s.createdAt).toLocaleDateString() + '</span>' : '') +
             '</div>' +
-            (firstReviewer || !hasAssignment ?
-              '<div class="rrp-sub-item-review-info">' +
-                (firstReviewer
-                  ? '<span>&#128100; <span class="rrp-meta-lbl">Reviewer &mdash;</span> ' + escapeHtml(firstReviewer) + '</span>' +
-                    (currentStage ? '<span>&#128196; <span class="rrp-meta-lbl">Stage &mdash;</span> ' + escapeHtml(currentStage) + '</span>' : '')
-                  : '<span class="rrp-review-unassigned">&#9888; Not yet assigned</span>') +
-              '</div>' : '') +
+            (isFinal
+              ? '<div class="rrp-sub-item-review-info"><span class="rrp-review-complete">&#10003; Workflow complete</span></div>'
+              : (firstReviewer || !hasAssignment
+                  ? '<div class="rrp-sub-item-review-info">' +
+                      (firstReviewer
+                        ? '<span>&#128100; <span class="rrp-meta-lbl">Reviewer &mdash;</span> ' + escapeHtml(firstReviewer) + '</span>' +
+                          (currentStage ? '<span>&#128196; <span class="rrp-meta-lbl">Stage &mdash;</span> ' + escapeHtml(currentStage) + '</span>' : '')
+                        : '<span class="rrp-review-unassigned">&#9888; Not yet assigned</span>') +
+                    '</div>'
+                  : '')) +
             '<div class="rrp-sub-item-actions">' +
               '<button type="button" class="rrp-btn secondary" data-detail="' + escapeHtml(s.id) + '">View</button>' +
               '<button type="button" class="rrp-btn' + (hasAssignment ? ' secondary' : '') + '" data-assign="' + escapeHtml(s.id) + '">' +
@@ -676,6 +970,9 @@
           var sub   = all.find(function (s) { return s.id === subId; });
           openAssignPanel(sub, summary[subId]);
         });
+      });
+      listEl.querySelectorAll('[data-daterange]').forEach(function (btn) {
+        btn.addEventListener('click', function () { activeDateRange = btn.getAttribute('data-daterange'); renderSubmissionList(all, summary, filter, activeDateRange); });
       });
     }
 
@@ -841,7 +1138,7 @@
     }
 
     var headerBanner = '<div class="rrp-user-banner rrp-user-banner-loggedin">' +
-      '<span>Logged in as <strong>' + escapeHtml(window.RRP.userName || 'Unknown') + '</strong> (' + escapeHtml(window.RRP.userRole || 'User') + ')</span>' +
+      '<span>Logged in as <strong>' + escapeHtml(window.RRP.userName || 'Unknown') + '</strong> (' + escapeHtml((Array.isArray(window.RRP.userRoles) && window.RRP.userRoles.length ? window.RRP.userRoles.join(' \xb7 ') : window.RRP.userRole) || 'User') + ')</span>' +
       '<a href="' + escapeHtml(logoutUrl) + '" class="rrp-btn secondary">Logout</a>' +
       '</div>';
 
@@ -1080,6 +1377,7 @@
             for (var i = 0; i < files.length; i++) { fileData.append('files[]', files[i]); }
             return fetch(restBase + '/submissions/' + encodeURIComponent(res.id) + '/attachments', {
               method: 'POST',
+              credentials: 'same-origin',
               headers: { 'X-WP-Nonce': nonce },
               body: fileData
             }).then(function () { return res; });
@@ -1420,8 +1718,8 @@
   function renderReviewerDashboard(container, activeFilter) {
     var userName   = (window.RRP && window.RRP.userName)   || 'Reviewer';
     var userEmail  = ((window.RRP && window.RRP.userEmail) || '').toLowerCase();
-    var profileUrl = (window.RRP && window.RRP.profileUrl) || '/wp-admin/profile.php';
     activeFilter   = activeFilter || 'all';
+    var activeDateRange = 'all';
 
     container.innerHTML =
       '<div class="rrp-student-banner rrp-reviewer-banner">' +
@@ -1444,7 +1742,7 @@
             '<div class="rrp-profile-name">' + escapeHtml(userName) + '</div>' +
             '<div class="rrp-profile-email">' + escapeHtml(userEmail) + '</div>' +
             '<div class="rrp-profile-role rrp-profile-role-reviewer">Reviewer &middot; CityU STC</div>' +
-            '<a class="rrp-btn secondary" style="margin-top:0.75rem;display:block;text-align:center;" href="' + escapeHtml(profileUrl) + '">Edit Profile</a>' +
+            '<button type="button" class="rrp-btn secondary" id="rrp-edit-profile-btn" style="margin-top:0.75rem;width:100%;">&#9998; Edit Profile</button>' +
           '</div>' +
           '<div class="rrp-nav-card">' +
             '<div class="rrp-nav-card-title">Reviewer tools</div>' +
@@ -1469,6 +1767,9 @@
     });
 
     // Criteria templates (loads into aside)
+    document.getElementById('rrp-edit-profile-btn').addEventListener('click', function () {
+      renderProfilePanel(container, function () { renderReviewerDashboard(container); });
+    });
     document.getElementById('rrp-load-templates-btn').addEventListener('click', function () {
       var output = document.getElementById('rrp-reviewer-templates');
       if (output.innerHTML) { output.innerHTML = ''; return; }
@@ -1549,14 +1850,14 @@
       document.querySelectorAll('[data-stat-filter]').forEach(function (btn) {
         btn.addEventListener('click', function () {
           var f = btn.getAttribute('data-stat-filter');
-          renderSubmissionList(submissions, f);
+          renderSubmissionList(submissions, f, activeDateRange);
           document.querySelectorAll('[data-stat-filter]').forEach(function (b) {
             b.classList.toggle('rrp-stat-active', b.getAttribute('data-stat-filter') === f);
           });
         });
       });
 
-      renderSubmissionList(submissions, activeFilter);
+      renderSubmissionList(submissions, activeFilter, activeDateRange);
 
     }).catch(function () {
       document.getElementById('rrp-reviewer-stats').innerHTML = '<div class="rrp-error">Unable to load reviewer data.</div>';
@@ -1569,11 +1870,14 @@
       return 'pending';
     }
 
-    function renderSubmissionList(submissions, filter) {
+    function renderSubmissionList(submissions, filter, dateRange) {
+      dateRange = dateRange || 'all';
       var filtered = submissions;
       if (filter === 'pending')  filtered = submissions.filter(function (s) { return classifyStatus(s.status) === 'pending'; });
       if (filter === 'approved') filtered = submissions.filter(function (s) { return classifyStatus(s.status) === 'approved'; });
       if (filter === 'action')   filtered = submissions.filter(function (s) { return classifyStatus(s.status) === 'action'; });
+      filtered = applyDateRange(filtered, dateRange);
+      filtered = sortSubmissions(filtered);
 
       var heading = filter === 'pending'  ? 'Pending Review' :
                     filter === 'approved' ? 'Approved' :
@@ -1584,14 +1888,19 @@
 
       if (filtered.length === 0) {
         listEl.innerHTML =
+          dateRangeBar(dateRange) +
           '<h2>' + heading + '</h2>' +
           '<div class="rrp-empty-state"><p>' +
             (submissions.length === 0 ? 'No submissions are currently assigned to you.' : 'No submissions match this filter.') +
           '</p></div>';
+        listEl.querySelectorAll('[data-daterange]').forEach(function (b) {
+          b.addEventListener('click', function () { activeDateRange = b.getAttribute('data-daterange'); renderSubmissionList(submissions, filter, activeDateRange); });
+        });
         return;
       }
 
       listEl.innerHTML =
+        dateRangeBar(dateRange) +
         '<h2>' + heading + ' <span class="rrp-count-badge">' + filtered.length + '</span></h2>' +
         '<ul class="rrp-list rrp-submissions-list">' +
         filtered.map(function (item) {
@@ -1623,6 +1932,9 @@
       });
       listEl.querySelectorAll('[data-audit-log]').forEach(function (btn) {
         btn.addEventListener('click', function () { openAuditLogModal(btn.getAttribute('data-audit-log')); });
+      });
+      listEl.querySelectorAll('[data-daterange]').forEach(function (btn) {
+        btn.addEventListener('click', function () { activeDateRange = btn.getAttribute('data-daterange'); renderSubmissionList(submissions, filter, activeDateRange); });
       });
     }
   }
@@ -1718,9 +2030,9 @@
   }
 
   function renderSubmissionDetail(submissionId, container, backFn) {
-    var userEmail = ((window.RRP && window.RRP.userEmail) || '').toLowerCase();
-    var userRole  = (window.RRP && window.RRP.userRole) || '';
-    var isAdmin   = userRole === 'Admin' || userRole === 'Coordinator';
+    var userEmail    = ((window.RRP && window.RRP.userEmail) || '').toLowerCase();
+    var _uRoles      = (window.RRP && Array.isArray(window.RRP.userRoles)) ? window.RRP.userRoles : [(window.RRP && window.RRP.userRole) || ''];
+    var isAdmin      = _uRoles.indexOf('Admin') !== -1 || _uRoles.indexOf('Coordinator') !== -1;
 
     container.innerHTML =
       '<h1>Submission Details</h1>' +
@@ -2002,6 +2314,7 @@
                 fd.append('files', fileInput.files[0]);
                 return fetch(restBase + '/submissions/' + encodeURIComponent(submissionId) + '/attachments', {
                   method: 'POST',
+                  credentials: 'same-origin',
                   headers: { 'X-WP-Nonce': nonce },
                   body: fd
                 }).then(function (r) {
@@ -2053,6 +2366,7 @@
                 fd.append('files', fileInput.files[0]);
                 return fetch(restBase + '/submissions/' + encodeURIComponent(submissionId) + '/attachments', {
                   method: 'POST',
+                  credentials: 'same-origin',
                   headers: { 'X-WP-Nonce': nonce },
                   body: fd
                 }).then(function (r) {
@@ -2141,49 +2455,112 @@
       });
   }
 
+  // ── Multi-role dashboard switcher ─────────────────────────────────────────
+  // Used when a user holds more than one portal role (e.g. a faculty member who
+  // is also enrolled as a student). Shows a tab bar to switch between views;
+  // each view renders into an inner #rrp-role-body div so the tab bar persists.
+  function renderMultiRoleDashboard(container, userRoles) {
+    var roleRenderers = {
+      'Student':     function(c) { renderStudentDashboard(c); },
+      'Reviewer':    function(c) { renderReviewerDashboard(c); },
+      'Faculty':     function(c) { renderReviewerDashboard(c); },
+      'Coordinator': function(c) { renderCoordinatorDashboard(c); },
+      'Admin':       function(c) { renderCoordinatorDashboard(c); }
+    };
+    var tabs = userRoles.filter(function(r) { return roleRenderers[r]; });
+    if (tabs.length === 0) { renderSelection(container); return; }
+    if (tabs.length === 1) { roleRenderers[tabs[0]](container); return; }
+
+    var activeRole = tabs[0];
+
+    function applyRole(role) {
+      activeRole = role;
+      container.querySelectorAll('[data-role-switch]').forEach(function(b) {
+        b.classList.toggle('active', b.getAttribute('data-role-switch') === role);
+      });
+      var body = document.getElementById('rrp-role-body');
+      if (body) roleRenderers[role](body);
+    }
+
+    container.innerHTML =
+      '<div class="rrp-role-switcher">' +
+        '<span class="rrp-role-switcher-label">&#128100; Viewing as:</span>' +
+        tabs.map(function(r) {
+          var icons = { Student:'&#127891;', Reviewer:'&#128064;', Faculty:'&#127979;', Coordinator:'&#128203;', Admin:'&#128081;' };
+          return '<button type="button" class="rrp-role-tab' + (r === activeRole ? ' active' : '') + '" data-role-switch="' + escapeHtml(r) + '">' +
+            (icons[r] || '') + ' ' + escapeHtml(r) + '</button>';
+        }).join('') +
+        '<span class="rrp-role-switcher-hint">You have ' + tabs.length + ' roles &mdash; click to switch</span>' +
+      '</div>' +
+      '<div id="rrp-role-body"></div>';
+
+    container.querySelectorAll('[data-role-switch]').forEach(function(btn) {
+      btn.addEventListener('click', function() { applyRole(btn.getAttribute('data-role-switch')); });
+    });
+
+    applyRole(activeRole);
+  }
+
   function boot() {
     var el = document.getElementById('research-review-portal');
     if (!el || !restBase) {
-        if (el) el.innerHTML = '<p class="rrp-error">Portal API not configured.</p>';
-        return;
+      if (el) el.innerHTML = '<p class="rrp-error">Portal API not configured.</p>';
+      return;
     }
-    var role = (window.RRP && window.RRP.userRole) || '';
-    if (isLoggedIn && role === 'Student') {
-      renderStudentDashboard(el);
-    } else if (isLoggedIn && role === 'Reviewer') {
-      renderReviewerDashboard(el);
-    } else if (isLoggedIn && (role === 'Coordinator' || role === 'Admin')) {
-      renderCoordinatorDashboard(el);
-    } else {
-      renderSelection(el);
-    }
+
+    if (!isLoggedIn) { renderSelection(el); return; }
+
+    // Load dynamic submission types first, then render the appropriate dashboard.
+    _refreshDynTypes(function () {
+      // Rebuild OB_ALLOWED_TYPES array now that _dynTypes is populated.
+      OB_ALLOWED_TYPES = _getOBAllowedTypes();
+
+      // Prefer userRoles array (multi-role aware); fall back to single userRole for
+      // backward compatibility with any cached page that has the old window.RRP shape.
+      var userRoles = (window.RRP && Array.isArray(window.RRP.userRoles) && window.RRP.userRoles.length)
+        ? window.RRP.userRoles
+        : ((window.RRP && window.RRP.userRole) ? [window.RRP.userRole] : []);
+
+      var hasRole = function(r) { return userRoles.indexOf(r) !== -1; };
+
+      // Collect ALL portal roles the user holds (admin roles first, then others)
+      var allRoleOrder = ['Admin', 'Coordinator', 'Student', 'Reviewer', 'Faculty'];
+      var allActiveRoles = allRoleOrder.filter(function(r) { return hasRole(r); });
+
+      if (allActiveRoles.length > 1) {
+        // Multi-role user — show the role switcher regardless of which roles they hold
+        renderMultiRoleDashboard(el, allActiveRoles);
+      } else if (hasRole('Admin') || hasRole('Coordinator')) {
+        renderCoordinatorDashboard(el);
+      } else if (hasRole('Reviewer') || hasRole('Faculty')) {
+        renderReviewerDashboard(el);
+      } else if (hasRole('Student')) {
+        renderStudentDashboard(el);
+      } else {
+        renderSelection(el);
+      }
+    });
   }
 
   // ── Shared onboarding constants ──────────────────────────────────────────
-  var OB_TYPE_STAGES = {
-    'dissertation':    ['Chair Review', 'Committee Review', 'Program Director Approval', 'Dissertation Director Sign-Off'],
-    'capstone':        ['Advisor Review', 'Program Director Approval'],
-    'student-project': ['Advisor Review', 'Program Director Approval'],
-    'research-paper':  ['Peer Review', 'Program Director Approval'],
-    'publication':     ['Peer Review', 'Program Director Approval'],
-    'conference':      ['Peer Review', 'Program Director Approval'],
-    'grant':           ['Multi-Criteria Review', 'Program Director Approval'],
-    'grant-proposal':  ['Multi-Criteria Review', 'Program Director Approval']
-  };
-  var OB_TYPE_LABELS = {
-    'dissertation': 'Doctoral Dissertation', 'capstone': 'Capstone Project',
-    'student-project': 'Student Project', 'research-paper': 'Research Paper',
-    'publication': 'Publication', 'conference': 'Conference Paper',
-    'grant': 'Grant Proposal', 'grant-proposal': 'Grant Proposal'
-  };
-  var OB_ALLOWED_TYPES = [
-    {value: 'dissertation',   label: 'Doctoral Dissertation'},
-    {value: 'capstone',       label: 'Capstone Project'},
-    {value: 'research-paper', label: 'Research Paper'},
-    {value: 'grant',          label: 'Grant Proposal'},
-    {value: 'publication',    label: 'Publication'},
-    {value: 'conference',     label: 'Conference Paper'}
-  ];
+  // OB_TYPE_STAGES / OB_TYPE_LABELS / OB_ALLOWED_TYPES are now DYNAMIC functions
+  // backed by _dynTypes; keep the names as thin wrappers so all existing call
+  // sites that access them as objects/arrays still work without change.
+  var OB_TYPE_STAGES = new Proxy({}, {
+    get: function(t, key) { var dt = dynTypeById(key); return dt ? dt.stages : ['Initial Review','Final Approval']; },
+    has: function(t, key) { return !!dynTypeById(key); }
+  });
+  // Some code accesses OB_TYPE_STAGES[key] directly — the Proxy handles that.
+  // OB_TYPE_LABELS: used as OB_TYPE_LABELS[key]
+  var OB_TYPE_LABELS = new Proxy({}, {
+    get: function(t, key) { var dt = dynTypeById(key); return dt ? dt.label : (key || ''); }
+  });
+  // OB_ALLOWED_TYPES: used via .map() — must be a live array
+  function _getOBAllowedTypes() { return _dynTypes.map(function(t){ return {value:t.id, label:t.label}; }); }
+  // Shim: make OB_ALLOWED_TYPES behave like an array by using a getter pattern.
+  // Code that calls OB_ALLOWED_TYPES.map(...) needs a real array.
+  // We replace the variable each time types reload, and ensure initial value is correct.
+  var OB_ALLOWED_TYPES = _getOBAllowedTypes();
   var OB_DEGREES = [
     // School of Business
     {value:'emba',                     label:"Executive Master's in Business Administration",                        level:'masters',    school:'Business'},
@@ -2229,7 +2606,815 @@
     'specialist': '<span class="rrp-badge-specialist">Specialist</span>'
   };
 
+  // ── Submission Types Admin Panel ──────────────────────────────────────────
+  // ── Workflow Stages Library ───────────────────────────────────────────────
+  function renderWorkflowStagesPanel(container, backFn) {
+    var _backFn = backFn || function () { renderCoordinatorDashboard(container); };
+    var _stages = [];
+
+    function renderList() {
+      container.innerHTML =
+        '<div class="rrp-dashboard">' +
+          '<div class="rrp-dash-header">' +
+            '<button class="rrp-btn secondary rrp-back-btn">&#8592; Back</button>' +
+            '<h1>&#9881; Workflow Stages</h1>' +
+            '<button class="rrp-btn primary" id="rrp-ws-add-btn">+ Add Stage</button>' +
+          '</div>' +
+          '<p style="color:#6b7280;max-width:640px;margin-bottom:1rem;line-height:1.5;">Define the reusable stage library. When configuring a submission type, admins pick stages from this list to build the workflow — ensuring consistent naming across all types.</p>' +
+          '<p class="rrp-loading" id="rrp-ws-msg">Loading&hellip;</p>' +
+          '<div id="rrp-ws-list"></div>' +
+        '</div>';
+
+      container.querySelector('.rrp-back-btn').addEventListener('click', _backFn);
+      document.getElementById('rrp-ws-add-btn').addEventListener('click', function () { renderForm(null); });
+
+      api('GET', '/workflow-stages').then(function (res) {
+        _stages = res.workflowStages || [];
+        document.getElementById('rrp-ws-msg').style.display = 'none';
+        var listEl = document.getElementById('rrp-ws-list');
+        if (!_stages.length) {
+          listEl.innerHTML = '<p style="color:#6b7280;">No stages defined yet. Click <b>+ Add Stage</b> to create one.</p>';
+          return;
+        }
+        listEl.innerHTML = _stages.map(function (s) {
+          var badges = '';
+          if (s.singleUser) badges += '<span class="rrp-ws-badge rrp-ws-badge-single">Single User</span>';
+          if (s.multiUser)  badges += '<span class="rrp-ws-badge rrp-ws-badge-multi">Multi User</span>';
+          return '<div class="rrp-type-row" id="rrp-ws-row-' + escapeHtml(s.id) + '">' +
+            '<div class="rrp-type-info">' +
+              '<div class="rrp-type-title" style="display:flex;align-items:center;gap:.6rem;">' +
+                '<strong>' + escapeHtml(s.name) + '</strong>' + badges +
+              '</div>' +
+            '</div>' +
+            '<div class="rrp-type-actions">' +
+              '<button class="rrp-btn small secondary rrp-ws-edit-btn" data-id="' + escapeHtml(s.id) + '">Edit</button>' +
+              '<button class="rrp-btn small danger rrp-ws-del-btn" data-id="' + escapeHtml(s.id) + '">Delete</button>' +
+            '</div>' +
+          '</div>';
+        }).join('');
+
+        listEl.querySelectorAll('.rrp-ws-edit-btn').forEach(function (btn) {
+          btn.addEventListener('click', function () {
+            var s = _stages.find(function (x) { return x.id === btn.getAttribute('data-id'); });
+            if (s) renderForm(s);
+          });
+        });
+        listEl.querySelectorAll('.rrp-ws-del-btn').forEach(function (btn) {
+          btn.addEventListener('click', function () {
+            var sid = btn.getAttribute('data-id');
+            var s   = _stages.find(function (x) { return x.id === sid; });
+            if (!confirm('Delete stage "' + escapeHtml(s ? s.name : sid) + '"?\n\nSubmission types using this stage will keep the stage name but you should update them.')) return;
+            btn.disabled = true; btn.textContent = 'Deleting\u2026';
+            api('DELETE', '/workflow-stages/' + encodeURIComponent(sid))
+              .then(function () { renderList(); })
+              .catch(function (e) {
+                btn.disabled = false; btn.textContent = 'Delete';
+                alert('Delete failed: ' + (e && e.message ? e.message : 'Unknown error'));
+              });
+          });
+        });
+      }).catch(function () {
+        document.getElementById('rrp-ws-msg').textContent = 'Failed to load workflow stages.';
+      });
+    }
+
+    function renderForm(stageObj) {
+      var isEdit = !!stageObj;
+      container.innerHTML =
+        '<div class="rrp-dashboard">' +
+          '<div class="rrp-dash-header">' +
+            '<button class="rrp-btn secondary" id="rrp-ws-form-back">&#8592; Back to stages</button>' +
+            '<h1>' + (isEdit ? 'Edit Stage' : 'Add Stage') + '</h1>' +
+          '</div>' +
+          '<div class="rrp-card" style="max-width:480px;">' +
+            '<label class="rrp-label">Stage Name<br>' +
+              '<input type="text" class="rrp-input" id="rrp-ws-name" value="' + escapeHtml(isEdit ? stageObj.name : '') + '" placeholder="e.g. Peer Review" />' +
+            '</label>' +
+            '<div class="rrp-label" style="margin-top:1rem;">Assignment Type' +
+              '<div style="display:flex;gap:1.5rem;margin-top:.5rem;padding:.75rem;background:#f8f9fa;border-radius:6px;border:1px solid #dee2e6;">' +
+                '<label style="display:flex;align-items:center;gap:.4rem;cursor:pointer;">' +
+                  '<input type="checkbox" id="rrp-ws-single"' + (isEdit ? (stageObj.singleUser ? ' checked' : '') : ' checked') + '> Single User' +
+                '</label>' +
+                '<label style="display:flex;align-items:center;gap:.4rem;cursor:pointer;">' +
+                  '<input type="checkbox" id="rrp-ws-multi"' + (isEdit && stageObj.multiUser ? ' checked' : '') + '> Multi User' +
+                '</label>' +
+              '</div>' +
+              '<small style="color:#6b7280;margin-top:.3rem;display:block;">Single User: only one assignee allowed. Multi User: multiple reviewers can be assigned.</small>' +
+            '</div>' +
+            '<div style="margin-top:1.25rem;display:flex;gap:.6rem;">' +
+              '<button type="button" class="rrp-btn primary" id="rrp-ws-save-btn">' + (isEdit ? 'Save Changes' : 'Create Stage') + '</button>' +
+              '<button type="button" class="rrp-btn secondary" id="rrp-ws-cancel-btn">Cancel</button>' +
+            '</div>' +
+            '<p id="rrp-ws-form-msg" style="min-height:1.3rem;margin-top:.5rem;"></p>' +
+          '</div>' +
+        '</div>';
+
+      document.getElementById('rrp-ws-form-back').addEventListener('click', renderList);
+      document.getElementById('rrp-ws-cancel-btn').addEventListener('click', renderList);
+      document.getElementById('rrp-ws-save-btn').addEventListener('click', function () {
+        var nameVal = document.getElementById('rrp-ws-name').value.trim();
+        var single  = document.getElementById('rrp-ws-single').checked;
+        var multi   = document.getElementById('rrp-ws-multi').checked;
+        var msgEl   = document.getElementById('rrp-ws-form-msg');
+        var saveBtn = document.getElementById('rrp-ws-save-btn');
+        if (!nameVal) { msgEl.innerHTML = '<span class="rrp-error">Stage name is required.</span>'; return; }
+        if (!single && !multi) { msgEl.innerHTML = '<span class="rrp-error">Select at least one assignment type.</span>'; return; }
+        var stageId = isEdit ? stageObj.id : nameVal.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+        saveBtn.disabled = true; saveBtn.textContent = isEdit ? 'Saving\u2026' : 'Creating\u2026';
+        msgEl.innerHTML = '';
+        api('PATCH', '/workflow-stages/' + encodeURIComponent(stageId), { name: nameVal, singleUser: single, multiUser: multi })
+          .then(function () {
+            msgEl.innerHTML = '<span style="color:#16a34a;">' + (isEdit ? 'Saved.' : 'Created.') + '</span>';
+            saveBtn.disabled = false; saveBtn.textContent = isEdit ? 'Save Changes' : 'Create Stage';
+            setTimeout(renderList, 900);
+          })
+          .catch(function (err) {
+            saveBtn.disabled = false; saveBtn.textContent = isEdit ? 'Save Changes' : 'Create Stage';
+            msgEl.innerHTML = '<span class="rrp-error">Save failed: ' + escapeHtml(err && err.message ? err.message : 'Unknown') + '</span>';
+          });
+      });
+    }
+
+    renderList();
+  }
+
+  function renderSubmissionTypesPanel(container, backFn) {
+    var _backFn = backFn || function () { renderCoordinatorDashboard(container); };
+    var _types  = [];   // working copy fetched from API
+
+    // ── Build stages editor HTML for a type object (or blank) ────────────
+    // allStages = array of {id, name, singleUser, multiUser} from workflow-stages library
+    function stagesEditorHtml(stages, prefix, allStages) {
+      var rows = (stages || []).map(function (s, i) {
+        return '<div class="rrp-stage-row" data-index="' + i + '">' +
+          '<input type="hidden" class="rrp-stage-input" value="' + escapeHtml(s) + '" />' +
+          '<span class="rrp-stage-name">' + escapeHtml(s) + '</span>' +
+          '<button type="button" class="rrp-btn icon rrp-stage-up" title="Move up">&#8593;</button>' +
+          '<button type="button" class="rrp-btn icon rrp-stage-down" title="Move down">&#8595;</button>' +
+          '<button type="button" class="rrp-btn icon rrp-stage-del" title="Remove">&#10005;</button>' +
+        '</div>';
+      }).join('');
+      var pickerHtml;
+      if (allStages && allStages.length) {
+        pickerHtml = '<select class="rrp-input rrp-stage-select" style="flex:1;">' +
+          '<option value="">&#8212; Select a stage to add &#8212;</option>' +
+          allStages.map(function (s) {
+            var tag = s.multiUser ? ' (multi)' : ' (single)';
+            return '<option value="' + escapeHtml(s.name) + '">' + escapeHtml(s.name) + tag + '</option>';
+          }).join('') +
+          '</select>';
+      } else {
+        pickerHtml = '<input type="text" class="rrp-input rrp-stage-new-input" placeholder="No library stages yet &mdash; type a name" style="flex:1;" />';
+      }
+      return '<div class="rrp-stages-editor" id="stages-list-' + prefix + '">' +
+          rows +
+        '</div>' +
+        '<div style="display:flex;gap:.4rem;margin-top:.4rem;">' +
+          pickerHtml +
+          '<button type="button" class="rrp-btn small rrp-stage-add-btn">+ Add</button>' +
+        '</div>';
+    }
+
+    // ── Wire up stages editor events inside a container element ──────────
+    function bindStagesEditor(wrap) {
+      var list = wrap.querySelector('.rrp-stages-editor');
+
+      wrap.querySelector('.rrp-stage-add-btn').addEventListener('click', function () {
+        // Support both select-picker (library) and text-input (fallback)
+        var sel = wrap.querySelector('.rrp-stage-select');
+        var inp = wrap.querySelector('.rrp-stage-new-input');
+        var val = sel ? sel.value.trim() : (inp ? inp.value.trim() : ''); if (!val) return;
+        var row = document.createElement('div');
+        row.className = 'rrp-stage-row';
+        row.innerHTML = '<input type="hidden" class="rrp-stage-input" value="' + escapeHtml(val) + '" />' +
+          '<span class="rrp-stage-name">' + escapeHtml(val) + '</span>' +
+          '<button type="button" class="rrp-btn icon rrp-stage-up" title="Move up">&#8593;</button>' +
+          '<button type="button" class="rrp-btn icon rrp-stage-down" title="Move down">&#8595;</button>' +
+          '<button type="button" class="rrp-btn icon rrp-stage-del" title="Remove">&#10005;</button>';
+        bindRowEvents(row);
+        list.appendChild(row);
+        if (sel) sel.value = '';
+        else if (inp) { inp.value = ''; inp.focus(); }
+      });
+
+      list.querySelectorAll('.rrp-stage-row').forEach(bindRowEvents);
+
+      function bindRowEvents(row) {
+        row.querySelector('.rrp-stage-del').addEventListener('click', function () { row.remove(); });
+        row.querySelector('.rrp-stage-up').addEventListener('click', function () {
+          var prev = row.previousElementSibling; if (prev) list.insertBefore(row, prev);
+        });
+        row.querySelector('.rrp-stage-down').addEventListener('click', function () {
+          var next = row.nextElementSibling; if (next) list.insertBefore(next, row);
+        });
+      }
+    }
+
+    // ── Read stages from editor DOM ───────────────────────────────────────
+    function readStages(wrap) {
+      return Array.from(wrap.querySelectorAll('.rrp-stage-input'))
+        .map(function (i) { return i.value.trim(); })
+        .filter(Boolean);
+    }
+
+    // ── Render the type list ──────────────────────────────────────────────
+    function renderList() {
+      container.innerHTML =
+        '<div class="rrp-dashboard">' +
+          '<div class="rrp-dash-header">' +
+            '<button class="rrp-btn secondary rrp-back-btn">&#8592; Back</button>' +
+            '<h1>Submission Types</h1>' +
+            '<button class="rrp-btn primary" id="rrp-st-add-btn">+ Add Type</button>' +
+          '</div>' +
+          '<p class="rrp-loading" id="rrp-st-msg">Loading&hellip;</p>' +
+          '<div id="rrp-st-list"></div>' +
+        '</div>';
+
+      container.querySelector('.rrp-back-btn').addEventListener('click', _backFn);
+
+      document.getElementById('rrp-st-add-btn').addEventListener('click', function () {
+        renderForm(null);
+      });
+
+      api('GET', '/submission-types').then(function (res) {
+        _types = res.submission_types || res.submissionTypes || res || [];
+        document.getElementById('rrp-st-msg').style.display = 'none';
+        var listEl = document.getElementById('rrp-st-list');
+        if (!_types.length) {
+          listEl.innerHTML = '<p style="color:#666;">No submission types defined yet. Click <b>+ Add Type</b> to create one.</p>';
+          return;
+        }
+        listEl.innerHTML = _types.map(function (t) {
+          var stagesHtml = (t.stages || []).map(function (s, i) {
+            return '<span class="rrp-stage-pill">' + (i + 1) + '. ' + escapeHtml(s) + '</span>';
+          }).join(' ');
+          return '<div class="rrp-type-row" id="rrp-type-row-' + escapeHtml(t.id) + '">' +
+            '<div class="rrp-type-info">' +
+              '<div class="rrp-type-title">' +
+                '<strong>' + escapeHtml(t.label) + '</strong>' +
+                ' <code class="rrp-type-id">' + escapeHtml(t.id) + '</code>' +
+              '</div>' +
+              (t.description ? '<div class="rrp-type-desc">' + escapeHtml(t.description) + '</div>' : '') +
+              '<div class="rrp-type-stages">' + (stagesHtml || '<em style="color:#999;">No stages</em>') + '</div>' +
+            '</div>' +
+            '<div class="rrp-type-actions">' +
+              '<button class="rrp-btn small secondary rrp-st-edit-btn" data-id="' + escapeHtml(t.id) + '">Edit</button>' +
+              '<button class="rrp-btn small danger rrp-st-del-btn"  data-id="' + escapeHtml(t.id) + '">Delete</button>' +
+            '</div>' +
+          '</div>';
+        }).join('');
+
+        listEl.querySelectorAll('.rrp-st-edit-btn').forEach(function (btn) {
+          btn.addEventListener('click', function () {
+            var tid = btn.getAttribute('data-id');
+            var t   = _types.find(function (x) { return x.id === tid; });
+            if (t) renderForm(t);
+          });
+        });
+
+        listEl.querySelectorAll('.rrp-st-del-btn').forEach(function (btn) {
+          btn.addEventListener('click', function () {
+            var tid = btn.getAttribute('data-id');
+            var t   = _types.find(function (x) { return x.id === tid; });
+            if (!confirm('Delete submission type "' + (t ? t.label : tid) + '"?\n\nThis cannot be undone. Existing submissions of this type will not be affected.')) return;
+            btn.disabled = true; btn.textContent = 'Deleting…';
+            api('DELETE', '/submission-types/' + encodeURIComponent(tid))
+              .then(function () { renderList(); })
+              .catch(function (e) {
+                btn.disabled = false; btn.textContent = 'Delete';
+                alert('Delete failed: ' + (e && e.message ? e.message : 'Unknown error'));
+              });
+          });
+        });
+      }).catch(function () {
+        document.getElementById('rrp-st-msg').textContent = 'Failed to load submission types.';
+      });
+    }
+
+    // ── Render add / edit form ────────────────────────────────────────────
+    function renderForm(typeObj) {
+      var isEdit  = !!typeObj;
+      var formId  = 'rrp-st-form';
+      var prefix  = isEdit ? typeObj.id : 'new';
+
+      // Show a loading state while fetching the stage library
+      container.innerHTML = '<div class="rrp-dashboard"><p class="rrp-loading">Loading stage library&hellip;</p></div>';
+
+      api('GET', '/workflow-stages').then(function (wsRes) {
+        var allStages = (wsRes && wsRes.workflowStages) ? wsRes.workflowStages : [];
+
+      container.innerHTML =
+        '<div class="rrp-dashboard">' +
+          '<div class="rrp-dash-header">' +
+            '<button class="rrp-btn secondary" id="rrp-st-form-back">&#8592; Back to types</button>' +
+            '<h1>' + (isEdit ? 'Edit Submission Type' : 'Add Submission Type') + '</h1>' +
+          '</div>' +
+          '<div class="rrp-card" style="max-width:640px;">' +
+            '<form id="' + formId + '">' +
+              '<label class="rrp-label">ID (slug)<br>' +
+                '<input type="text" class="rrp-input" id="rrp-st-id" ' +
+                  'value="' + escapeHtml(isEdit ? typeObj.id : '') + '" ' +
+                  (isEdit ? 'readonly style="background:#f1f5f9;cursor:not-allowed;"' : '') +
+                  ' placeholder="e.g. conference" required pattern="[a-z0-9-]+" />' +
+                (isEdit ? '' : '<small style="color:#666;">Lowercase letters, numbers and hyphens only. Cannot be changed after creation.</small>') +
+              '</label>' +
+              '<label class="rrp-label" style="margin-top:.75rem;">Label<br>' +
+                '<input type="text" class="rrp-input" id="rrp-st-label" value="' + escapeHtml(isEdit ? typeObj.label : '') + '" placeholder="e.g. Conference Paper" required />' +
+              '</label>' +
+              '<label class="rrp-label" style="margin-top:.75rem;">Description (optional)<br>' +
+                '<input type="text" class="rrp-input" id="rrp-st-desc" value="' + escapeHtml(isEdit ? (typeObj.description || '') : '') + '" placeholder="Brief description shown to users" />' +
+              '</label>' +
+              '<div class="rrp-label" style="margin-top:.75rem;">Workflow Stages (in order)<br>' +
+                '<small style="color:#6b7280;">Select stages from the library and arrange them in order. Manage the stage library under Config &rarr; Workflow Stages.</small>' +
+                '<div style="margin-top:.4rem;" id="rrp-st-stages-wrap">' +
+                  stagesEditorHtml(isEdit ? typeObj.stages : [], prefix, allStages) +
+                '</div>' +
+              '</div>' +
+              '<div style="margin-top:1.25rem;display:flex;gap:.6rem;">' +
+                '<button type="submit" class="rrp-btn primary" id="rrp-st-save-btn">' + (isEdit ? 'Save Changes' : 'Create Type') + '</button>' +
+                '<button type="button" class="rrp-btn secondary" id="rrp-st-cancel-btn">Cancel</button>' +
+              '</div>' +
+              '<p class="rrp-form-msg" id="rrp-st-form-msg" style="display:none;"></p>' +
+            '</form>' +
+          '</div>' +
+        '</div>';
+
+      document.getElementById('rrp-st-form-back').addEventListener('click', renderList);
+      document.getElementById('rrp-st-cancel-btn').addEventListener('click', renderList);
+
+      var stagesWrap = document.getElementById('rrp-st-stages-wrap');
+      bindStagesEditor(stagesWrap);
+
+      document.getElementById(formId).addEventListener('submit', function (e) {
+        e.preventDefault();
+        var idVal    = document.getElementById('rrp-st-id').value.trim();
+        var labelVal = document.getElementById('rrp-st-label').value.trim();
+        var descVal  = document.getElementById('rrp-st-desc').value.trim();
+        var stages   = readStages(stagesWrap);
+        var msgEl    = document.getElementById('rrp-st-form-msg');
+        var saveBtn  = document.getElementById('rrp-st-save-btn');
+
+        if (!idVal || !labelVal) {
+          msgEl.style.display = 'block'; msgEl.style.color = '#ef4444';
+          msgEl.textContent = 'ID and Label are required.'; return;
+        }
+        if (!isEdit && !/^[a-z0-9-]+$/.test(idVal)) {
+          msgEl.style.display = 'block'; msgEl.style.color = '#ef4444';
+          msgEl.textContent = 'ID must be lowercase letters, numbers, and hyphens only.'; return;
+        }
+
+        saveBtn.disabled = true;
+        saveBtn.textContent = isEdit ? 'Saving\u2026' : 'Creating\u2026';
+        msgEl.style.display = 'none';
+
+        var payload = { id: idVal, label: labelVal, stages: stages };
+        if (descVal) payload.description = descVal;
+
+        var request = isEdit
+          ? api('PATCH', '/submission-types/' + encodeURIComponent(idVal), payload)
+          : api('PATCH', '/submission-types/' + encodeURIComponent(idVal), payload);
+
+        request.then(function () {
+          // Refresh _dynTypes so rest of UI reflects the change immediately
+          _refreshDynTypes(function () { OB_ALLOWED_TYPES = _getOBAllowedTypes(); });
+          msgEl.style.display = 'block'; msgEl.style.color = '#16a34a';
+          msgEl.textContent   = isEdit ? 'Saved successfully.' : 'Submission type created.';
+          saveBtn.disabled    = false;
+          saveBtn.textContent = isEdit ? 'Save Changes' : 'Create Type';
+          setTimeout(renderList, 1200);
+        }).catch(function (err) {
+          saveBtn.disabled    = false;
+          saveBtn.textContent = isEdit ? 'Save Changes' : 'Create Type';
+          msgEl.style.display = 'block'; msgEl.style.color = '#ef4444';
+          msgEl.textContent   = 'Save failed: ' + (err && err.message ? err.message : 'Unknown error');
+        });
+      });
+
+      }).catch(function () {
+        // Stage library fetch failed — fall back to the text-input editor
+        container.innerHTML = '<div class="rrp-dashboard"><p class="rrp-error">Failed to load stage library. Please refresh and try again.</p>' +
+          '<button class="rrp-btn secondary" id="rrp-st-err-back">&#8592; Back</button></div>';
+        document.getElementById('rrp-st-err-back').addEventListener('click', renderList);
+      });
+    }
+
+    renderList();
+  }
+
   // ── Admin User Management ─────────────────────────────────────────────────
+  // ── Users Panel (unified list — replaces the old tabbed User Management) ─────
+  function renderUsersPanel(container, backFn, initialRoleFilter) {
+    var _backFn = backFn || function () { renderCoordinatorDashboard(container); };
+    var searchTerm = '';
+    var roleFilter = initialRoleFilter || 'all';
+    var ROLE_SLUGS = ['rrp_student', 'rrp_reviewer', 'rrp_coordinator', 'rrp_admin', 'rrp_faculty'];
+    var ROLE_META  = {
+      rrp_student:     { label: 'Student',     color: '#3b82f6' },
+      rrp_reviewer:    { label: 'Reviewer',    color: '#8b5cf6' },
+      rrp_coordinator: { label: 'Coordinator', color: '#f59e0b' },
+      rrp_admin:       { label: 'Admin',       color: '#ef4444' },
+      rrp_faculty:     { label: 'Faculty',     color: '#10b981' }
+    };
+    var _allUsers = [];
+
+    function roleBadges(wpRoles) {
+      return (wpRoles || []).map(function (r) {
+        var m = ROLE_META[r]; if (!m) return '';
+        return '<span style="display:inline-block;padding:.15rem .5rem;border-radius:20px;' +
+          'background:' + m.color + '22;color:' + m.color + ';border:1px solid ' + m.color + '44;' +
+          'font-size:.73rem;font-weight:600;margin-right:.2rem;">' + m.label + '</span>';
+      }).join('');
+    }
+
+    function renderPage() {
+      container.innerHTML =
+        '<div class="rrp-mgmt-page-header">' +
+          '<button type="button" class="rrp-btn secondary" id="rrp-users-back">&#8592; Back</button>' +
+          '<h1>&#128101; Users</h1>' +
+          '<button type="button" class="rrp-btn" id="rrp-users-add-btn">&#43; Add User</button>' +
+        '</div>' +
+        '<div style="display:flex;gap:.75rem;align-items:center;margin-bottom:1rem;flex-wrap:wrap;">' +
+          '<input type="search" id="rrp-users-search" class="rrp-input" placeholder="&#128269; Search name or email&hellip;" style="flex:1;min-width:180px;max-width:340px;">' +
+          '<select id="rrp-users-role-filter" class="rrp-input" style="max-width:175px;">' +
+            '<option value="all"' + (roleFilter === 'all' ? ' selected' : '') + '>All groups</option>' +
+            '<option value="rrp_student"' + (roleFilter === 'rrp_student' ? ' selected' : '') + '>Students</option>' +
+            '<option value="rrp_reviewer"' + (roleFilter === 'rrp_reviewer' ? ' selected' : '') + '>Reviewers</option>' +
+            '<option value="rrp_coordinator"' + (roleFilter === 'rrp_coordinator' ? ' selected' : '') + '>Coordinators</option>' +
+            '<option value="rrp_admin"' + (roleFilter === 'rrp_admin' ? ' selected' : '') + '>Admins</option>' +
+            '<option value="rrp_faculty"' + (roleFilter === 'rrp_faculty' ? ' selected' : '') + '>Faculty</option>' +
+          '</select>' +
+          '<span id="rrp-users-count" style="font-size:.85rem;color:var(--rrp-text-muted);white-space:nowrap;"></span>' +
+        '</div>' +
+        '<div id="rrp-users-add-wrap" style="display:none;margin-bottom:1.25rem;"></div>' +
+        '<div id="rrp-users-list"><p class="rrp-loading">Loading&hellip;</p></div>';
+
+      document.getElementById('rrp-users-back').addEventListener('click', function () { _backFn(); });
+      document.getElementById('rrp-users-add-btn').addEventListener('click', renderAddUserInline);
+      document.getElementById('rrp-users-search').addEventListener('input', function () {
+        searchTerm = this.value.toLowerCase(); applyFilter();
+      });
+      document.getElementById('rrp-users-role-filter').addEventListener('change', function () {
+        roleFilter = this.value; applyFilter();
+      });
+
+      loadAllUsers();
+    }
+
+    function loadAllUsers() {
+      var listEl = document.getElementById('rrp-users-list');
+      if (listEl) listEl.innerHTML = '<p class="rrp-loading">Loading users&hellip;</p>';
+      Promise.all([
+        api('GET', '/portal-users?role=student'),
+        api('GET', '/portal-users?role=reviewer'),
+        api('GET', '/portal-users?role=coordinator'),
+        api('GET', '/portal-users?role=admin'),
+        api('GET', '/portal-users?role=faculty')
+      ]).then(function (results) {
+        var seen = {};
+        _allUsers = [];
+        results.forEach(function (res, idx) {
+          var slug = ROLE_SLUGS[idx];
+          (res.users || []).forEach(function (u) {
+            if (u.jsonOnly) return;
+            if (seen[u.id]) {
+              if (seen[u.id].wpRoles.indexOf(slug) === -1) seen[u.id].wpRoles.push(slug);
+            } else {
+              var entry = JSON.parse(JSON.stringify(u));
+              if (!Array.isArray(entry.wpRoles) || entry.wpRoles.length === 0) entry.wpRoles = [slug];
+              seen[u.id] = entry;
+              _allUsers.push(entry);
+            }
+          });
+        });
+        _allUsers.sort(function (a, b) { return (a.name || a.email).localeCompare(b.name || b.email); });
+        applyFilter();
+      }).catch(function () {
+        var listEl = document.getElementById('rrp-users-list');
+        if (listEl) listEl.innerHTML = '<div class="rrp-error">Unable to load users.</div>';
+      });
+    }
+
+    function applyFilter() {
+      var filtered = _allUsers.filter(function (u) {
+        var q = searchTerm;
+        var ok = !q || (u.name || '').toLowerCase().indexOf(q) !== -1 || (u.email || '').toLowerCase().indexOf(q) !== -1;
+        var rOk = roleFilter === 'all' || (u.wpRoles || []).indexOf(roleFilter) !== -1;
+        return ok && rOk;
+      });
+      var countEl = document.getElementById('rrp-users-count');
+      if (countEl) countEl.textContent = filtered.length + ' user' + (filtered.length === 1 ? '' : 's');
+      renderUserList(filtered);
+    }
+
+    function renderUserList(users) {
+      var listEl = document.getElementById('rrp-users-list');
+      if (!listEl) return;
+      if (users.length === 0) {
+        listEl.innerHTML = '<div class="rrp-empty-state"><p>No users match your filter.</p></div>';
+        return;
+      }
+      listEl.innerHTML =
+        '<div class="rrp-user-mgmt-table">' +
+          '<div class="rrp-umr-head"><span>Name</span><span>Email</span><span>Groups</span><span>Actions</span></div>' +
+          users.map(function (u) {
+            return '<div class="rrp-umr-row">' +
+              '<span class="rrp-umr-name"><strong>' + escapeHtml(u.name || u.email) + '</strong></span>' +
+              '<span class="rrp-umr-email">' + escapeHtml(u.email) + '</span>' +
+              '<span>' + roleBadges(u.wpRoles) + '</span>' +
+              '<span class="rrp-umr-actions">' +
+                '<button type="button" class="rrp-btn secondary small" data-up-edit="' + u.id + '">Edit</button> ' +
+                '<button type="button" class="rrp-btn secondary small" data-up-reset="' + u.id + '" title="Reset password">&#128274;</button> ' +
+                '<button type="button" class="rrp-btn danger small" data-up-remove="' + u.id + '">Remove</button>' +
+              '</span>' +
+            '</div>';
+          }).join('') +
+        '</div>';
+
+      listEl.querySelectorAll('[data-up-edit]').forEach(function (btn) {
+        var uid  = btn.getAttribute('data-up-edit');
+        var user = _allUsers.find(function (u) { return String(u.id) === uid; });
+        btn.addEventListener('click', function () { renderEditUserInline(user); });
+      });
+      listEl.querySelectorAll('[data-up-reset]').forEach(function (btn) {
+        var uid  = btn.getAttribute('data-up-reset');
+        var user = _allUsers.find(function (u) { return String(u.id) === uid; });
+        btn.addEventListener('click', function () { renderResetPwInline(user); });
+      });
+      listEl.querySelectorAll('[data-up-remove]').forEach(function (btn) {
+        var uid  = btn.getAttribute('data-up-remove');
+        var user = _allUsers.find(function (u) { return String(u.id) === uid; });
+        btn.addEventListener('click', function () {
+          if (!confirm('Remove all portal access for ' + escapeHtml(user ? (user.name || user.email) : 'this user') + '?\n\nTheir submission history is preserved.')) return;
+          api('DELETE', '/portal-users/' + uid)
+            .then(function () {
+              _allUsers = _allUsers.filter(function (u) { return String(u.id) !== uid; });
+              applyFilter();
+            })
+            .catch(function (err) { alert('Failed: ' + ((err && err.data && err.data.error) || 'Please try again.')); });
+        });
+      });
+    }
+
+    function renderEditUserInline(user) {
+      if (!user) return;
+      var listEl = document.getElementById('rrp-users-list');
+      if (!listEl) return;
+      var currentRoles = Array.isArray(user.wpRoles) && user.wpRoles.length ? user.wpRoles : (user.wpRole ? [user.wpRole] : ['rrp_student']);
+      var hasStudent   = currentRoles.indexOf('rrp_student')     !== -1;
+      var hasReviewer  = currentRoles.indexOf('rrp_reviewer')    !== -1 || currentRoles.indexOf('rrp_faculty') !== -1;
+      var hasCoord     = currentRoles.indexOf('rrp_coordinator') !== -1 && !hasReviewer;
+
+      var studentFields = hasStudent ?
+        '<div class="rrp-form-group"><label>Degree / Program</label>' +
+        '<select id="upe-degree" class="rrp-input">' +
+          '<option value="">&#8212; Select &#8212;</option>' +
+          OB_DEGREE_SCHOOLS.map(function (sch) {
+            return '<optgroup label="School of ' + escapeHtml(sch) + '">' +
+              OB_DEGREES.filter(function (d) { return d.school === sch; }).map(function (d) {
+                return '<option value="' + escapeHtml(d.value) + '"' + (user.degree === d.value ? ' selected' : '') + '>' + escapeHtml(d.label) + '</option>';
+              }).join('') + '</optgroup>';
+          }).join('') +
+        '</select></div>' : '';
+
+      var deptField = (hasReviewer || hasCoord) ?
+        '<div class="rrp-form-group"><label>Department</label><select id="upe-dept" class="rrp-input" data-dept-val="' + escapeHtml(user.department || '') + '"><option value="">Loading&hellip;</option></select></div>' : '';
+
+      var expertiseField = hasReviewer ?
+        '<div class="rrp-form-group"><label>Expertise</label><textarea id="upe-expertise" class="rrp-input" rows="2">' + escapeHtml(user.expertise || '') + '</textarea></div>' : '';
+
+      var nameParts = (user.name || '').split(' ');
+      var fn = nameParts[0] || ''; var ln = nameParts.slice(1).join(' ') || '';
+
+      listEl.innerHTML =
+        '<div class="rrp-analytics-card" style="border:2px solid var(--rrp-primary);">' +
+          '<h3 style="margin:0 0 1rem;font-size:1rem;">Edit &mdash; ' + escapeHtml(user.name || user.email) +
+            ' <span style="font-size:.8rem;font-weight:400;color:var(--rrp-text-muted);">' + escapeHtml(user.email) + '</span></h3>' +
+          '<div class="rrp-form-group">' +
+            (_viewerIsAdmin ?
+              '<label style="font-weight:600;">Groups <em style="font-weight:400;font-size:.85rem;color:var(--rrp-text-muted);">(select one or more)</em></label>' +
+              '<div style="display:flex;gap:1.25rem;flex-wrap:wrap;margin-top:.4rem;padding:.6rem .8rem;background:var(--rrp-bg-muted,#f8f9fa);border-radius:6px;border:1px solid var(--rrp-border,#dee2e6);">' +
+                Object.keys(ROLE_META).map(function (slug) {
+                  var ck = currentRoles.indexOf(slug) !== -1 ? ' checked' : '';
+                  return '<label class="upe-role-label" style="display:flex;align-items:center;gap:.4rem;cursor:pointer;font-size:.93rem;">' +
+                    '<input type="checkbox" class="upe-role-check" value="' + slug + '"' + ck + '> ' + ROLE_META[slug].label + '</label>';
+                }).join('') +
+              '</div>' +
+              '<small style="color:var(--rrp-text-muted);">Multi-group users get a tab-switcher in their portal view.</small>'
+            : '') +
+          '</div>' +
+          '<div class="rrp-form-row" style="margin-top:.75rem;">' +
+            '<div class="rrp-form-group"><label>First Name</label><input type="text" id="upe-first" class="rrp-input" value="' + escapeHtml(fn) + '"></div>' +
+            '<div class="rrp-form-group"><label>Last Name</label><input type="text" id="upe-last" class="rrp-input" value="' + escapeHtml(ln) + '"></div>' +
+          '</div>' +
+          studentFields + deptField + expertiseField +
+          '<div id="upe-msg" style="min-height:1.3rem;margin:.4rem 0;"></div>' +
+          '<div style="display:flex;gap:.6rem;">' +
+            '<button type="button" class="rrp-btn" id="upe-save-btn">&#10003; Save Changes</button>' +
+            '<button type="button" class="rrp-btn secondary" id="upe-cancel-btn">&#8592; Cancel</button>' +
+          '</div>' +
+        '</div>';
+
+      var deptSel = listEl.querySelector('#upe-dept');
+      if (deptSel) {
+        var saved = deptSel.getAttribute('data-dept-val') || '';
+        api('GET', '/config').then(function (cfg) {
+          var depts = cfg.departments || [];
+          deptSel.innerHTML = '<option value="">&#8212; Select department &#8212;</option>' +
+            depts.map(function (d) { return '<option value="' + escapeHtml(d.id) + '"' + (d.id === saved ? ' selected' : '') + '>' + escapeHtml(d.label) + '</option>'; }).join('');
+        }).catch(function () { deptSel.innerHTML = '<option value="">Unable to load</option>'; });
+      }
+
+      listEl.querySelector('#upe-cancel-btn').addEventListener('click', function () { applyFilter(); });
+      listEl.querySelector('#upe-save-btn').addEventListener('click', function () {
+        var saveBtn = listEl.querySelector('#upe-save-btn');
+        var msgEl   = listEl.querySelector('#upe-msg');
+        var payload = {};
+        if (_viewerIsAdmin) {
+          var selectedRoles = [];
+          listEl.querySelectorAll('.upe-role-check:checked').forEach(function (cb) { selectedRoles.push(cb.value); });
+          if (selectedRoles.length === 0) { msgEl.innerHTML = '<span class="rrp-error">Select at least one group.</span>'; return; }
+          payload.roles = selectedRoles;
+        }
+        var fnEl = listEl.querySelector('#upe-first'); var lnEl = listEl.querySelector('#upe-last');
+        if (fnEl) payload.firstName  = fnEl.value.trim();
+        if (lnEl) payload.lastName   = lnEl.value.trim();
+        var degEl  = listEl.querySelector('#upe-degree');
+        var deptEl = listEl.querySelector('#upe-dept');
+        var expEl  = listEl.querySelector('#upe-expertise');
+        if (degEl)  payload.degree     = degEl.value;
+        if (deptEl) payload.department = deptEl.value;
+        if (expEl)  payload.expertise  = expEl.value;
+        saveBtn.disabled = true; saveBtn.textContent = 'Saving\u2026';
+        msgEl.innerHTML = '';
+        api('PATCH', '/portal-users/' + user.id, payload)
+          .then(function () {
+            var idx = _allUsers.indexOf(user);
+            if (idx !== -1) {
+              if (_viewerIsAdmin && payload.roles) { _allUsers[idx].wpRoles = payload.roles; }
+              if (payload.firstName || payload.lastName) {
+                _allUsers[idx].name = ((payload.firstName || '') + ' ' + (payload.lastName || '')).trim();
+              }
+            }
+            applyFilter();
+          })
+          .catch(function (err) {
+            saveBtn.disabled = false; saveBtn.textContent = '\u2713 Save Changes';
+            msgEl.innerHTML = '<span class="rrp-error">' + escapeHtml((err && err.data && err.data.error) || 'Save failed.') + '</span>';
+          });
+      });
+    }
+
+    function renderResetPwInline(user) {
+      if (!user) return;
+      var listEl = document.getElementById('rrp-users-list');
+      if (!listEl) return;
+      listEl.innerHTML =
+        '<div class="rrp-analytics-card" style="border:2px solid #f59e0b;">' +
+          '<h3 style="margin:0 0 .5rem;font-size:1rem;">&#128274; Reset Password &mdash; ' + escapeHtml(user.name || user.email) + '</h3>' +
+          '<div class="rrp-form-group"><label>New Password</label>' +
+            '<input type="text" id="rp-pw" class="rrp-input" placeholder="Leave blank to auto-generate"></div>' +
+          '<div id="rp-msg" style="min-height:1.3rem;margin:.4rem 0;"></div>' +
+          '<div style="display:flex;gap:.6rem;">' +
+            '<button type="button" class="rrp-btn" id="rp-save" style="background:#f59e0b;border-color:#f59e0b;">&#128274; Reset</button>' +
+            '<button type="button" class="rrp-btn secondary" id="rp-cancel">&#8592; Cancel</button>' +
+          '</div>' +
+        '</div>';
+      listEl.querySelector('#rp-cancel').addEventListener('click', function () { applyFilter(); });
+      listEl.querySelector('#rp-save').addEventListener('click', function () {
+        var saveBtn = listEl.querySelector('#rp-save');
+        var msgEl   = listEl.querySelector('#rp-msg');
+        var pw      = listEl.querySelector('#rp-pw').value.trim();
+        var payload = {}; if (pw) payload.password = pw;
+        saveBtn.disabled = true; saveBtn.textContent = 'Resetting\u2026';
+        api('POST', '/portal-users/' + user.id + '/reset-password', payload)
+          .then(function (res) {
+            var newPw = res.newPassword || '';
+            msgEl.innerHTML = '<span class="rrp-success">Password reset.' +
+              (newPw ? ' New password: <code style="background:#f0f0f0;padding:.1rem .35rem;border-radius:3px;">' + escapeHtml(newPw) + '</code>' : '') + '</span>';
+            saveBtn.disabled = false; saveBtn.textContent = '\u128274 Reset';
+          })
+          .catch(function (err) {
+            saveBtn.disabled = false; saveBtn.textContent = '\u128274 Reset';
+            msgEl.innerHTML = '<span class="rrp-error">' + escapeHtml((err && err.data && err.data.error) || 'Reset failed.') + '</span>';
+          });
+      });
+    }
+
+    function renderAddUserInline() {
+      var addWrap = document.getElementById('rrp-users-add-wrap');
+      if (!addWrap) return;
+      addWrap.style.display = 'block';
+      var addGroupFields = '';
+
+      addWrap.innerHTML =
+        '<div class="rrp-analytics-card" style="margin-bottom:1.25rem;border:2px solid var(--rrp-primary);">' +
+          '<h3 style="margin:0 0 1rem;font-size:1rem;">&#43; Add New User</h3>' +
+          '<div class="rrp-form-group">' +
+            '<label style="font-weight:600;">Groups <em style="font-weight:400;font-size:.85rem;color:var(--rrp-text-muted);">(select one or more)</em></label>' +
+            '<div style="display:flex;gap:1.25rem;flex-wrap:wrap;margin-top:.4rem;padding:.6rem .8rem;background:var(--rrp-bg-muted,#f8f9fa);border-radius:6px;border:1px solid var(--rrp-border,#dee2e6);">' +
+              Object.keys(ROLE_META).map(function (slug) {
+                return '<label style="display:flex;align-items:center;gap:.4rem;cursor:pointer;font-size:.93rem;">' +
+                  '<input type="checkbox" class="upa-role-check" value="' + slug + '"> ' + ROLE_META[slug].label + '</label>';
+              }).join('') +
+            '</div>' +
+          '</div>' +
+          '<div id="upa-group-fields"></div>' +
+          '<div class="rrp-form-row">' +
+            '<div class="rrp-form-group"><label>First Name</label><input type="text" id="upa-first" class="rrp-input" placeholder="First name"></div>' +
+            '<div class="rrp-form-group"><label>Last Name</label><input type="text" id="upa-last" class="rrp-input" placeholder="Last name"></div>' +
+          '</div>' +
+          '<div class="rrp-form-group"><label>Email <em>*</em></label><input type="email" id="upa-email" class="rrp-input" placeholder="user@cityuniversity.edu"></div>' +
+          '<div class="rrp-form-group"><label>Password <em>(optional)</em></label>' +
+            '<input type="text" id="upa-password" class="rrp-input" placeholder="Leave blank to auto-generate">' +
+            '<small style="color:var(--rrp-text-muted);">A secure password is auto-generated if blank.</small></div>' +
+          '<div id="upa-msg" style="min-height:1.3rem;margin:.4rem 0;"></div>' +
+          '<div style="display:flex;gap:.6rem;">' +
+            '<button type="button" class="rrp-btn" id="upa-save-btn">&#10003; Create User</button>' +
+            '<button type="button" class="rrp-btn secondary" id="upa-cancel-btn">Cancel</button>' +
+          '</div>' +
+        '</div>';
+
+      function updateGroupFields() {
+        var checked = [];
+        addWrap.querySelectorAll('.upa-role-check:checked').forEach(function (cb) { checked.push(cb.value); });
+        var hasStu = checked.indexOf('rrp_student')     !== -1;
+        var hasRev = checked.indexOf('rrp_reviewer')    !== -1 || checked.indexOf('rrp_faculty') !== -1;
+        var hasCo  = checked.indexOf('rrp_coordinator') !== -1 && !hasRev;
+        var gf = addWrap.querySelector('#upa-group-fields'); if (!gf) return;
+        var html = '';
+        if (hasStu) {
+          html += '<div class="rrp-form-group"><label>Degree / Program</label>' +
+            '<select id="upa-degree" class="rrp-input">' +
+              '<option value="">&#8212; Select &#8212;</option>' +
+              OB_DEGREE_SCHOOLS.map(function (sch) {
+                return '<optgroup label="School of ' + escapeHtml(sch) + '">' +
+                  OB_DEGREES.filter(function (d) { return d.school === sch; }).map(function (d) {
+                    return '<option value="' + escapeHtml(d.value) + '">' + escapeHtml(d.label) + '</option>';
+                  }).join('') + '</optgroup>';
+              }).join('') +
+            '</select></div>';
+        }
+        if (hasRev || hasCo) {
+          html += '<div class="rrp-form-group"><label>Department</label>' +
+            '<select id="upa-dept" class="rrp-input"><option value="">Loading&hellip;</option></select></div>';
+        }
+        if (hasRev) {
+          html += '<div class="rrp-form-group"><label>Expertise</label>' +
+            '<textarea id="upa-expertise" class="rrp-input" rows="2" placeholder="Areas of expertise, research interests&hellip;"></textarea></div>';
+        }
+        gf.innerHTML = html;
+        var deptSel = gf.querySelector('#upa-dept');
+        if (deptSel) {
+          api('GET', '/config').then(function (cfg) {
+            var depts = cfg.departments || [];
+            deptSel.innerHTML = '<option value="">&#8212; Select department &#8212;</option>' +
+              depts.map(function (d) { return '<option value="' + escapeHtml(d.id) + '">' + escapeHtml(d.label) + '</option>'; }).join('');
+          }).catch(function () { deptSel.innerHTML = '<option value="">Unable to load</option>'; });
+        }
+      }
+
+      addWrap.querySelectorAll('.upa-role-check').forEach(function (cb) {
+        cb.addEventListener('change', updateGroupFields);
+      });
+      addWrap.querySelector('#upa-cancel-btn').addEventListener('click', function () {
+        addWrap.style.display = 'none';
+      });
+      addWrap.querySelector('#upa-save-btn').addEventListener('click', function () {
+        var saveBtn = addWrap.querySelector('#upa-save-btn');
+        var msgEl   = addWrap.querySelector('#upa-msg');
+        var roles   = [];
+        addWrap.querySelectorAll('.upa-role-check:checked').forEach(function (cb) { roles.push(cb.value); });
+        if (roles.length === 0) { msgEl.innerHTML = '<span class="rrp-error">Select at least one group.</span>'; return; }
+        var email = addWrap.querySelector('#upa-email') ? addWrap.querySelector('#upa-email').value.trim() : '';
+        if (!email) { msgEl.innerHTML = '<span class="rrp-error">Email is required.</span>'; return; }
+        var payload = {
+          firstName: addWrap.querySelector('#upa-first') ? addWrap.querySelector('#upa-first').value.trim() : '',
+          lastName:  addWrap.querySelector('#upa-last')  ? addWrap.querySelector('#upa-last').value.trim() : '',
+          email: email, roles: roles
+        };
+        var pw    = addWrap.querySelector('#upa-password') ? addWrap.querySelector('#upa-password').value : '';
+        var degEl  = addWrap.querySelector('#upa-degree');
+        var deptEl = addWrap.querySelector('#upa-dept');
+        var expEl  = addWrap.querySelector('#upa-expertise');
+        if (pw)    payload.password   = pw;
+        if (degEl  && degEl.value)  payload.degree     = degEl.value;
+        if (deptEl && deptEl.value) payload.department = deptEl.value;
+        if (expEl  && expEl.value)  payload.expertise  = expEl.value;
+        saveBtn.disabled = true; saveBtn.textContent = 'Creating\u2026';
+        msgEl.innerHTML = '';
+        api('POST', '/portal-users', payload)
+          .then(function () { addWrap.style.display = 'none'; loadAllUsers(); })
+          .catch(function (err) {
+            saveBtn.disabled = false; saveBtn.textContent = '\u2713 Create User';
+            msgEl.innerHTML = '<span class="rrp-error">' + escapeHtml((err && err.data && err.data.error) || 'Create failed.') + '</span>';
+          });
+      });
+    }
+
+    renderPage();
+  }
+
+  // ── User Management (tabbed by role — legacy, kept for reference) ──────────
   function renderAdminUserManagement(container, backFn) {
     var TABS = [
       { key: 'student',     label: '&#127891; Students',     role: 'rrp_student' },
@@ -2470,12 +3655,33 @@
           '<div class="rrp-form-group"><label>Department</label><select id="umf-department" class="rrp-input" data-dept-select data-dept-val="' + escapeHtml(user.department || '') + '"><option value="">Loading&#8230;</option></select></div>';
       }
 
+      var ROLE_OPTIONS = [
+        { slug: 'rrp_student',     label: 'Student' },
+        { slug: 'rrp_reviewer',    label: 'Reviewer' },
+        { slug: 'rrp_coordinator', label: 'Coordinator' },
+        { slug: 'rrp_admin',       label: 'Admin' }
+      ];
+      var currentWpRoles = Array.isArray(user.wpRoles) && user.wpRoles.length ? user.wpRoles : (user.wpRole ? [user.wpRole] : ['rrp_student']);
+      var rolesHtml =
+        '<div class="rrp-form-group" style="margin-top:.75rem;">' +
+          '<label style="font-weight:600;">Roles <em style="font-weight:400;color:var(--rrp-text-muted);">(select one or more)</em></label>' +
+          '<div style="display:flex;gap:1.25rem;flex-wrap:wrap;margin-top:.4rem;padding:.6rem .8rem;background:var(--rrp-bg-muted,#f8f9fa);border-radius:6px;border:1px solid var(--rrp-border,#dee2e6);">' +
+            ROLE_OPTIONS.map(function(r) {
+              var ck = currentWpRoles.indexOf(r.slug) !== -1 ? ' checked' : '';
+              return '<label style="display:flex;align-items:center;gap:.4rem;cursor:pointer;font-weight:400;font-size:.95rem;">' +
+                '<input type="checkbox" class="umf-role-check" value="' + r.slug + '"' + ck + '> ' + r.label + '</label>';
+            }).join('') +
+          '</div>' +
+          '<small style="color:var(--rrp-text-muted);">A user with multiple roles gets a tab-switcher in their portal view.</small>' +
+        '</div>';
+
       var nameParts = (user.name || '').split(' ');
       var fn = nameParts[0] || ''; var ln = nameParts.slice(1).join(' ') || '';
       listEl.innerHTML =
         '<div class="rrp-analytics-card" style="border:2px solid var(--rrp-primary);">' +
           '<h3 style="margin:0 0 1rem;font-size:1rem;">Edit ' + escapeHtml(user.name || user.email) + '</h3>' +
-          '<div class="rrp-form-row">' +
+          rolesHtml +
+          '<div class="rrp-form-row" style="margin-top:.75rem;">' +
             '<div class="rrp-form-group"><label>First Name</label><input type="text" id="umf-first" class="rrp-input" value="' + escapeHtml(fn) + '"></div>' +
             '<div class="rrp-form-group"><label>Last Name</label><input type="text" id="umf-last" class="rrp-input" value="' + escapeHtml(ln) + '"></div>' +
           '</div>' +
@@ -2521,6 +3727,12 @@
           var expEl = document.getElementById('umf-expertise');
           if (expEl) payload.expertise = expEl.value;
         }
+        var roleChecks = listEl ? listEl.querySelectorAll('.umf-role-check:checked') : [];
+        var selectedRoles = [];
+        roleChecks.forEach(function(cb) { selectedRoles.push(cb.value); });
+        if (selectedRoles.length === 0) { msgEl.innerHTML = '<span class="rrp-error">Select at least one role.</span>'; return; }
+        payload.roles = selectedRoles;
+
         saveBtn.disabled = true; saveBtn.textContent = 'Saving\u2026';
         msgEl.innerHTML = '';
         api('PATCH', '/portal-users/' + user.id, payload)

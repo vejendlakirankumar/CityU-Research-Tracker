@@ -181,6 +181,47 @@ class Portal_REST {
 			'callback'            => array( __CLASS__, 'config_put' ),
 			'permission_callback' => array( __CLASS__, 'can_manage_config' ),
 		) );
+		// Submission Types CRUD
+		register_rest_route( self::NAMESPACE, '/submission-types', array(
+			'methods'             => 'GET',
+			'callback'            => array( __CLASS__, 'submission_types_get' ),
+			'permission_callback' => '__return_true',
+		) );
+		register_rest_route( self::NAMESPACE, '/submission-types', array(
+			'methods'             => 'PUT',
+			'callback'            => array( __CLASS__, 'submission_types_put' ),
+			'permission_callback' => array( __CLASS__, 'can_manage_config' ),
+		) );
+		register_rest_route( self::NAMESPACE, '/submission-types/(?P<id>[a-zA-Z0-9_\-]+)', array(
+			'methods'             => 'PATCH',
+			'callback'            => array( __CLASS__, 'submission_type_patch' ),
+			'permission_callback' => array( __CLASS__, 'can_manage_config' ),
+			'args'                => array( 'id' => array( 'required' => true ) ),
+		) );
+		register_rest_route( self::NAMESPACE, '/submission-types/(?P<id>[a-zA-Z0-9_\-]+)', array(
+			'methods'             => 'DELETE',
+			'callback'            => array( __CLASS__, 'submission_type_delete' ),
+			'permission_callback' => array( __CLASS__, 'can_manage_config' ),
+			'args'                => array( 'id' => array( 'required' => true ) ),
+		) );
+		// Workflow Stages library CRUD
+		register_rest_route( self::NAMESPACE, '/workflow-stages', array(
+			'methods'             => 'GET',
+			'callback'            => array( __CLASS__, 'workflow_stages_get' ),
+			'permission_callback' => array( __CLASS__, 'can_view_config' ),
+		) );
+		register_rest_route( self::NAMESPACE, '/workflow-stages/(?P<id>[a-zA-Z0-9_\-]+)', array(
+			'methods'             => 'PATCH',
+			'callback'            => array( __CLASS__, 'workflow_stage_patch' ),
+			'permission_callback' => array( __CLASS__, 'can_manage_config' ),
+			'args'                => array( 'id' => array( 'required' => true ) ),
+		) );
+		register_rest_route( self::NAMESPACE, '/workflow-stages/(?P<id>[a-zA-Z0-9_\-]+)', array(
+			'methods'             => 'DELETE',
+			'callback'            => array( __CLASS__, 'workflow_stage_delete' ),
+			'permission_callback' => array( __CLASS__, 'can_manage_config' ),
+			'args'                => array( 'id' => array( 'required' => true ) ),
+		) );
 		register_rest_route( self::NAMESPACE, '/reviewers', array(
 			'methods'             => 'GET',
 			'callback'            => array( __CLASS__, 'reviewers' ),
@@ -209,6 +250,17 @@ class Portal_REST {
 			'permission_callback' => array( __CLASS__, 'can_view_dashboard' ),
 		) );
 		// Portal user management (students & reviewers)
+		// Self-profile: any logged-in user can read & update their own record
+		register_rest_route( self::NAMESPACE, '/portal-users/me', array(
+			'methods'             => 'GET',
+			'callback'            => array( __CLASS__, 'portal_users_me' ),
+			'permission_callback' => '__return_true',
+		) );
+		register_rest_route( self::NAMESPACE, '/portal-users/me', array(
+			'methods'             => 'PATCH',
+			'callback'            => array( __CLASS__, 'portal_users_me_update' ),
+			'permission_callback' => '__return_true',
+		) );
 		register_rest_route( self::NAMESPACE, '/portal-users', array(
 			'methods'             => 'GET',
 			'callback'            => array( __CLASS__, 'portal_users_list' ),
@@ -1587,7 +1639,13 @@ class Portal_REST {
 				foreach ( $rs['reviewers'] ?? array() as $r ) {
 					$reviewers[] = array( 'name' => $r['name'] ?? $r['email'] ?? '', 'email' => $r['email'] ?? '' );
 				}
-				$stages[] = array( 'stageName' => $rs['stageName'] ?? '', 'reviewers' => $reviewers );
+				$raw_decs = $rs['decisions'] ?? array();
+				$stages[] = array(
+					'stageName' => $rs['stageName'] ?? '',
+					'reviewers' => $reviewers,
+					'decisions' => ! empty( $raw_decs ) ? (object) $raw_decs : new \stdClass(),
+					'skipped'   => ! empty( $rs['skipped'] ),
+				);
 			}
 			$list[] = array(
 				'id'           => $s['id'] ?? '',
@@ -1716,8 +1774,154 @@ class Portal_REST {
 		if ( isset( $body['departments'] ) && is_array( $body['departments'] ) ) {
 			$config['departments'] = $body['departments'];
 		}
+		if ( isset( $body['submissionTypes'] ) && is_array( $body['submissionTypes'] ) ) {
+			$config['submissionTypes'] = $body['submissionTypes'];
+		}
 		Portal_Data::write_config( $config );
 		return new WP_REST_Response( $config, 200 );
+	}
+
+	public static function submission_types_get( WP_REST_Request $request ) {
+		$config = Portal_Data::read_config();
+		return new WP_REST_Response( array( 'submissionTypes' => $config['submissionTypes'] ?? array() ), 200 );
+	}
+
+	public static function submission_types_put( WP_REST_Request $request ) {
+		$body  = $request->get_json_params() ?: array();
+		$types = isset( $body['submissionTypes'] ) && is_array( $body['submissionTypes'] ) ? $body['submissionTypes'] : array();
+		$sanitized = array();
+		foreach ( $types as $t ) {
+			if ( empty( $t['id'] ) || empty( $t['label'] ) ) continue;
+			$sanitized[] = array(
+				'id'          => sanitize_key( (string) $t['id'] ),
+				'label'       => sanitize_text_field( (string) $t['label'] ),
+				'description' => sanitize_text_field( (string) ( $t['description'] ?? '' ) ),
+				'stages'      => array_values( array_map( 'sanitize_text_field', (array) ( $t['stages'] ?? array() ) ) ),
+			);
+		}
+		$config = Portal_Data::read_config();
+		$config['submissionTypes'] = $sanitized;
+		Portal_Data::write_config( $config );
+		return new WP_REST_Response( array( 'submissionTypes' => $sanitized ), 200 );
+	}
+
+	public static function submission_type_patch( WP_REST_Request $request ) {
+		$id   = sanitize_key( (string) $request->get_param( 'id' ) );
+		$body = $request->get_json_params() ?: array();
+		$config = Portal_Data::read_config();
+		$types  = $config['submissionTypes'] ?? array();
+		$found  = false;
+		foreach ( $types as &$t ) {
+			if ( $t['id'] === $id ) {
+				$found = true;
+				if ( isset( $body['label'] ) )       $t['label']       = sanitize_text_field( (string) $body['label'] );
+				if ( isset( $body['description'] ) ) $t['description'] = sanitize_text_field( (string) $body['description'] );
+				if ( isset( $body['stages'] ) && is_array( $body['stages'] ) ) {
+					$t['stages'] = array_values( array_map( 'sanitize_text_field', $body['stages'] ) );
+				}
+				break;
+			}
+		}
+		unset( $t );
+		if ( ! $found ) {
+			// Create new type if it doesn't exist
+			$types[] = array(
+				'id'          => $id,
+				'label'       => sanitize_text_field( (string) ( $body['label'] ?? $id ) ),
+				'description' => sanitize_text_field( (string) ( $body['description'] ?? '' ) ),
+				'stages'      => array_values( array_map( 'sanitize_text_field', (array) ( $body['stages'] ?? array() ) ) ),
+			);
+		}
+		$config['submissionTypes'] = $types;
+		Portal_Data::write_config( $config );
+		return new WP_REST_Response( array( 'submissionTypes' => $types ), 200 );
+	}
+
+	public static function submission_type_delete( WP_REST_Request $request ) {
+		$id     = sanitize_key( (string) $request->get_param( 'id' ) );
+		$config = Portal_Data::read_config();
+		$types  = array_values( array_filter( $config['submissionTypes'] ?? array(), function( $t ) use ( $id ) {
+			return $t['id'] !== $id;
+		} ) );
+		$config['submissionTypes'] = $types;
+		Portal_Data::write_config( $config );
+		return new WP_REST_Response( array( 'submissionTypes' => $types ), 200 );
+	}
+
+	// ── Workflow Stages library ───────────────────────────────────────────────
+
+	public static function workflow_stages_get( WP_REST_Request $request ) {
+		$config = Portal_Data::read_config();
+		$stages = $config['workflowStages'] ?? array();
+		// Auto-seed from existing submission type stage names if library is empty
+		if ( empty( $stages ) ) {
+			$seen      = array();
+			$req_all   = $config['stageRequirements'] ?? array();
+			foreach ( ( $config['submissionTypes'] ?? array() ) as $t ) {
+				foreach ( ( $t['stages'] ?? array() ) as $sname ) {
+					if ( isset( $seen[ $sname ] ) ) continue;
+					$seen[ $sname ] = true;
+					$multi = false;
+					foreach ( $req_all as $req_map ) {
+						if ( isset( $req_map[ $sname ] ) && ( $req_map[ $sname ]['requiredCount'] ?? 1 ) > 1 ) {
+							$multi = true;
+							break;
+						}
+					}
+					$stages[] = array(
+						'id'         => sanitize_key( $sname ),
+						'name'       => $sname,
+						'singleUser' => ! $multi,
+						'multiUser'  => $multi,
+					);
+				}
+			}
+			if ( ! empty( $stages ) ) {
+				$config['workflowStages'] = $stages;
+				Portal_Data::write_config( $config );
+			}
+		}
+		return new WP_REST_Response( array( 'workflowStages' => $stages ), 200 );
+	}
+
+	public static function workflow_stage_patch( WP_REST_Request $request ) {
+		$id     = sanitize_key( (string) $request->get_param( 'id' ) );
+		$body   = $request->get_json_params() ?: array();
+		$config = Portal_Data::read_config();
+		$stages = $config['workflowStages'] ?? array();
+		$found  = false;
+		foreach ( $stages as &$s ) {
+			if ( $s['id'] === $id ) {
+				$found = true;
+				if ( isset( $body['name'] ) )       $s['name']       = sanitize_text_field( (string) $body['name'] );
+				if ( isset( $body['singleUser'] ) )  $s['singleUser'] = (bool) $body['singleUser'];
+				if ( isset( $body['multiUser'] ) )   $s['multiUser']  = (bool) $body['multiUser'];
+				break;
+			}
+		}
+		unset( $s );
+		if ( ! $found ) {
+			$stages[] = array(
+				'id'         => $id,
+				'name'       => sanitize_text_field( (string) ( $body['name'] ?? $id ) ),
+				'singleUser' => (bool) ( $body['singleUser'] ?? true ),
+				'multiUser'  => (bool) ( $body['multiUser']  ?? false ),
+			);
+		}
+		$config['workflowStages'] = $stages;
+		Portal_Data::write_config( $config );
+		return new WP_REST_Response( array( 'workflowStages' => $stages ), 200 );
+	}
+
+	public static function workflow_stage_delete( WP_REST_Request $request ) {
+		$id     = sanitize_key( (string) $request->get_param( 'id' ) );
+		$config = Portal_Data::read_config();
+		$stages = array_values( array_filter( $config['workflowStages'] ?? array(), function( $s ) use ( $id ) {
+			return $s['id'] !== $id;
+		} ) );
+		$config['workflowStages'] = $stages;
+		Portal_Data::write_config( $config );
+		return new WP_REST_Response( array( 'workflowStages' => $stages ), 200 );
 	}
 
 	public static function reviewers( WP_REST_Request $request ) {
@@ -1900,12 +2104,21 @@ class Portal_REST {
 		foreach ( array( 'rrp_admin', 'administrator', 'rrp_coordinator', 'rrp_faculty', 'rrp_reviewer', 'rrp_student' ) as $r ) {
 			if ( in_array( $r, $roles, true ) ) { $wp_role = $r; break; }
 		}
+		$all_portal_roles = array( 'rrp_student', 'rrp_reviewer', 'rrp_coordinator', 'rrp_admin', 'rrp_faculty' );
+		$wp_roles = array_values( array_filter( $roles, function( $r ) use ( $all_portal_roles ) {
+			return in_array( $r, $all_portal_roles, true );
+		} ) );
+		if ( in_array( 'administrator', $roles, true ) && ! in_array( 'rrp_admin', $wp_roles, true ) ) {
+			$wp_roles[] = 'rrp_admin';
+		}
+
 		return array(
 			'id'                    => $u->ID,
 			'name'                  => $u->display_name,
 			'email'                 => $u->user_email,
 			'portalRole'            => $portal_role,
 			'wpRole'                => $wp_role,
+			'wpRoles'               => $wp_roles,
 			'degree'                => (string) ( get_user_meta( $u->ID, 'rrp_degree', true ) ?: '' ),
 			'allowedTypes'          => (array) ( get_user_meta( $u->ID, 'rrp_allowed_submission_types', true ) ?: array() ),
 			'defaultStageReviewers' => (array) ( get_user_meta( $u->ID, 'rrp_default_stage_reviewers', true ) ?: array() ),
@@ -1916,6 +2129,47 @@ class Portal_REST {
 			'programId'             => (string) ( get_user_meta( $u->ID, 'rrp_program_id', true ) ?: '' ),
 			'registeredAt'          => $u->user_registered,
 		);
+	}
+
+	public static function portal_users_me( WP_REST_Request $request ) {
+		$current = wp_get_current_user();
+		if ( ! $current->exists() ) {
+			return new WP_REST_Response( array( 'error' => 'Not logged in.' ), 401 );
+		}
+		return new WP_REST_Response( array( 'user' => self::format_portal_user( $current ) ), 200 );
+	}
+
+	public static function portal_users_me_update( WP_REST_Request $request ) {
+		$current = wp_get_current_user();
+		if ( ! $current->exists() ) {
+			return new WP_REST_Response( array( 'error' => 'Not logged in.' ), 401 );
+		}
+		$id   = (int) $current->ID;
+		$body = $request->get_json_params() ?: array();
+
+		$update = array( 'ID' => $id );
+		if ( isset( $body['firstName'] ) ) $update['first_name']  = sanitize_text_field( $body['firstName'] );
+		if ( isset( $body['lastName'] ) )  $update['last_name']   = sanitize_text_field( $body['lastName'] );
+		if ( isset( $body['firstName'] ) || isset( $body['lastName'] ) ) {
+			$fn = sanitize_text_field( $body['firstName'] ?? $current->first_name );
+			$ln = sanitize_text_field( $body['lastName']  ?? $current->last_name );
+			$update['display_name'] = trim( $fn . ' ' . $ln ) ?: $current->display_name;
+		}
+		if ( ! empty( $body['password'] ) && strlen( (string) $body['password'] ) >= 8 ) {
+			$update['user_pass'] = (string) $body['password'];
+		}
+		if ( count( $update ) > 1 ) {
+			$result = wp_update_user( $update );
+			if ( is_wp_error( $result ) ) {
+				return new WP_REST_Response( array( 'error' => $result->get_error_message() ), 400 );
+			}
+		}
+		if ( array_key_exists( 'degree', $body ) )     update_user_meta( $id, 'rrp_degree',     sanitize_text_field( $body['degree'] ) );
+		if ( array_key_exists( 'department', $body ) )  update_user_meta( $id, 'rrp_department', sanitize_text_field( $body['department'] ) );
+		if ( array_key_exists( 'expertise', $body ) )   update_user_meta( $id, 'rrp_expertise',  sanitize_textarea_field( $body['expertise'] ) );
+
+		$updated = get_userdata( $id );
+		return new WP_REST_Response( array( 'user' => self::format_portal_user( $updated ) ), 200 );
 	}
 
 	public static function portal_users_list( WP_REST_Request $request ) {
@@ -1987,18 +2241,30 @@ class Portal_REST {
 		$first_name = sanitize_text_field( $body['firstName'] ?? '' );
 		$last_name  = sanitize_text_field( $body['lastName'] ?? '' );
 		$email      = sanitize_email( $body['email'] ?? '' );
-		$role       = sanitize_key( $body['role'] ?? 'rrp_student' );
 		$password   = isset( $body['password'] ) ? (string) $body['password'] : '';
 
 		if ( ! $email || ! is_email( $email ) ) {
 			return new WP_REST_Response( array( 'error' => 'A valid email address is required.' ), 400 );
 		}
 		$allowed_roles = array( 'rrp_student', 'rrp_reviewer', 'rrp_coordinator', 'rrp_admin', 'rrp_faculty' );
-		if ( ! in_array( $role, $allowed_roles, true ) ) {
-			return new WP_REST_Response( array( 'error' => 'Invalid role. Must be one of: ' . implode( ', ', $allowed_roles ) ), 400 );
+
+		// Support both 'role' (single string) and 'roles' (array) — 'roles' takes precedence
+		if ( isset( $body['roles'] ) && is_array( $body['roles'] ) ) {
+			$roles = array_values( array_unique( array_filter(
+				array_map( 'sanitize_key', $body['roles'] ),
+				function( $r ) use ( $allowed_roles ) { return in_array( $r, $allowed_roles, true ); }
+			) ) );
+			$role = ! empty( $roles ) ? $roles[0] : 'rrp_student';
+		} else {
+			$role  = sanitize_key( $body['role'] ?? 'rrp_student' );
+			$roles = array( $role );
+		}
+
+		if ( empty( $roles ) ) {
+			return new WP_REST_Response( array( 'error' => 'At least one valid role is required.' ), 400 );
 		}
 		// Only admins can create coordinator or admin accounts
-		if ( in_array( $role, array( 'rrp_coordinator', 'rrp_admin' ), true ) && ! current_user_can( 'rrp_full_admin_access' ) ) {
+		if ( array_intersect( array( 'rrp_coordinator', 'rrp_admin' ), $roles ) && ! current_user_can( 'rrp_full_admin_access' ) ) {
 			return new WP_REST_Response( array( 'error' => 'Only admins can create coordinator or admin accounts.' ), 403 );
 		}
 		if ( email_exists( $email ) ) {
@@ -2043,6 +2309,16 @@ class Portal_REST {
 			}
 		}
 
+		// Apply additional roles beyond the primary one
+		if ( count( $roles ) > 1 ) {
+			$u_obj = get_userdata( $user_id );
+			foreach ( array_slice( $roles, 1 ) as $extra_role ) {
+				if ( in_array( $extra_role, $allowed_roles, true ) ) {
+					$u_obj->add_role( $extra_role );
+				}
+			}
+		}
+
 		if ( ! empty( $body['degree'] ) ) {
 			update_user_meta( $user_id, 'rrp_degree', sanitize_text_field( $body['degree'] ) );
 		}
@@ -2063,7 +2339,7 @@ class Portal_REST {
 		}
 
 		// Sync to reviewers.json so the assignment panel sees this reviewer
-		if ( $role === 'rrp_reviewer' || $role === 'rrp_faculty' ) {
+		if ( in_array( 'rrp_reviewer', $roles, true ) || in_array( 'rrp_faculty', $roles, true ) ) {
 			Portal_Data::sync_reviewer_to_json( $user_id );
 		}
 		if ( ! empty( $body['programIds'] ) && is_array( $body['programIds'] ) ) {
@@ -2124,22 +2400,38 @@ class Portal_REST {
 			update_user_meta( $id, 'rrp_program_id', sanitize_text_field( (string) $body['programId'] ) );
 		}
 
-		// Allow admin to change user role
-		if ( ! empty( $body['role'] ) && current_user_can( 'rrp_full_admin_access' ) ) {
-			$new_role      = sanitize_key( (string) $body['role'] );
-			$allowed_roles = array( 'rrp_student', 'rrp_reviewer', 'rrp_coordinator', 'rrp_admin', 'rrp_faculty' );
-			if ( in_array( $new_role, $allowed_roles, true ) ) {
-				$user->set_role( $new_role );
-				if ( $new_role === 'rrp_reviewer' || $new_role === 'rrp_faculty' ) {
-					Portal_Data::sync_reviewer_to_json( $id );
+		// Allow admin to change user role(s)
+		$allowed_roles = array( 'rrp_student', 'rrp_reviewer', 'rrp_coordinator', 'rrp_admin', 'rrp_faculty' );
+		if ( current_user_can( 'rrp_full_admin_access' ) ) {
+			if ( isset( $body['roles'] ) && is_array( $body['roles'] ) ) {
+				// Multi-role assignment
+				$new_roles = array_values( array_unique( array_filter(
+					array_map( 'sanitize_key', $body['roles'] ),
+					function( $r ) use ( $allowed_roles ) { return in_array( $r, $allowed_roles, true ); }
+				) ) );
+				if ( ! empty( $new_roles ) ) {
+					// Remove all rrp_* portal roles first
+					foreach ( $allowed_roles as $r ) { $user->remove_role( $r ); }
+					// Set primary role, then add additional roles
+					$user->set_role( $new_roles[0] );
+					foreach ( array_slice( $new_roles, 1 ) as $r ) { $user->add_role( $r ); }
+				}
+			} elseif ( ! empty( $body['role'] ) ) {
+				// Single role change (backward compat)
+				$new_role = sanitize_key( (string) $body['role'] );
+				if ( in_array( $new_role, $allowed_roles, true ) ) {
+					$user->set_role( $new_role );
 				}
 			}
 		}
 
-		// Sync to reviewers.json if this is a reviewer or faculty
+		// Sync to reviewers.json: add/update if still a reviewer, remove if no longer one
 		$updated_roles = (array) get_userdata( $id )->roles;
 		if ( in_array( 'rrp_reviewer', $updated_roles, true ) || in_array( 'rrp_faculty', $updated_roles, true ) ) {
 			Portal_Data::sync_reviewer_to_json( $id );
+		} else {
+			// User was possibly demoted away from reviewer — remove from pool
+			Portal_Data::remove_reviewer_from_json( $user->user_email );
 		}
 
 		return new WP_REST_Response( array( 'user' => self::format_portal_user( get_userdata( $id ) ) ), 200 );

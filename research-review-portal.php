@@ -3,7 +3,8 @@
  * Plugin Name: Research Review Portal
  * Description: Research submission and review workflow for conferences, publications, student projects, and grants. Port of the CityU Research Review Portal for WordPress.
  * Version: 1.0.0
- * Author: CityU School of Technology and Computing (STC)
+ * Author: Kiran Kumar Vejendla
+ * Author URI: mailto:vejendlakirankumar@cityu.edu
  * License: MIT
  * Text Domain: research-review-portal
  */
@@ -21,6 +22,7 @@ require_once RRP_PLUGIN_DIR . 'includes/class-portal-data.php';
 require_once RRP_PLUGIN_DIR . 'includes/class-portal-rest.php';
 require_once RRP_PLUGIN_DIR . 'includes/class-user-management.php';
 require_once RRP_PLUGIN_DIR . 'includes/class-process-documentation.php';
+require_once RRP_PLUGIN_DIR . 'includes/class-auth-provider.php';
 
 class Research_Review_Portal {
 
@@ -29,6 +31,78 @@ class Research_Review_Portal {
 		add_action( 'wp_body_open', array( __CLASS__, 'render_site_banner' ) );
 		add_action( 'wp_head', array( __CLASS__, 'render_site_banner_fallback' ), 0 );
 		add_action( 'template_redirect', array( __CLASS__, 'maybe_render_homepage' ) );
+		// Login page branding
+		add_action( 'login_enqueue_scripts', array( __CLASS__, 'login_styles' ) );
+		add_filter( 'login_headerurl',       array( __CLASS__, 'login_header_url' ) );
+		add_filter( 'login_headertext',      array( __CLASS__, 'login_header_text' ) );
+	}
+
+	public static function login_styles() {
+		$logo_url = esc_url( RRP_PLUGIN_URL . 'assets/city-university-logo.svg' );
+		echo '<style>
+#login h1 a, .login h1 a {
+	background-image: url(' . $logo_url . ') !important;
+	background-size: contain !important;
+	background-repeat: no-repeat !important;
+	background-position: center !important;
+	width: 220px !important;
+	height: 60px !important;
+	filter: none !important;
+}
+body.login { background: #f4f6f9 !important; }
+body.login #login { padding-top: 40px; }
+body.login #wp-auth-check-wrap #wp-auth-check { border-top: 4px solid #002f52; }
+body.login .button-primary { background: #002f52 !important; border-color: #002f52 !important; }
+body.login .button-primary:hover, body.login .button-primary:focus { background: #005a99 !important; border-color: #005a99 !important; }
+</style>' . "\n";
+	}
+
+	public static function login_header_url() {
+		return home_url( '/' );
+	}
+
+	public static function login_header_text() {
+		return 'City University of Seattle — Research Review Portal';
+	}
+
+	/**
+	 * Replace the stored site hostname with the actual request hostname.
+	 * Hooked to option_siteurl / option_home so it fires before redirect_canonical.
+	 * Receives the raw option value as $url — must NOT call get_option() to avoid recursion.
+	 */
+	public static function fix_url_host( $url ) {
+		if ( ! isset( $_SERVER['HTTP_HOST'] ) || '' === $_SERVER['HTTP_HOST'] ) {
+			return $url;
+		}
+		$stored_host   = (string) ( parse_url( $url, PHP_URL_HOST ) ?: '' );
+		if ( '' === $stored_host ) {
+			return $url;
+		}
+		$stored_scheme = (string) ( parse_url( $url, PHP_URL_SCHEME ) ?: 'http' );
+		$stored_port   = parse_url( $url, PHP_URL_PORT );
+		$stored_origin = $stored_scheme . '://' . $stored_host . ( $stored_port ? ':' . (string) $stored_port : '' );
+		$scheme         = is_ssl() ? 'https' : 'http';
+		$request_origin = $scheme . '://' . sanitize_text_field( wp_unslash( $_SERVER['HTTP_HOST'] ) );
+		if ( $stored_origin !== $request_origin ) {
+			$url = str_replace( $stored_origin, $request_origin, $url );
+		}
+		return $url;
+	}
+
+	/**
+	 * Prevent redirect_canonical from sending browsers to the stored (localhost) URL
+	 * when accessed from an external hostname.
+	 */
+	public static function no_localhost_redirect( $redirect_url, $requested_url ) {
+		if ( ! isset( $_SERVER['HTTP_HOST'] ) || '' === $_SERVER['HTTP_HOST'] ) {
+			return $redirect_url;
+		}
+		$request_host  = (string) ( parse_url( 'http://' . sanitize_text_field( wp_unslash( $_SERVER['HTTP_HOST'] ) ), PHP_URL_HOST ) ?: '' );
+		$redirect_host = (string) ( parse_url( $redirect_url, PHP_URL_HOST ) ?: '' );
+		if ( '' !== $redirect_host && $redirect_host !== $request_host ) {
+			return false; // suppress redirect to wrong host
+		}
+		return $redirect_url;
 	}
 
 	public static function render_site_banner() {
@@ -37,23 +111,13 @@ class Research_Review_Portal {
 		}
 
 		$logged_in = is_user_logged_in();
-		$login_url = wp_login_url( home_url() );
-		$logout_url = wp_logout_url( home_url() );
+		$login_url  = RRP_Auth_Provider::get_login_url( home_url() );
+		$logout_url = RRP_Auth_Provider::get_logout_url( home_url() );
 		$current_user = wp_get_current_user();
-		$user_name = $current_user->exists() ? ( $current_user->display_name ?: $current_user->user_login ) : '';
+		$user_name  = $current_user->exists() ? ( $current_user->display_name ?: $current_user->user_login ) : '';
 		$user_roles = $current_user->exists() ? $current_user->roles : array();
-		$role_label = '';
-		if ( in_array( 'rrp_student', $user_roles, true ) ) {
-			$role_label = 'Student';
-		} elseif ( in_array( 'rrp_reviewer', $user_roles, true ) ) {
-			$role_label = 'Reviewer';
-		} elseif ( in_array( 'rrp_faculty', $user_roles, true ) ) {
-			$role_label = 'Faculty';
-		} elseif ( in_array( 'rrp_coordinator', $user_roles, true ) ) {
-			$role_label = 'Coordinator';
-		} elseif ( in_array( 'rrp_admin', $user_roles, true ) || in_array( 'administrator', $user_roles, true ) ) {
-			$role_label = 'Admin';
-		}
+		$role_labels = RRP_User_Management::get_role_labels( $user_roles );
+		$role_label  = implode( ' · ', $role_labels );
 
 		$logo_url = esc_url( RRP_PLUGIN_URL . 'assets/city-university-logo.svg' );
 		echo '<div class="rrp-site-banner ' . ( $logged_in ? 'rrp-site-banner-loggedin' : 'rrp-site-banner-guest' ) . '">' .
@@ -117,7 +181,7 @@ class Research_Review_Portal {
 			'research-review-portal',
 			RRP_PLUGIN_URL . 'assets/portal.css',
 			array(),
-			'1.0.0'
+			(string) filemtime( RRP_PLUGIN_DIR . 'assets/portal.css' )
 		);
 		wp_enqueue_script(
 			'mammoth-js',
@@ -130,37 +194,36 @@ class Research_Review_Portal {
 			'research-review-portal',
 			RRP_PLUGIN_URL . 'assets/portal.js',
 			array( 'mammoth-js' ),
-			'1.0.0',
+			(string) filemtime( RRP_PLUGIN_DIR . 'assets/portal.js' ),
 			true
 		);
 
 		$logged_in = is_user_logged_in();
-		$login_url = wp_login_url( get_permalink() );
-		$logout_url = wp_logout_url( get_permalink() );
+		$login_url  = RRP_Auth_Provider::get_login_url( get_permalink() );
+		$logout_url = RRP_Auth_Provider::get_logout_url( get_permalink() );
 		$current_user = wp_get_current_user();
-		$user_name = $current_user->exists() ? ( $current_user->display_name ?: $current_user->user_login ) : '';
+		$user_name  = $current_user->exists() ? ( $current_user->display_name ?: $current_user->user_login ) : '';
 		$user_roles = $current_user->exists() ? $current_user->roles : array();
-		$role_label = '';
-		if ( in_array( 'rrp_student', $user_roles, true ) ) {
-			$role_label = 'Student';
-		} elseif ( in_array( 'rrp_reviewer', $user_roles, true ) ) {
-			$role_label = 'Reviewer';
-		} elseif ( in_array( 'rrp_coordinator', $user_roles, true ) ) {
-			$role_label = 'Coordinator';
-		} elseif ( in_array( 'rrp_admin', $user_roles, true ) || in_array( 'administrator', $user_roles, true ) ) {
-			$role_label = 'Admin';
-		}
+		$role_labels = RRP_User_Management::get_role_labels( $user_roles );
+		$role_label  = implode( ' · ', $role_labels );
 
 		wp_add_inline_script( 'research-review-portal', sprintf(
-			'window.RRP = { restBase: %s, nonce: %s, isLoggedIn: %s, loginUrl: %s, logoutUrl: %s, userName: %s, userRole: %s, userEmail: %s };',
+			'window.RRP = { restBase: %s, nonce: %s, isLoggedIn: %s, loginUrl: %s, logoutUrl: %s, userName: %s, userRole: %s, userRoles: %s, userEmail: %s, userId: %s, firstName: %s, lastName: %s, degree: %s, department: %s, expertise: %s };',
 			wp_json_encode( rest_url( 'research-portal/v1' ) ),
 			wp_json_encode( wp_create_nonce( 'wp_rest' ) ),
 			wp_json_encode( $logged_in ),
 			wp_json_encode( $login_url ),
 			wp_json_encode( $logout_url ),
 			wp_json_encode( $user_name ),
-			wp_json_encode( $role_label ),
-			wp_json_encode( $current_user->exists() ? $current_user->user_email : '' )
+			wp_json_encode( $role_labels[0] ?? '' ),
+			wp_json_encode( $role_labels ),
+			wp_json_encode( $current_user->exists() ? $current_user->user_email : '' ),
+			wp_json_encode( $current_user->exists() ? (int) $current_user->ID : 0 ),
+			wp_json_encode( $current_user->exists() ? $current_user->first_name : '' ),
+			wp_json_encode( $current_user->exists() ? $current_user->last_name : '' ),
+			wp_json_encode( $current_user->exists() ? (string) ( get_user_meta( $current_user->ID, 'rrp_degree', true ) ?: '' ) : '' ),
+			wp_json_encode( $current_user->exists() ? (string) ( get_user_meta( $current_user->ID, 'rrp_department', true ) ?: '' ) : '' ),
+			wp_json_encode( $current_user->exists() ? (string) ( get_user_meta( $current_user->ID, 'rrp_expertise', true ) ?: '' ) : '' )
 		), 'before' );
 
 		ob_start();
@@ -471,28 +534,17 @@ class Research_Review_Portal {
 		$current_user = wp_get_current_user();
 		$user_name    = $current_user->exists() ? ( $current_user->display_name ?: $current_user->user_login ) : '';
 		$user_roles   = $current_user->exists() ? $current_user->roles : array();
-		$role_label   = '';
-		if ( in_array( 'rrp_student', $user_roles, true ) ) {
-			$role_label = 'Student';
-		} elseif ( in_array( 'rrp_reviewer', $user_roles, true ) ) {
-			$role_label = 'Reviewer';
-		} elseif ( in_array( 'rrp_faculty', $user_roles, true ) ) {
-			$role_label = 'Faculty';
-		} elseif ( in_array( 'rrp_coordinator', $user_roles, true ) ) {
-			$role_label = 'Coordinator';
-		} elseif ( in_array( 'rrp_admin', $user_roles, true ) || in_array( 'administrator', $user_roles, true ) ) {
-			$role_label = 'Admin';
-		}
+		$role_labels  = RRP_User_Management::get_role_labels( $user_roles );
+		$role_label   = $role_labels[0] ?? '';
 		$logout_url  = esc_url( wp_logout_url( home_url( '/' ) ) );
-		$profile_url = esc_url( admin_url( 'profile.php' ) );
 		$logo_url    = esc_url( RRP_PLUGIN_URL . 'assets/city-university-logo.svg' );
-		wp_enqueue_style( 'research-review-portal', RRP_PLUGIN_URL . 'assets/portal.css', array(), '1.0.0' );
+		wp_enqueue_style( 'research-review-portal', RRP_PLUGIN_URL . 'assets/portal.css', array(), (string) filemtime( RRP_PLUGIN_DIR . 'assets/portal.css' ) );
 		wp_enqueue_script( 'mammoth-js', 'https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.7.0/mammoth.browser.min.js', array(), '1.7.0', true );
-		wp_enqueue_script( 'research-review-portal', RRP_PLUGIN_URL . 'assets/portal.js', array( 'mammoth-js' ), '1.0.0', true );
+		wp_enqueue_script( 'research-review-portal', RRP_PLUGIN_URL . 'assets/portal.js', array( 'mammoth-js' ), (string) filemtime( RRP_PLUGIN_DIR . 'assets/portal.js' ), true );
 		$rrp_allowed_types = (array) ( get_user_meta( get_current_user_id(), 'rrp_allowed_submission_types', true ) ?: [] );
 		$rrp_program_ids   = (array) ( get_user_meta( get_current_user_id(), 'rrp_program_ids', true ) ?: [] );
 		wp_add_inline_script( 'research-review-portal', sprintf(
-			'window.RRP = { restBase: %s, nonce: %s, isLoggedIn: true, loginUrl: %s, logoutUrl: %s, userName: %s, userRole: %s, userEmail: %s, profileUrl: %s, allowedTypes: %s, userId: %s, programIds: %s };',
+			'window.RRP = { restBase: %s, nonce: %s, isLoggedIn: true, loginUrl: %s, logoutUrl: %s, userName: %s, userRole: %s, userEmail: %s, allowedTypes: %s, userId: %s, programIds: %s, userRoles: %s, firstName: %s, lastName: %s, degree: %s, department: %s, expertise: %s };',
 			wp_json_encode( rest_url( 'research-portal/v1' ) ),
 			wp_json_encode( wp_create_nonce( 'wp_rest' ) ),
 			wp_json_encode( '' ),
@@ -500,10 +552,15 @@ class Research_Review_Portal {
 			wp_json_encode( $user_name ),
 			wp_json_encode( $role_label ),
 			wp_json_encode( $current_user->user_email ),
-			wp_json_encode( admin_url( 'profile.php' ) ),
 			wp_json_encode( $rrp_allowed_types ),
 			wp_json_encode( (int) get_current_user_id() ),
-			wp_json_encode( $rrp_program_ids )
+			wp_json_encode( $rrp_program_ids ),
+			wp_json_encode( $role_labels ),
+			wp_json_encode( $current_user->first_name ),
+			wp_json_encode( $current_user->last_name ),
+			wp_json_encode( (string) ( get_user_meta( get_current_user_id(), 'rrp_degree', true ) ?: '' ) ),
+			wp_json_encode( (string) ( get_user_meta( get_current_user_id(), 'rrp_department', true ) ?: '' ) ),
+			wp_json_encode( (string) ( get_user_meta( get_current_user_id(), 'rrp_expertise', true ) ?: '' ) )
 		), 'before' );
 		?>
 <!DOCTYPE html><html <?php language_attributes(); ?>>
@@ -535,7 +592,6 @@ body{margin:0;padding:0;background:#f4f6f9}
   </div>
   <div class="rrp-ptopbar-right">
     <span>Logged in as <strong><?php echo esc_html( $user_name ); ?></strong></span>
-    <a href="<?php echo $profile_url; ?>">Edit Profile</a>
     <a class="rrp-logout" href="<?php echo $logout_url; ?>">Logout</a>
   </div>
 </div>
@@ -544,6 +600,10 @@ body{margin:0;padding:0;background:#f4f6f9}
     <div class="rrp-loading">Loading portal&hellip;</div>
   </div>
 </div>
+<footer style="text-align:center;padding:.9rem 1rem;font-size:.78rem;color:#9ca3af;border-top:1px solid #e5e7eb;margin-top:2rem;background:#f8fafc">
+  &copy; <?php echo esc_html( gmdate( 'Y' ) ); ?> City University of Seattle &middot; Research Review Portal &middot; School of Technology and Computing (STC)<br>
+  <span style="font-size:.73rem;">Designed &amp; developed by <a href="mailto:vejendlakirankumar@cityu.edu" style="color:#4b83bc;text-decoration:none;">Kiran Kumar Vejendla</a> &middot; <a href="mailto:vejendlakirankumar@cityu.edu" style="color:#4b83bc;text-decoration:none;">vejendlakirankumar@cityu.edu</a></span>
+</footer>
 <?php wp_footer(); ?>
 </body></html>
 		<?php
@@ -834,6 +894,7 @@ a{text-decoration:none;color:inherit}
 
 <footer class="site-footer">
   <p>&copy; <?php echo esc_html( $year ); ?> City University of Seattle &middot; Research Review Portal &middot; School of Technology and Computing (STC)</p>
+  <p style="margin-top:.35rem;font-size:.76rem;color:#4b5563;">Designed &amp; developed by <a href="mailto:vejendlakirankumar@cityu.edu" style="color:#60a5fa;text-decoration:none;">Kiran Kumar Vejendla</a> &middot; <a href="mailto:vejendlakirankumar@cityu.edu" style="color:#60a5fa;text-decoration:none;">vejendlakirankumar@cityu.edu</a></p>
 </footer>
 
 <script>
@@ -861,6 +922,17 @@ a{text-decoration:none;color:inherit}
 
 	add_action( 'init', array( 'Research_Review_Portal', 'init' ) );
 	add_action( 'rest_api_init', array( 'Portal_REST', 'register_routes' ) );
+
+	// ── URL host fix ─────────────────────────────────────────────────────────
+	// Must be registered at plugin-load time, NOT inside 'init', so these fire
+	// before WordPress reads options and before redirect_canonical runs.
+	// option_siteurl / option_home are the root source that all URL functions
+	// (home_url, site_url, rest_url, redirect_canonical) derive from.
+	if ( isset( $_SERVER['HTTP_HOST'] ) && '' !== $_SERVER['HTTP_HOST'] ) {
+		add_filter( 'option_siteurl',     array( 'Research_Review_Portal', 'fix_url_host' ), 1, 1 );
+		add_filter( 'option_home',         array( 'Research_Review_Portal', 'fix_url_host' ), 1, 1 );
+		add_filter( 'redirect_canonical',  array( 'Research_Review_Portal', 'no_localhost_redirect' ), 1, 2 );
+	}
 
 	add_action( 'rrp_daily_report', array( 'Portal_REST', 'scheduled_report' ) );
 

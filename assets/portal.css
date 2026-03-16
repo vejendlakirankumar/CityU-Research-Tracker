@@ -1027,7 +1027,7 @@
   gap: 0.75rem;
   margin-bottom: 1.25rem;
 }
-.rrp-stat-card {
+.rrp-portal .rrp-stat-card {
   background: #fff;
   border: 1px solid #e2e8f0;
   border-radius: 8px;
@@ -1035,14 +1035,15 @@
   text-align: center;
   box-shadow: 0 1px 3px rgba(0,0,0,0.06);
   cursor: pointer;
+  color: inherit;
   transition: border-color 0.15s, box-shadow 0.15s, transform 0.1s;
 }
-.rrp-stat-card:hover {
+.rrp-portal .rrp-stat-card:hover {
   border-color: #93c5fd;
   box-shadow: 0 3px 8px rgba(0,61,102,0.12);
   transform: translateY(-1px);
 }
-.rrp-stat-card.rrp-stat-active {
+.rrp-portal .rrp-stat-card.rrp-stat-active {
   border-color: #003d66;
   box-shadow: 0 0 0 2px rgba(0,61,102,0.18);
 }
@@ -1072,19 +1073,26 @@
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
-.rrp-stat-blue  .rrp-stat-value { color: #1d6fa4; }
-.rrp-stat-green .rrp-stat-value { color: #15803d; }
-.rrp-stat-muted .rrp-stat-value { color: #6b7280; }
-.rrp-stat-warn  .rrp-stat-value { color: #b45309; }
+.rrp-portal .rrp-stat-blue  .rrp-stat-value { color: #1d6fa4; }
+.rrp-portal .rrp-stat-green .rrp-stat-value { color: #15803d; }
+.rrp-portal .rrp-stat-muted .rrp-stat-value { color: #6b7280; }
+.rrp-portal .rrp-stat-warn  .rrp-stat-value { color: #b45309; }
+/* Pastel tint backgrounds per metric type — keeps cards light and readable */
+.rrp-portal .rrp-stat-blue  { background: #eff6ff; border-color: #bfdbfe; }
+.rrp-portal .rrp-stat-green { background: #f0fdf4; border-color: #bbf7d0; }
+.rrp-portal .rrp-stat-muted { background: #f9fafb; border-color: #e5e7eb; }
+.rrp-portal .rrp-stat-warn  { background: #fffbeb; border-color: #fde68a; }
 
-/* Reviewer banner — teal/indigo tint to distinguish from student */
+/* Reviewer banner — same brand gradient, teal accent strip */
 .rrp-reviewer-banner {
-  background: linear-gradient(135deg, #1e4d6e 0%, #2d6a8a 100%);
+  background: linear-gradient(135deg, #003d66 0%, #005a99 100%);
+  border-left: 5px solid #56c0e0;
 }
 
-/* Coordinator / Admin banner — deep green tint */
+/* Coordinator / Admin banner — same brand gradient, green accent strip */
 .rrp-coordinator-banner {
-  background: linear-gradient(135deg, #14532d 0%, #166534 100%);
+  background: linear-gradient(135deg, #003d66 0%, #005a99 100%);
+  border-left: 5px solid #4ade80;
 }
 
 /* Sub-item action row */
@@ -1199,16 +1207,22 @@
   background: #fff;
   border: 1px solid #e2e8f0;
   border-radius: 8px;
-  padding: 1rem;
+  padding: .75rem 1rem;
   box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+}
+.rrp-nav-card + .rrp-nav-card {
+  margin-top: .6rem;
 }
 .rrp-nav-card-title {
   font-weight: 700;
-  font-size: 0.85rem;
+  font-size: 0.72rem;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--rrp-text-muted, #6b7280);
-  margin-bottom: 0.5rem;
+  letter-spacing: 0.07em;
+  color: #fff;
+  background: #003d66;
+  margin: -.75rem -1rem .6rem -1rem;
+  padding: .35rem 1rem;
+  border-radius: 7px 7px 0 0;
 }
 .rrp-nav-list {
   list-style: none;
@@ -1320,6 +1334,20 @@
   border-left: 3px solid #e2e8f0;
 }
 .rrp-review-unassigned { color: #d97706; font-weight: 600; }
+.rrp-review-complete   { color: #16a34a; font-weight: 600; }
+
+/* ── Date range filter bar ── */
+.rrp-date-range-bar { display:flex; flex-wrap:wrap; gap:0.375rem; margin-bottom:0.75rem; }
+.rrp-date-range-btn {
+  padding:0.3rem 0.9rem; border:1px solid #cbd5e1; border-radius:20px;
+  background:#f8fafc; color:var(--rrp-text-muted,#64748b);
+  font-size:0.8rem; cursor:pointer; transition:background .15s,color .15s,border-color .15s;
+}
+.rrp-date-range-btn:hover { background:#e2e8f0; color:#1e293b; border-color:#94a3b8; }
+.rrp-date-range-btn.active {
+  background:var(--rrp-navy,#002f52); color:#fff;
+  border-color:var(--rrp-navy,#002f52); font-weight:600;
+}
 .rrp-due-soon { color: #dc2626 !important; font-weight: 700; }
 
 /* ── Inline document viewer ──────────────────────────────────────────────── */
@@ -1702,3 +1730,83 @@
 .rrp-audit-actor  { font-size: .76rem; color: #9ca3af; font-style: italic; }
 .rrp-audit-empty  { text-align: center; color: #9ca3af; padding: 2rem 0; }
 .rrp-btn-log      { font-size: .78rem !important; padding: .2rem .5rem !important; }
+
+/* ── Submission Types Admin Panel ───────────────────────────────────────── */
+.rrp-dashboard { padding: 1.5rem; }
+.rrp-dash-header { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; margin-bottom: 1.25rem; }
+.rrp-dash-header h1 { margin: 0; font-size: 1.25rem; flex: 1; }
+.rrp-card { background: #fff; border: 1px solid #e5e7eb; border-radius: 10px; padding: 1.5rem; }
+.rrp-label { display: block; font-size: .9rem; font-weight: 600; color: #374151; margin-bottom: .75rem; }
+.rrp-label input.rrp-input { margin-top: .35rem; font-weight: 400; }
+.rrp-form-msg { margin-top: .75rem; font-size: .875rem; padding: .5rem .75rem; border-radius: 6px; background: #f9fafb; }
+
+/* Type list rows */
+.rrp-type-row {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem;
+  padding: .9rem 1rem; border: 1px solid #e5e7eb; border-radius: 8px;
+  background: #fff; margin-bottom: .6rem;
+}
+.rrp-type-row:hover { border-color: #003d66; background: #f8faff; }
+.rrp-type-info { flex: 1; min-width: 0; }
+.rrp-type-title { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; margin-bottom: .25rem; }
+.rrp-type-title strong { font-size: .95rem; color: #1a202c; }
+code.rrp-type-id { font-size: .78rem; background: #f1f5f9; color: #475569; padding: .1rem .45rem; border-radius: 4px; font-family: monospace; }
+.rrp-type-desc { font-size: .83rem; color: #6b7280; margin-bottom: .35rem; }
+.rrp-type-stages { display: flex; flex-wrap: wrap; gap: .3rem; margin-top: .3rem; }
+.rrp-stage-pill {
+  display: inline-block; font-size: .76rem; padding: .15rem .55rem;
+  background: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe;
+  border-radius: 20px;
+}
+.rrp-type-actions { display: flex; flex-direction: column; gap: .4rem; align-items: flex-end; }
+
+/* Stages editor inside the form */
+.rrp-stages-editor { display: flex; flex-direction: column; gap: .4rem; margin-top: .4rem; }
+.rrp-stage-row {
+  display: flex; align-items: center; gap: .4rem;
+  background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px; padding: .35rem .5rem;
+}
+.rrp-stage-row .rrp-input { flex: 1; margin: 0; padding: .3rem .6rem; font-size: .875rem; }
+/* Stage name display (read-only label inside editor rows) */
+.rrp-stage-name { flex: 1; font-size: .875rem; color: #1e293b; padding: .1rem .3rem; }
+/* Workflow stages library — single/multi user badges */
+.rrp-ws-badge {
+  display: inline-block; font-size: .7rem; font-weight: 600;
+  padding: .15rem .5rem; border-radius: 20px; margin-left: .15rem;
+}
+.rrp-ws-badge-single { background: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe; }
+.rrp-ws-badge-multi  { background: #f0fdf4; color: #15803d; border: 1px solid #bbf7d0; }
+
+/* ── Multi-role switcher bar ──────────────────────────────────────── */
+.rrp-role-switcher {
+  display: flex; align-items: center; flex-wrap: wrap; gap: .5rem;
+  background: #002f52; color: #fff;
+  padding: .65rem 1.25rem; margin-bottom: 0;
+  border-bottom: 3px solid #f59e0b;
+  font-family: inherit;
+}
+.rrp-role-switcher-label {
+  font-size: .8rem; font-weight: 600; color: rgba(255,255,255,.75);
+  white-space: nowrap; margin-right: .25rem;
+}
+.rrp-role-switcher-hint {
+  font-size: .75rem; color: rgba(255,255,255,.45);
+  margin-left: auto; white-space: nowrap;
+}
+.rrp-role-tab {
+  display: inline-flex; align-items: center; gap: .3rem;
+  padding: .35rem .9rem; border-radius: 20px; font-size: .82rem; font-weight: 600;
+  cursor: pointer; transition: background .15s, color .15s;
+  background: rgba(255,255,255,.12); color: rgba(255,255,255,.85);
+  border: 1px solid rgba(255,255,255,.25);
+}
+.rrp-role-tab:hover { background: rgba(255,255,255,.22); color: #fff; }
+.rrp-role-tab.active {
+  background: #f59e0b; color: #1a1a1a;
+  border-color: #f59e0b; box-shadow: 0 2px 6px rgba(245,158,11,.4);
+}
+.rrp-btn.icon {
+  padding: .25rem .5rem; font-size: .85rem; line-height: 1; background: #f1f5f9;
+  border: 1px solid #e2e8f0; color: #475569; border-radius: 5px; cursor: pointer; min-width: 28px;
+}
+.rrp-btn.icon:hover { background: #e2e8f0; }

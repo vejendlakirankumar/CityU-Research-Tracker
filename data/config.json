@@ -1,4 +1,54 @@
 {
+  "submissionTypes": [
+    {
+      "id": "conference",
+      "label": "Conference Paper",
+      "description": "Applied Research Symposium, Doctor of IT Forum, conference and symposium submissions",
+      "stages": ["Initial Screening", "Reviewer Assignment", "Peer Review", "Review Consolidation", "Final Decision", "Confirmation"]
+    },
+    {
+      "id": "publication",
+      "label": "Publication",
+      "description": "Journal and publication submissions",
+      "stages": ["Administrative Check", "Reviewer Matching", "Expert Review", "Director Assessment", "Final Decision", "Tracking"]
+    },
+    {
+      "id": "student-project",
+      "label": "Student Project",
+      "description": "Capstone projects and student research submissions",
+      "stages": ["Advisor Matching", "Advisor Consultation", "Feasibility Check", "Director Approval", "Project Setup", "Milestone Tracking"]
+    },
+    {
+      "id": "grant",
+      "label": "Grant Proposal",
+      "description": "Funding applications and grant proposals",
+      "stages": ["Compliance Check", "Review Assignment", "Multi-Criteria Review", "Committee Meeting", "Final Decision", "Development Support", "Submission Tracking"]
+    },
+    {
+      "id": "dissertation",
+      "label": "Doctoral Dissertation",
+      "description": "Doctoral dissertation submissions",
+      "stages": ["Chair Review", "Committee Review", "Program Director Approval", "Dissertation Director Sign-Off"]
+    },
+    {
+      "id": "capstone",
+      "label": "Capstone Project",
+      "description": "Capstone project submissions",
+      "stages": ["Advisor Review", "Program Director Approval"]
+    },
+    {
+      "id": "research-paper",
+      "label": "Research Paper",
+      "description": "Academic and applied research paper submissions",
+      "stages": ["Peer Review", "Program Director Approval"]
+    },
+    {
+      "id": "grant-proposal",
+      "label": "Grant Proposal (Detailed)",
+      "description": "Detailed grant proposals requiring multi-criteria review",
+      "stages": ["Multi-Criteria Review", "Program Director Approval"]
+    }
+  ],
   "stageRequirements": {
     "conference":  {"Initial Screening":{"requiredCount":1},"Reviewer Assignment":{"requiredCount":1},"Peer Review":{"requiredCount":2},"Review Consolidation":{"requiredCount":2},"Final Decision":{"requiredCount":1},"Confirmation":{"requiredCount":1}},
     "publication": {"Administrative Check":{"requiredCount":1},"Reviewer Matching":{"requiredCount":1},"Expert Review":{"requiredCount":2},"Director Assessment":{"requiredCount":2},"Final Decision":{"requiredCount":1},"Tracking":{"requiredCount":1}},
@@ -6,10 +56,10 @@
     "grant":       {"Compliance Check":{"requiredCount":1},"Review Assignment":{"requiredCount":1},"Multi-Criteria Review":{"requiredCount":2},"Committee Meeting":{"requiredCount":2},"Final Decision":{"requiredCount":1},"Development Support":{"requiredCount":1},"Submission Tracking":{"requiredCount":1}}
   },
   "reviewerPools": {
-    "conference":      {"reviewerIds":["wp_7","wp_8","wp_9","wp_10","wp_11","wp_12","wp_13"],"assignmentMode":"random"},
-    "publication":     {"reviewerIds":["wp_7","wp_8","wp_9","wp_10","wp_11","wp_12","wp_13"],"assignmentMode":"random"},
-    "student-project": {"reviewerIds":["wp_7","wp_8","wp_9","wp_10","wp_11","wp_12","wp_13"],"assignmentMode":"random"},
-    "grant":           {"reviewerIds":["wp_7","wp_10","wp_12","wp_13"],"assignmentMode":"random"}
+    "conference":      {"reviewerIds":["wp_8","wp_9","wp_10","wp_11","wp_12","wp_13"],"assignmentMode":"random"},
+    "publication":     {"reviewerIds":["wp_8","wp_9","wp_10","wp_11","wp_12","wp_13"],"assignmentMode":"random"},
+    "student-project": {"reviewerIds":["wp_8","wp_9","wp_10","wp_11","wp_12","wp_13"],"assignmentMode":"random"},
+    "grant":           {"reviewerIds":["wp_10","wp_12","wp_13"],"assignmentMode":"random"}
   },
   "poolCohorts": {},
   "activeCohort": null,

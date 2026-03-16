@@ -1,13 +1,19 @@
 #!/usr/bin/env bash
 # ============================================================
-# Research Review Portal — WSL Ubuntu 22.04 install script
-# Usage: chmod +x install-wsl.sh && ./install-wsl.sh
+# Research Review Portal — WSL / Ubuntu 22.04 install script
+# Usage: chmod +x scripts/install-wsl.sh && ./scripts/install-wsl.sh
 #
-# Adjust REPO_WIN below if your repo is not on D:\Development\
+# Set WP_URL to the public hostname before running on a server:
+#   WP_URL="http://your-server.example.com" ./scripts/install-wsl.sh
+#
+# Prefer Docker? See DEPLOYMENT.md Option A.
 # ============================================================
 set -euo pipefail
 
-REPO_WIN="/mnt/d/Development/CityU-Research-Tracker"
+# Auto-detect repo root relative to this script's location
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_WIN="$(dirname "$SCRIPT_DIR")"
+
 WP_ADMIN_PASS='Admin1234!'   # single quotes required — bash expands ! in double quotes
 # Override WP_URL before running this script to set a public hostname:
 #   WP_URL="http://rcgapimtest.eastus2.cloudapp.azure.com" ./scripts/install-wsl.sh
@@ -110,11 +116,13 @@ sudo service apache2 restart
 # ── 7. Plugin ────────────────────────────────────────────────────────────────
 PLUGIN_DIR="/var/www/html/wp-content/plugins/research-review-portal"
 
-echo "==> Linking plugin..."
+echo "==> Linking plugin from: $REPO_WIN"
 if [ ! -d "$REPO_WIN" ]; then
   echo ""
   echo "ERROR: Repo not found at $REPO_WIN"
-  echo "       Edit the REPO_WIN variable at the top of this script."
+  echo "       Run this script from anywhere inside the cloned repository,"
+  echo "       or set REPO_WIN manually: REPO_WIN=/path/to/repo ./scripts/install-wsl.sh"
+  echo "       Alternatively, use Docker: see DEPLOYMENT.md Option A."
   exit 1
 fi
 

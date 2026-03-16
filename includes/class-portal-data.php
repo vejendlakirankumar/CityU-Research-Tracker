@@ -39,6 +39,40 @@ class Portal_Data {
 		'grant'            => array( 'Compliance Check', 'Review Assignment', 'Multi-Criteria Review', 'Committee Meeting', 'Final Decision', 'Development Support', 'Submission Tracking' ),
 	);
 
+	/**
+	 * Get workflow stages for a type, preferring data/config.json submissionTypes over the static constant.
+	 * Falls back to static constant then to a generic 2-stage default.
+	 */
+	public static function get_workflow_stages( string $type ): array {
+		$config = self::read_config();
+		foreach ( $config['submissionTypes'] ?? array() as $st ) {
+			if ( ( $st['id'] ?? '' ) === $type && ! empty( $st['stages'] ) ) {
+				return array_values( (array) $st['stages'] );
+			}
+		}
+		// Fall back to static constant
+		if ( isset( self::WORKFLOW_STAGES[ $type ] ) ) {
+			return self::WORKFLOW_STAGES[ $type ];
+		}
+		return array( 'Initial Review', 'Final Approval' );
+	}
+
+	/**
+	 * Return all submission types from config, falling back to the static set.
+	 */
+	public static function get_submission_types(): array {
+		$config = self::read_config();
+		if ( ! empty( $config['submissionTypes'] ) ) {
+			return (array) $config['submissionTypes'];
+		}
+		// Bootstrap from the static constant
+		$types = array();
+		foreach ( self::WORKFLOW_STAGES as $id => $stages ) {
+			$types[] = array( 'id' => $id, 'label' => ucwords( str_replace( '-', ' ', $id ) ), 'description' => '', 'stages' => $stages );
+		}
+		return $types;
+	}
+
 	const DEFAULT_REVIEWERS = array(
 		array( 'id' => 'r1', 'name' => 'Cris Ewell', 'email' => 'cewell@cityu.edu', 'submissionTypes' => array( 'conference', 'publication', 'grant' ) ),
 		array( 'id' => 'r2', 'name' => 'George Bragg', 'email' => 'gbragg@cityu.edu', 'submissionTypes' => array( 'conference', 'publication' ) ),
@@ -345,11 +379,8 @@ class Portal_Data {
 	}
 
 	public static function auto_assign_submission( $submission, $submitter_email ) {
-		$type = isset( $submission['type'] ) ? strtolower( $submission['type'] ) : '';
-		if ( ! in_array( $type, array( 'conference', 'publication', 'student-project', 'grant' ), true ) ) {
-			return $submission;
-		}
-		$stages = self::WORKFLOW_STAGES[ $type ] ?? array();
+		$type   = isset( $submission['type'] ) ? strtolower( $submission['type'] ) : '';
+		$stages = self::get_workflow_stages( $type );
 		if ( empty( $stages ) ) {
 			return $submission;
 		}
