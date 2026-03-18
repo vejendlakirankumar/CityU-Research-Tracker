@@ -1,523 +1,431 @@
 # Operations Manual — CityU Research Review Portal
 
-> **Version:** 1.0.0  
-> **Author:** Kiran Kumar Vejendla — [vejendlakirankumar@cityu.edu] and Jemell Garris - [Garris.jemell@cityu.edu] (mailto:vejendlakirankumar@cityu.edu)  
-> **Institution:** City University of Seattle · School of Technology and Computing (STC)  
+> **Version:** 2.0
 > **Last updated:** March 2026
 
 ---
 
 ## Table of Contents
 
-1. [System Overview](#system-overview)
-2. [Architecture](#architecture)
-3. [Environment Reference](#environment-reference)
-4. [Deployment Guide](#deployment-guide)
-5. [First-Run Configuration](#first-run-configuration)
-6. [Routine Maintenance](#routine-maintenance)
-7. [Backup & Recovery](#backup--recovery)
-8. [User & Role Management](#user--role-management)
-9. [REST API Reference](#rest-api-reference)
-10. [Configuration Reference](#configuration-reference)
-11. [Data File Reference](#data-file-reference)
-12. [Monitoring & Logging](#monitoring--logging)
-13. [Troubleshooting](#troubleshooting)
-14. [Enabling HTTPS (Let's Encrypt)](#enabling-https-lets-encrypt)
-15. [Microsoft Entra SSO](#microsoft-entra-sso)
-16. [Security Hardening](#security-hardening)
-17. [Updating the Plugin](#updating-the-plugin)
+1. [System Overview](#1-system-overview)
+2. [Environment Reference](#2-environment-reference)
+3. [Routine Maintenance](#3-routine-maintenance)
+4. [Backup & Recovery](#4-backup--recovery)
+5. [User & Role Management](#5-user--role-management)
+6. [REST API Reference](#6-rest-api-reference)
+7. [Configuration Reference](#7-configuration-reference)
+8. [Monitoring & Alerting](#8-monitoring--alerting)
+9. [Troubleshooting](#9-troubleshooting)
+10. [Security Hardening](#10-security-hardening)
 
 ---
 
-## System Overview
+## 1. System Overview
 
-The **CityU Research Review Portal** is a WordPress plugin that replaces the default WordPress front end with a custom single-page application. It provides:
-
-- Multi-stage structured review workflows for five academic submission types
-- Role-based dashboards (Student, Reviewer, Coordinator, Admin)
-- Reviewer pool management and automatic assignment suggestions
-- Conflict-of-interest tracking
-- Full audit log on every submission
-- Analytics reports (workflow throughput, reviewer performance, overdue tracking)
-- JSON-file-based submission and reviewer state (no custom database tables)
-
-### Technology Stack
-
-| Layer | Technology | Version |
-|-------|-----------|---------|
-| CMS | WordPress | 6.7 |
-| Language | PHP | 8.1 |
-| Web server | Apache | 2.4 |
-| Database (WP core) | MySQL | 8.0 |
-| Front-end SPA | Vanilla JavaScript (IIFE) | — |
-| Word document preview | Mammoth.js | 1.7.0 |
-| Containerisation | Docker / Docker Compose | — |
-| Infrastructure provisioning | Makefile + Bash scripts | — |
-
----
-
-## Architecture
+### Architecture
 
 ```
-Browser
-  │  HTTPS (port 80 / 443)
-  ▼
-Apache 2.4  ─── mod_rewrite ──► WordPress (wp-config, wp-includes, plugins)
-                                       │
-                                       ├─ Plugin: research-review-portal/
-                                       │          ├─ research-review-portal.php  ← main plugin
-                                       │          ├─ assets/portal.js            ← SPA
-                                       │          ├─ assets/portal.css
-                                       │          ├─ includes/
-                                       │          │   ├─ class-portal-data.php   ← JSON R/W
-                                       │          │   ├─ class-portal-rest.php   ← REST API
-                                       │          │   ├─ class-user-management.php
-                                       │          │   ├─ class-process-documentation.php
-                                       │          │   └─ class-auth-provider.php
-                                       │          └─ data/
-                                       │              ├─ config.json             ← system config
-                                       │              ├─ submissions.json        ← all submissions
-                                       │              ├─ reviewers.json          ← reviewer pool
-                                       │              └─ uploads/
-                                       │                  └─ <submission-id>/   ← uploaded files
-                                       │
-                                       └─ WordPress DB (MySQL)
-                                              └─ wp_users, wp_usermeta, wp_options
-                                                 (WP core + plugin settings only)
+Browser  ──HTTPS──►  Apache 2.4
+                         │
+                     WordPress 6.7 (PHP 8.1)
+                         │
+                     Plugin: research-review-portal/
+                         ├── research-review-portal.php   ← plugin bootstrap, CSP, SPA mount
+                         ├── assets/portal.js             ← SPA (IIFE, vanilla JS)
+                         ├── assets/portal.css
+                         ├── includes/
+                         │   ├── class-portal-rest.php    ← all REST endpoints (~2,900 lines)
+                         │   ├── class-portal-data.php    ← JSON read/write with file locking
+                         │   ├── class-user-management.php
+                         │   ├── class-auth-provider.php  ← Entra ID OAuth2
+                         │   └── class-process-documentation.php
+                         └── data/
+                             ├── config.json
+                             ├── submissions.json
+                             ├── reviewers.json
+                             └── uploads/<submission-id>/
 ```
 
-### What is stored where
+### Data storage
 
 | Data | Storage | Location |
 |------|---------|----------|
-| Submissions, stages, decisions, comments | JSON file | `data/submissions.json` |
-| Reviewer pool, expertise, assignments | JSON file | `data/reviewers.json` |
-| Workflow configuration, stage templates | JSON file | `data/config.json` |
-| Uploaded documents | File system | `data/uploads/<submission-id>/` |
-| WordPress user accounts | MySQL | `wp_users` + `wp_usermeta` |
-| Portal user meta (role, degree, dept.) | MySQL usermeta | `wp_usermeta` keys: `rrp_*` |
-| WordPress settings (siteurl, home) | MySQL | `wp_options` |
+| Submissions, stages, decisions, audit logs | JSON file | `data/submissions.json` |
+| Reviewer pool, expertise, assignment counts | JSON file | `data/reviewers.json` |
+| Workflow config, upload settings, SMTP, SSO | JSON file | `data/config.json` |
+| Uploaded documents | File system | `data/uploads/<id>/` |
+| User accounts, roles, meta | MySQL | `wp_users`, `wp_usermeta` |
+| WordPress settings | MySQL | `wp_options` |
+
+### Technology stack
+
+| Component | Version |
+|-----------|---------|
+| WordPress | 6.7 |
+| PHP | 8.1 |
+| Apache | 2.4 |
+| MySQL | 8.0 |
+| ClamAV | 1.4.3 |
+| mammoth.js | 1.7.0 (DOCX viewer) |
 
 ---
 
-## Environment Reference
+## 2. Environment Reference
 
 ### Production (Azure VM)
 
 | Item | Value |
 |------|-------|
-| Hostname | `deployvm.cityu.edu` |
-| OS | Ubuntu 22.04.5 LTS |
-| PHP | 8.1.2 |
-| MySQL | 8.0.45 |
-| Apache | 2.4.52 |
-| Plugin path | `/mnt/c/Development/CityU-Research-Tracker` |
-| Apache htdocs | `/var/www/html` |
-| WP admin | `admin` / `Admin1234!` |
-| DB name | `wordpress` |
-| DB user | `wp` |
-| DB password | `wp_test_pass` |
+| Host | `portal.your-institution.edu` |
+| OS | Ubuntu 22.04 LTS |
+| SSH user | `<vm-user>` |
+| Plugin path | `/var/www/html/wp-content/plugins/research-review-portal` |
+| Apache config | `/etc/apache2/sites-available/000-default.conf` |
+| PHP config drop-in | `/etc/php/8.1/apache2/conf.d/99-rrp.ini` |
+| Log | `/var/log/apache2/error.log` |
+| SSL cert | Let's Encrypt (auto-renewing) |
 
 ### Development (Docker)
 
 | Item | Value |
 |------|-------|
-| WP URL | `http://localhost:8080` (configurable via `.env`) |
-| WP admin | `admin` / `Admin1234!` (configurable via `.env`) |
-| MySQL | `mysql:8.0` Docker image |
-| PHP | 8.1 (wordpress:6.7-php8.1-apache) |
-| Upload limit | 64 MB (custom `rrp.ini`) |
-| Memory limit | 256 MB |
-| Max execution time | 60 s |
+| Portal URL | `http://localhost:8080` |
+| WP Admin | `admin` / `Admin1234!` |
+| MySQL | `mysql:8.0` container |
+| PHP | `wordpress:6.7-php8.1-apache` |
 
-### PHP ini overrides (both environments)
+### PHP settings required
 
-| Setting | Value | Notes |
-|---------|-------|-------|
-| `upload_max_filesize` | 64M | Allows large dissertation PDFs |
-| `post_max_size` | 64M | Must be ≥ upload_max_filesize |
-| `memory_limit` | 256M | Mammoth.js Word parsing is memory-intensive |
-| `max_execution_time` | 60 | Long-running export/analytics calls |
+| Setting | Value | Reason |
+|---------|-------|--------|
+| `upload_max_filesize` | `64M` | Large document uploads |
+| `post_max_size` | `64M` | Must be ≥ upload limit |
+| `memory_limit` | `256M` | DOCX-to-HTML parsing (mammoth.js) |
+| `max_execution_time` | `60` | Analytics and export calls |
 
 ---
 
-## Deployment Guide
-
-Full step-by-step deployment instructions are in [DEPLOYMENT.md](DEPLOYMENT.md). This section provides the operational overview and quick-reference commands.
-
-### Docker (recommended)
-
-```bash
-cp .env.example .env          # first time only — edit WP_URL + WP_PORT
-make up                       # build image and start containers
-make init                     # install WordPress + activate plugin (first time only)
-```
-
-Access the portal at the URL set in `.env` (default: `http://localhost:8080`).
-
-**Daily operations:**
-
-```bash
-make up          # start
-make down        # stop
-make logs        # tail Apache/PHP error log
-make shell       # bash into the WordPress container
-make db-export   # dump MySQL → data/rrp-db-export.sql
-make db-import   # restore from data/rrp-db-export.sql
-make reset       # ⚠ destroy volumes — full wipe
-```
-
-### Bare-Metal Ubuntu / WSL
-
-```bash
-export WP_URL="http://your-server.example.com"   # optional; defaults to http://localhost
-chmod +x scripts/install-wsl.sh
-./scripts/install-wsl.sh
-```
-
-After installation:
-```bash
-sudo service apache2 start
-sudo service mysql start
-```
-
-To change the public URL on an existing install:
-```bash
-chmod +x scripts/set-public-url.sh
-./scripts/set-public-url.sh http://new-hostname.example.com
-```
-
----
-
-## First-Run Configuration
-
-After deploying and running `make init` (Docker) or `install-wsl.sh` (bare-metal), perform the following steps:
-
-### 1. Verify the health endpoint
-
-```bash
-curl http://localhost:8080/wp-json/research-portal/v1/health
-# Expected: {"ok":true,"bootId":<number>}
-```
-
-### 2. Log in to WordPress Admin
-
-Open `http://<your-url>/wp-admin` and log in with the admin credentials.
-
-### 3. Create portal user accounts
-
-Navigate to **WP Admin → Users → Add New** for each person who needs access, assigning the appropriate role (`rrp_student`, `rrp_reviewer`, `rrp_coordinator`, `rrp_admin`).
-
-Or create accounts programmatically via WP-CLI:
-
-```bash
-# Docker: make shell, then run:
-wp user create student student@institution.edu --role=rrp_student --user_pass=InitialPass123! --allow-root
-wp user create reviewer1 reviewer1@institution.edu --role=rrp_reviewer --user_pass=InitialPass123! --allow-root
-wp user create coordinator1 coord1@institution.edu --role=rrp_coordinator --user_pass=InitialPass123! --allow-root
-wp user create admin1 admin1@institution.edu --role=rrp_admin --user_pass=InitialPass123! --allow-root
-```
-
-> Instruct all users to change their password immediately on first login.
-
-### 4. Review and adjust `data/config.json`
-
-Open `data/config.json` in a text editor or use the portal's **Admin → Configuration** panel. Key settings to check:
-
-- `stageDueDays` — days per stage before a submission is marked overdue
-- `reviewerPools` — assign appropriate reviewer user IDs by submission type
-- `stageRequirements` — set how many reviewers are required per stage
-
-### 5. Seed reviewer pool
-
-In the portal admin panel, go to **Admin → Users**, find each reviewer, and complete their profile:
-- Expertise tags (used for automatic assignment suggestions)
-- Department
-- Available submission types
-
-### 6. Configure email notifications (production)
-
-WordPress uses `wp_mail()` for notifications. On a production server configure an SMTP plugin or set up PHP's `sendmail` to ensure delivery. Recommended: install **WP Mail SMTP** and configure with your institution's SMTP server.
-
-### 7. Configure Microsoft Entra SSO (optional)
-
-If your institution uses Microsoft Entra ID (Azure AD) for identity, enable SSO so users log in with their university account instead of a WordPress password. See the full [Microsoft Entra SSO](#microsoft-entra-sso) section for detailed steps.
-
----
-
-## Routine Maintenance
+## 3. Routine Maintenance
 
 ### Weekly
 
-- [ ] Check `make logs` (Docker) or `/var/log/apache2/error.log` (bare-metal) for PHP errors
-- [ ] Review the Overdue Analytics report and follow up with coordinators
+- [ ] Check Apache error log for PHP warnings: `sudo tail -100 /var/log/apache2/error.log`
+- [ ] Review **Overdue** tab in coordinator dashboard; follow up with coordinators
+- [ ] Verify health endpoint: `curl -sf https://portal.your-institution.edu/wp-json/research-portal/v1/health`
 
 ### Monthly
 
-- [ ] Run `make db-export` and commit `data/rrp-db-export.sql` to git
-- [ ] Commit `data/submissions.json`, `data/reviewers.json`, `data/config.json` to git
-- [ ] Review disk usage in `data/uploads/`; archive completed submission folders if needed
+- [ ] Export MySQL database: `make db-export` (Docker) or `wp --path=/var/www/html --allow-root db export /tmp/rrp-$(date +%Y%m%d).sql`
+- [ ] Commit JSON data files to git: `git add data/ && git commit -m "Monthly backup $(date +%Y-%m-%d)"`
+- [ ] Review disk usage in `data/uploads/`: `du -sh data/uploads/`
+- [ ] Archive old terminal submissions via **Administration → Data Archive** (submissions > 90 days old)
+- [ ] Update ClamAV virus definitions: `sudo freshclam`
 
 ### As needed
 
-- [ ] After any code change, run `make build` (Docker) or copy updated files to `/var/www/html/wp-content/plugins/research-review-portal/`
-- [ ] After WordPress core updates, verify the health endpoint still returns `{"ok":true}`
+- [ ] After any plugin file change, flush rewrite rules: `wp --path=/var/www/html --allow-root rewrite flush`
+- [ ] After WordPress core updates, verify health endpoint still returns `{"ok":true}`
+- [ ] Rotate SMTP credentials in **Portal Settings → Email / SMTP** if email provider credentials change
+- [ ] Renew Let's Encrypt certificate (runs automatically; test with `sudo certbot renew --dry-run`)
 
 ---
 
-## Backup & Recovery
+## 4. Backup & Recovery
 
 ### What to back up
 
-| Component | Backup method | Frequency |
-|-----------|--------------|-----------|
-| `data/submissions.json` | git commit OR copy | Daily |
-| `data/reviewers.json` | git commit OR copy | On change |
-| `data/config.json` | git commit OR copy | On change |
-| `data/uploads/` directory | rsync / zip | Weekly |
+| Component | Method | Frequency |
+|-----------|--------|-----------|
+| `data/submissions.json` | git commit or file copy | Daily |
+| `data/reviewers.json` | git commit | On change |
+| `data/config.json` | git commit | On change |
+| `data/uploads/` | rsync / zip | Weekly |
 | MySQL database | `make db-export` / `wp db export` | Daily |
 
-### Full backup procedure (Docker)
+### Using the built-in Backup & Restore UI
+
+The easiest way to back up is the portal's own backup feature:
+
+1. Log in as Admin → **Administration → Backup & Restore**.
+2. Click **Download Backup**. A ZIP is downloaded containing all JSON data files and all uploaded documents.
+3. Store the ZIP in a safe location (external storage, cloud backup).
+
+To restore:
+1. Log in as Admin → **Administration → Backup & Restore**.
+2. Click **Choose File**, select the ZIP backup, and click **Restore**. The portal unpacks the ZIP and replaces the data files. ZipSlip protection is enforced.
+
+> The restore operation does not restore WordPress user accounts. User accounts are stored in MySQL and must be backed up separately using `make db-export`.
+
+### Manual backup (command line)
 
 ```bash
-# 1. Export the database
-make db-export
-# writes to: data/rrp-db-export.sql
+# Export MySQL
+wp --path=/var/www/html --allow-root db export /tmp/rrp-db-$(date +%Y%m%d).sql
 
-# 2. Commit everything to git
-cd /path/to/CityU-Research-Tracker
-git add data/
-git commit -m "Backup: $(date +%Y-%m-%d)"
-git push origin main
-```
-
-### Full backup procedure (bare-metal)
-
-```bash
-wp --path=/var/www/html --allow-root db export \
-  /mnt/c/Development/CityU-Research-Tracker/data/rrp-db-export.sql
-
+# Archive uploads
 tar -czf /tmp/rrp-uploads-$(date +%Y%m%d).tar.gz \
-  /mnt/c/Development/CityU-Research-Tracker/data/uploads/
+  /var/www/html/wp-content/plugins/research-review-portal/data/uploads/
+
+# Copy DB dump to local machine (run from dev machine)
+scp <vm-user>@portal.your-institution.edu:/tmp/rrp-db-*.sql ./data/
 ```
 
-### Recovery procedure
-
-**Restore to a new Docker environment:**
+### Recovery (bare-metal)
 
 ```bash
-git clone <repo-url> CityU-Research-Tracker
-cd CityU-Research-Tracker
-cp .env.example .env          # set WP_URL
-make up
-make init
-make db-import                # restores data/rrp-db-export.sql
-```
-
-All JSON data files are in the repo — no additional import step is needed.
-
-**Restore to bare-metal:**
-
-```bash
-# 1. Run the install script (installs WP + activates plugin)
+# 1. Run install script on fresh server
 ./scripts/install-wsl.sh
 
-# 2. Import the database dump
-wp --path=/var/www/html --allow-root db import \
-  /mnt/c/Development/CityU-Research-Tracker/data/rrp-db-export.sql
+# 2. Restore MySQL
+wp --path=/var/www/html --allow-root db import /path/to/rrp-db-backup.sql
 
-# 3. Update the site URL if the hostname has changed
-./scripts/set-public-url.sh http://new-hostname.example.com
+# 3. Restore uploads
+tar -xzf /path/to/rrp-uploads-backup.tar.gz -C /
+
+# 4. Fix permissions
+sudo chown -R www-data:www-data \
+  /var/www/html/wp-content/plugins/research-review-portal/data
+
+# 5. Update URL if server hostname changed
+./scripts/set-public-url.sh https://new-hostname.example.com
+```
+
+### Recovery (Docker)
+
+```bash
+git clone <repo> && cd CityU-Research-Tracker
+cp .env.example .env    # set WP_URL
+make up
+make init
+make db-import           # restores data/rrp-db-export.sql
+# JSON data is already present from the cloned repo
 ```
 
 ---
 
-## User & Role Management
+## 5. User & Role Management
 
-### Roles defined by the plugin
+### Plugin roles
 
-The plugin registers five custom roles on activation:
+The plugin registers five roles on activation:
 
-| Role | Capability slug | Intended for |
-|------|----------------|--------------|
-| `rrp_student` | `rrp_submit` | Submitters |
-| `rrp_reviewer` | `rrp_review` | Reviewers |
-| `rrp_coordinator` | `rrp_coordinate` | Stage coordinators |
-| `rrp_admin` | `rrp_administrate` | Portal administrators |
-| `administrator` | WordPress default | WP system admin |
+| Slug | Capability | Scope |
+|------|-----------|-------|
+| `rrp_student` | `rrp_submit` | Own submissions only |
+| `rrp_reviewer` | `rrp_review` | Assigned submissions |
+| `rrp_coordinator` | `rrp_coordinate` | All submissions, workflow management |
+| `rrp_admin` | `rrp_administrate` | Full system access |
+| `rrp_faculty` | `rrp_faculty_submit` | Extended student access |
+
+Custom roles can be added via **Administration → Roles** in the portal UI, or via the `POST /admin/roles` REST endpoint.
 
 ### Re-registering roles
 
-If roles disappear (e.g. after a fresh database import), deactivate and re-activate the plugin from **WP Admin → Plugins**. Role registration runs on `register_activation_hook`.
-
-### Changing a user's role
+If roles disappear after a database import:
 
 ```bash
-# WP-CLI
+wp plugin deactivate research-review-portal --allow-root
+wp plugin activate  research-review-portal --allow-root
+```
+
+### Change a user's role
+
+```bash
 wp user set-role <user-id-or-email> rrp_coordinator --allow-root
 ```
 
-Or via WP Admin → Users → Edit User → Role dropdown.
+Or via **WP Admin → Users → Edit User → Role**.
 
-### Bulk role assignment via WP-CLI
+### Reset a user's password
 
 ```bash
-# Promote all users with @cityu.edu email to rrp_student
-wp user list --format=csv --fields=ID,user_email | grep "@cityu.edu" | \
-  awk -F',' '{print $1}' | \
-  xargs -I{} wp user set-role {} rrp_student --allow-root
+wp user update <user-id> --user_pass='NewPass123!' --allow-root
 ```
+
+Or via the portal Users panel (Admin role) — click the password icon on any user row.
 
 ---
 
-## REST API Reference
+## 6. REST API Reference
 
 **Base URL:** `{site_url}/wp-json/research-portal/v1`
 
-All authenticated endpoints require a valid WordPress nonce in the `X-WP-Nonce` header (provided automatically by the SPA via `window.RRP.nonce`).
+All authenticated endpoints require `X-WP-Nonce: <nonce>` (provided automatically by the SPA via `window.RRP.nonce`). The nonce is created with `wp_create_nonce('wp_rest')` and refreshed on each page load.
 
-### Authentication & Health
+### Core endpoints
 
 | Method | Endpoint | Auth | Description |
 |--------|----------|------|-------------|
-| GET | `/health` | None | Returns `{"ok":true,"bootId":<int>}` — use for monitoring |
+| GET | `/health` | None | `{"ok":true,"bootId":<int>}` |
+| GET | `/config` | Admin | Full system configuration |
+| PUT | `/config` | Admin | Update system configuration |
+| GET | `/public-config` | None | Public-facing config (portal name, SSO enabled, public submissions toggle) |
 
 ### Submissions
 
 | Method | Endpoint | Auth | Description |
 |--------|----------|------|-------------|
-| POST | `/submit` | Logged-in | Create a new submission (multipart/form-data) |
-| GET | `/submissions` | Logged-in | List submissions visible to the current user |
-| GET | `/submissions/public` | None | List approved submissions (public-facing) |
-| GET | `/submissions/{id}` | Logged-in | Get single submission details |
-| PUT | `/submissions/{id}` | Coordinator+ | Update submission metadata or status |
-| GET | `/submissions/{id}/preview` | Logged-in | Stream the uploaded file for in-browser preview |
-| POST | `/submissions/{id}/feedback` | Reviewer | Submit reviewer feedback and decision |
-| GET | `/submissions/{id}/comments` | Logged-in | Get all comments on a submission |
-| POST | `/submissions/{id}/comments` | Logged-in | Post a new comment |
-| POST | `/submissions/{id}/attachments` | Reviewer | Upload a reviewer attachment |
-| DELETE | `/submissions/{id}/attachments/{filename}` | Admin | Delete an attachment |
-| GET | `/submissions/{id}/timeline` | Logged-in | Get the full stage timeline |
-| GET | `/submissions/{id}/audit-log` | Coordinator+ | Get the detailed audit log |
-| POST | `/submissions/{id}/skip-stage` | Coordinator | Skip the active review stage |
+| POST | `/submit` | Logged-in | Create a new submission |
+| GET | `/submissions` | Logged-in | List submissions visible to current user |
+| GET | `/submissions/{id}` | Logged-in | Get single submission |
+| PUT | `/submissions/{id}` | Coordinator+ | Update metadata or status |
+| GET | `/submissions/{id}/preview` | Logged-in | Stream uploaded file for in-browser preview |
+| POST | `/submissions/{id}/feedback` | Reviewer | Submit reviewer decision |
+| GET | `/submissions/{id}/comments` | Logged-in | Get comments |
+| POST | `/submissions/{id}/comments` | Logged-in | Post a comment |
+| POST | `/submissions/{id}/attachments` | Reviewer | Upload reviewer attachment |
+| DELETE | `/submissions/{id}/attachments/{file}` | Admin | Delete an attachment |
+| GET | `/submissions/{id}/timeline` | Logged-in | Full stage timeline |
+| GET | `/submissions/{id}/audit-log` | Coordinator+ | Detailed audit log |
+| POST | `/submissions/{id}/skip-stage` | Coordinator | Skip active review stage |
 | GET/PUT | `/submissions/{id}/deadlines` | Coordinator | Get or set per-stage deadlines |
+| PATCH | `/submissions/{id}` | Submitter/Coordinator | Withdraw or cancel |
+| POST | `/submissions/{id}/appeal` | Submitter | Submit a rejection appeal |
+| PATCH | `/submissions/{id}/appeal` | Coordinator | Process an appeal (start_review/uphold/overturn) |
+| GET/PUT | `/submissions/{id}/collab` | Reviewer | Read or update collaborative stage notes |
+| GET | `/submissions/inactive` | Coordinator | List inactive submissions (query: `?days=30`) |
+| POST | `/submissions/bulk-cancel` | Coordinator | Bulk cancel up to 100 submissions |
 
 ### Reviews & Assignments
 
 | Method | Endpoint | Auth | Description |
 |--------|----------|------|-------------|
-| GET | `/reviews` | Reviewer+ | List reviews assigned to the current user |
-| GET | `/reviewers` | Coordinator+ | List all reviewers in the pool |
-| GET | `/assignment-summary` | Coordinator+ | Compact per-submission stage + reviewer summary |
-| POST | `/reviews/rate` | Coordinator+ | Submit a reviewer quality rating |
-| GET | `/conflicts` | Coordinator+ | List declared conflicts of interest |
-| POST | `/conflicts` | Reviewer | Declare a conflict of interest |
+| GET | `/reviews` | Reviewer+ | Reviews assigned to current user |
+| GET | `/reviewers` | Coordinator+ | All reviewers in pool |
+| GET | `/assignment-summary` | Coordinator+ | Per-submission stage + reviewer summary |
+| POST | `/reviews/rate` | Coordinator+ | Submit reviewer quality rating |
+| GET | `/conflicts` | Coordinator+ | All declared COIs |
+| POST | `/conflicts` | Reviewer | Declare a COI |
 
-### Analytics
+### Analytics & Reports
 
 | Method | Endpoint | Auth | Description |
 |--------|----------|------|-------------|
 | GET | `/analytics/workflow` | Coordinator+ | Stage completion rates and durations |
 | GET | `/analytics/performance` | Coordinator+ | Submission volume by type and date |
-| GET | `/analytics/reviewer` | Coordinator+ | Per-reviewer workload and turnaround |
+| GET | `/analytics/reviewer` | Coordinator+ | Per-reviewer metrics |
 | GET | `/analytics/workload` | Coordinator+ | Active workload distribution |
 | GET | `/analytics/daily` | Coordinator+ | Daily submission and decision counts |
 | GET | `/analytics/overdue` | Coordinator+ | All overdue submissions |
-| GET | `/reports/export` | Admin | Export report data as CSV |
+| GET | `/reports/export` | Admin | Export as CSV |
+| GET | `/calendar-events` | Logged-in | Active-stage deadlines for calendar view |
 
-### Dashboard & Notifications
-
-| Method | Endpoint | Auth | Description |
-|--------|----------|------|-------------|
-| GET | `/dashboard` | Logged-in | Combined data for the current user's dashboard |
-| GET | `/notifications` | Logged-in | Unread notifications for the current user |
-
-### Configuration
+### Notifications & Preferences
 
 | Method | Endpoint | Auth | Description |
 |--------|----------|------|-------------|
-| GET | `/config` | Admin | Get full system configuration |
-| PUT | `/config` | Admin | Update system configuration |
-| GET | `/config/review-templates` | Admin | Get review question templates |
-| POST | `/config/review-templates` | Admin | Create or update a review template |
-| GET | `/config/suggest-reviewers` | Coordinator+ | Suggest reviewers for a submission |
-| POST | `/config/apply-pool-to-submissions` | Admin | Bulk-apply reviewer pool changes |
-
-### Submission Types & Workflows
-
-| Method | Endpoint | Auth | Description |
-|--------|----------|------|-------------|
-| GET | `/submission-types` | Logged-in | List all submission types |
-| POST | `/submission-types` | Admin | Create a new submission type |
-| GET | `/submission-types/{id}` | Logged-in | Get a single submission type |
-| PUT | `/submission-types/{id}` | Admin | Update a submission type |
-| GET | `/workflow-stages` | Logged-in | List workflow stage definitions |
-| PUT | `/workflow-stages/{id}` | Admin | Update a workflow stage |
-| DELETE | `/workflow-stages/{id}` | Admin | Delete a workflow stage |
+| GET | `/notifications` | Logged-in | Unread notifications |
+| GET/PUT | `/notif-prefs` | Logged-in | Read or update notification preferences |
 
 ### Portal Users
 
 | Method | Endpoint | Auth | Description |
 |--------|----------|------|-------------|
-| GET | `/portal-users/me` | Logged-in | Get the current user's profile |
-| PUT | `/portal-users/me` | Logged-in | Update the current user's profile |
-| GET | `/portal-users` | Admin | List all portal users |
-| POST | `/portal-users` | Admin | Create a new portal user |
-| GET | `/portal-users/{id}` | Admin | Get a portal user by WP user ID |
-| PUT | `/portal-users/{id}` | Admin | Update a portal user |
-| DELETE | `/portal-users/{id}` | Admin | Delete a portal user |
-| GET | `/portal-users/json/{jsonId}` | Admin | Look up user by JSON-file reviewer ID |
-| GET | `/portal-users/json-student/{email}` | Coordinator+ | Look up student by email |
+| GET/PUT | `/portal-users/me` | Logged-in | Current user profile |
+| GET | `/portal-users` | Admin | List all users |
+| POST | `/portal-users` | Admin | Create a user |
+| GET/PUT/DELETE | `/portal-users/{id}` | Admin | Get, update, or delete a user |
+| POST | `/portal-users/{id}/reset-password` | Admin | Reset user password |
+
+### Submission Types & Workflow
+
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| GET | `/submission-types` | Logged-in | List submission types |
+| POST | `/submission-types` | Admin | Create a submission type |
+| GET/PUT | `/submission-types/{id}` | Admin | Get or update a submission type |
+| GET/PUT | `/workflow-stages/{id}` | Admin | Get or update a workflow stage |
+| DELETE | `/workflow-stages/{id}` | Admin | Delete a workflow stage |
+
+### Extension Requests
+
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| POST | `/submissions/{id}/extension-request` | Reviewer | Request a deadline extension |
+| GET | `/extension-requests` | Coordinator+ | All pending extension requests |
+| PATCH | `/extension-requests/{id}` | Coordinator | Approve or deny an extension |
+
+### Administration
+
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| GET | `/admin/backup` | Admin | Download ZIP backup of all data |
+| POST | `/admin/restore` | Admin | Restore from ZIP backup |
+| POST | `/admin/archive-submissions` | Admin | Archive terminal submissions older than N days |
+| GET | `/admin/archives` | Admin | List data archives |
+| GET | `/admin/archives/{name}/download` | Admin | Download an archive |
+| DELETE | `/admin/archives/{name}` | Admin | Delete an archive |
+| GET/POST | `/admin/roles` | Admin | List or create custom roles |
+| DELETE | `/admin/roles/{slug}` | Admin | Delete a custom role |
+| GET | `/admin/webhooks` | Admin | List registered webhooks |
+| POST | `/admin/webhooks` | Admin | Register a webhook |
+| DELETE | `/admin/webhooks/{id}` | Admin | Delete a webhook |
+| POST | `/communications/broadcast` | Coordinator | Send bulk email |
+| POST | `/plagiarism/check/{id}` | Coordinator | Trigger similarity check |
+| POST | `/settings/test-email` | Admin | Test SMTP configuration |
+| GET | `/config/suggest-reviewers` | Coordinator+ | Expertise-based reviewer suggestions |
+| POST | `/config/apply-pool-to-submissions` | Admin | Bulk-apply reviewer pool |
+| GET/POST | `/config/review-templates` | Admin | Manage review question templates |
 
 ---
 
-## Configuration Reference
+## 7. Configuration Reference
 
-`data/config.json` is the primary configuration file. It is read at runtime and can be updated via the **Admin → Configuration** panel in the portal or directly on disk (stop the server before editing).
+`data/config.json` is the primary configuration file. It is read at PHP runtime and can be updated via the portal's **Administration → Portal Settings** panel or directly on disk (restart Apache after direct edits).
 
-### Top-level keys
+### Key top-level keys
 
 ```jsonc
 {
-  "stageDueDays": {
-    "ARS": 7,          //days allowed per stage for Research Papers / Dissertations
-    "PUB": 10,         // Journal Publications
-    "GRN": 14,         // Grant Proposals
-    "CAP": 7           // Capstone Projects
-  },
+  // Days per stage before a submission is marked overdue
+  "stageDueDays": { "ARS": 7, "PUB": 10, "GRN": 14, "PROJ": 7 },
 
+  // Reviewer pool per submission type
   "reviewerPools": {
-    "ARS": {
-      "reviewerIds": [3, 5, 8],          // WP user IDs
-      "assignmentMode": "round_robin"    // "random" | "round_robin"
-    },
-    "PUB": { "reviewerIds": [], "assignmentMode": "random" },
-    "GRN": { "reviewerIds": [], "assignmentMode": "random" },
-    "CAP": { "reviewerIds": [], "assignmentMode": "random" }
+    "ARS": { "reviewerIds": [3, 5, 8], "assignmentMode": "round_robin" }
   },
 
+  // Required approvals per stage
   "stageRequirements": {
-    "ARS": {
-      "Committee Review": { "requiredCount": 3 },
-      "default": { "requiredCount": 1 }
-    }
-    // ...
+    "ARS": { "Committee Review": { "requiredCount": 3 }, "default": { "requiredCount": 1 } }
   },
 
-  "notificationEmail": "research-portal@cityu.edu",  // reply-to address for emails
-  "maxFileUploadMB": 64                               // enforced by PHP ini; informational
+  // Notification reply-to address
+  "notificationEmail": "research-portal@cityu.edu",
+
+  // File upload constraints (set via Portal Settings)
+  "uploadSettings": {
+    "maxFileSizeMb": 2,
+    "maxFiles": 5,
+    "allowedExtensions": ["pdf", "docx"]
+  },
+
+  // SMTP settings (password is AES-256-GCM encrypted)
+  "smtpSettings": { "host": "...", "port": 587, "encryption": "tls", ... },
+
+  // Entra SSO settings
+  "ssoSettings": { "enabled": false, "tenantId": "...", "clientId": "...", ... },
+
+  // Deadline management
+  "gracePeriodDays": 2,
+  "skipWeekends": true,
+  "publicHolidays": ["2026-01-01", "2026-12-25"],
+
+  // Public submission portal
+  "publicPortal": { "enabled": false, "allowedTypes": ["PROJ"] },
+
+  // Plagiarism provider
+  "plagiarismProvider": { "provider": "disabled", "apiKey": "" }
 }
 ```
 
-### `reviewers.json` structure
-
-Each entry in the array represents one reviewer in the pool:
+### `data/reviewers.json` structure
 
 ```jsonc
 [
   {
-    "id": "RVW-001",             // Internal reviewer JSON ID
-    "userId": 5,                  // WordPress user ID
+    "id": "RVW-001",
+    "userId": 5,
     "email": "reviewer@test.com",
     "name": "Dr. Jane Smith",
     "department": "Computer Science",
@@ -529,7 +437,7 @@ Each entry in the array represents one reviewer in the pool:
 ]
 ```
 
-### `submissions.json` structure (abridged)
+### `data/submissions.json` structure (abridged)
 
 ```jsonc
 [
@@ -542,17 +450,20 @@ Each entry in the array represents one reviewer in the pool:
     "submitterId": 12,
     "submitterEmail": "student@test.com",
     "status": "Under Review",
+    "revisionCount": 0,
+    "revisionHistory": [],
     "createdAt": "2026-01-15T09:00:00Z",
     "updatedAt": "2026-02-03T14:22:00Z",
     "stages": [
       {
         "stageName": "Chair Review",
-        "reviewers": ["reviewer@test.com"],
+        "assignedReviewers": [{ "email": "reviewer@test.com", "deadline": "2026-01-22T09:00:00Z" }],
         "decisions": { "reviewer@test.com": "Approved" },
         "skipped": false,
         "completedAt": "2026-01-20T11:00:00Z"
       }
     ],
+    "collabData": { "stageNotes": {}, "presence": {} },
     "auditLog": [
       {
         "timestamp": "2026-01-15T09:00:00Z",
@@ -562,7 +473,7 @@ Each entry in the array represents one reviewer in the pool:
       }
     ],
     "documents": [
-      { "filename": "dissertation-draft.pdf", "uploadedAt": "..." }
+      { "filename": "dissertation-draft.pdf", "uploadedAt": "2026-01-15T09:00:00Z" }
     ]
   }
 ]
@@ -570,524 +481,216 @@ Each entry in the array represents one reviewer in the pool:
 
 ---
 
-## Data File Reference
-
-### Directory layout
-
-```
-data/
-├── config.json           ← system configuration
-├── submissions.json      ← all submissions + stages + decisions + audit log
-├── reviewers.json        ← reviewer pool registry
-└── uploads/
-    ├── ARS-2026-001/
-    │   ├── main-document.pdf
-    │   └── reviewer-notes.pdf
-    ├── ARS-2026-002/
-    │   └── capstone-final.docx
-    └── ...
-```
-
-### File permissions
-
-The web server user (`www-data` on Ubuntu/Apache) must have read+write access to the entire `data/` directory:
-
-```bash
-# Bare-metal
-sudo chown -R www-data:www-data /var/www/html/wp-content/plugins/research-review-portal/data
-sudo chmod -R 775 /var/www/html/wp-content/plugins/research-review-portal/data
-
-# Docker (run inside container)
-chown -R www-data:www-data /var/www/html/wp-content/plugins/research-review-portal/data
-```
-
----
-
-## Monitoring & Logging
+## 8. Monitoring & Alerting
 
 ### Health check endpoint
 
 Use `/wp-json/research-portal/v1/health` for automated monitoring:
 
 ```bash
-# Returns HTTP 200 + JSON if healthy; HTTP 5xx if WordPress is broken
-curl -sf http://localhost:8080/wp-json/research-portal/v1/health
+curl -sf https://portal.your-institution.edu/wp-json/research-portal/v1/health
+# Returns HTTP 200 + {"ok":true,"bootId":<int>} when healthy
 ```
 
-Add this to your uptime monitoring tool (UptimeRobot, Pingdom, Azure Monitor, etc.) with a 5-minute interval.
+Add this to Azure Monitor, UptimeRobot, or any uptime monitoring tool with a 5-minute interval. Alert on non-200 responses or JSON missing `"ok":true`.
 
-### PHP / Apache error log
+### Log locations
 
-| Environment | Log location |
-|------------|-------------|
+| Environment | Log |
+|-------------|-----|
 | Docker | `make logs` (streams container stdout/stderr) |
-| Bare-metal | `/var/log/apache2/error.log` |
-| Bare-metal (PHP) | `/var/log/apache2/php_errors.log` (if configured) |
+| Bare-metal Apache | `/var/log/apache2/error.log` |
+| Bare-metal PHP | `/var/log/apache2/php_errors.log` (if configured) |
+| WordPress debug | `wp-content/debug.log` (only when `WP_DEBUG_LOG = true`) |
 
-Enable WordPress debug logging in `wp-config.php` for development only:
+### Enabling WordPress debug logging (development only)
+
+Add to `wp-config.php`:
 
 ```php
 define( 'WP_DEBUG',         true  );
-define( 'WP_DEBUG_LOG',     true  );   // writes to wp-content/debug.log
-define( 'WP_DEBUG_DISPLAY', false );   // do not show errors to end users
+define( 'WP_DEBUG_LOG',     true  );
+define( 'WP_DEBUG_DISPLAY', false );   // never enable on production
 ```
 
-> **Never enable `WP_DEBUG_DISPLAY` on a production server.**
+### Scheduled tasks (WP-Cron)
 
-### Audit log
+The plugin registers two daily WP-Cron jobs:
 
-Every submission has a built-in audit log accessible via:
-- Portal UI: click **📋 Log** on any submission card
-- REST API: `GET /wp-json/research-portal/v1/submissions/{id}/audit-log`
+| Hook | Schedule | Action |
+|------|----------|--------|
+| `rrp_deadline_reminders` | Daily | Emails reviewers 3 days before their stage deadline |
+| `rrp_escalation_check` | Daily | Emails coordinators with all overdue submissions |
 
-The audit log records: timestamp, actor email, action type, and detail string for every system event.
+Verify cron is running:
+```bash
+wp --path=/var/www/html --allow-root cron event list | grep rrp_
+```
+
+Manually trigger escalation check:
+```bash
+wp --path=/var/www/html --allow-root cron event run rrp_escalation_check
+```
 
 ---
 
-## Troubleshooting
+## 9. Troubleshooting
 
-### Portal returns blank page or "Portal API not configured"
+### Portal shows blank page or "Portal API not configured"
 
-1. Verify the plugin is active: `wp plugin list --allow-root`
-2. Check WordPress permalinks are set to **Post name** (`/%postname%/`):
+1. Verify the plugin is active:
+   ```bash
+   wp plugin list --allow-root | grep research
+   ```
+2. Check that WordPress permalinks are set to **Post name**:
    ```bash
    wp rewrite structure '/%postname%/' --allow-root
    wp rewrite flush --allow-root
    ```
-3. Check Apache `mod_rewrite` is enabled:
+3. Verify Apache `mod_rewrite` is enabled:
    ```bash
-   sudo a2enmod rewrite
-   sudo service apache2 restart
+   sudo a2enmod rewrite && sudo service apache2 restart
    ```
 
 ### REST API returns 401 Unauthorized
 
-Usually a nonce or authentication problem:
-1. Hard-refresh the browser (`Ctrl+Shift+R`)
-2. Log out and log back in to get a fresh nonce
-3. If still failing, check that `WP_SITEURL` / `WP_HOME` in `wp-config.php` match the URL you're using
-
-### Chrome redirects to `localhost`
-
-The plugin's `option_siteurl`/`option_home` filters should handle this automatically. If the redirect persists:
-
-1. Verify the plugin is active (the filters fire at plugin load time)
-2. Check `wp-config.php` contains the `WP_HOME` / `WP_SITEURL` constants set to the correct public URL:
+1. Hard-refresh the browser (`Ctrl+Shift+R`).
+2. Log out and log back in to get a fresh nonce.
+3. Check `WP_SITEURL` / `WP_HOME` in `wp-config.php` match the URL being used:
    ```bash
    grep -i 'WP_HOME\|WP_SITEURL' /var/www/html/wp-config.php
-   ```
-3. Update if wrong:
-   ```bash
-   ./scripts/set-public-url.sh http://correct-hostname.example.com
    ```
 
 ### File uploads fail silently
 
-1. Check `data/uploads/` exists and is writable by `www-data`
-2. Confirm PHP `upload_max_filesize` and `post_max_size` are ≥ 64M:
+1. Check `data/uploads/` is writable by `www-data`:
    ```bash
-   php -r "echo ini_get('upload_max_filesize');"
+   ls -la /var/www/html/wp-content/plugins/research-review-portal/data/
+   sudo chown -R www-data:www-data .../data && sudo chmod -R 775 .../data
    ```
-3. In Docker, the custom `rrp.ini` in the image sets these values — rebuild if changed: `make build`
+2. Verify PHP upload limits:
+   ```bash
+   php -r "echo ini_get('upload_max_filesize');"   # should be 64M
+   ```
+3. Check ClamAV is running:
+   ```bash
+   clamscan --version
+   ```
 
-### Submissions not saving (JSON write errors)
+### Submissions not persisting (JSON write errors)
 
 ```bash
-# Check permissions
+# Check write permission
 ls -la /var/www/html/wp-content/plugins/research-review-portal/data/
-# Should show write permission for www-data
 
 # Fix
 sudo chown -R www-data:www-data \
   /var/www/html/wp-content/plugins/research-review-portal/data
 ```
 
-### Database connection refused (Docker)
+### Email notifications not delivering
 
-The WordPress container starts before MySQL is fully initialised. The `docker-compose.yml` health check on the `db` service prevents this in most cases. If it happens:
+1. Check SMTP settings in **Portal Settings → Email / SMTP**.
+2. Click **Test Email** — if it fails, check the SMTP credentials and port.
+3. Verify no firewall blocks outbound port 465/587:
+   ```bash
+   nc -zv smtp.your-provider.com 587
+   ```
 
-```bash
-make down
-make up
-# Wait 30 seconds then:
-make init
-```
+### User roles missing from WP Admin "Add User" dropdown
 
-### Roles missing from WP Admin "Add User" dropdown
-
-The plugin registers roles on the WordPress `register_activation_hook`. If roles are absent:
+Role registration runs on `register_activation_hook`. If roles are absent:
 
 ```bash
 wp plugin deactivate research-review-portal --allow-root
 wp plugin activate  research-review-portal --allow-root
 ```
 
-### MySQL container fails to start
+### ClamAV daemon not running
 
 ```bash
-# Check for port conflict
-netstat -an | grep 3306
+sudo service clamav-freshclam start
+sudo service clamav-daemon start
+clamscan --version   # verify
+```
 
-# Reset Docker volumes (WARNING: destroys all data — ensure backup exists)
-make reset
-make up
+### Docker: database connection refused on startup
+
+MySQL takes a few seconds to initialise. If containers start in the wrong order:
+
+```bash
+make down && make up
+# Wait 30 seconds
 make init
-make db-import   # if a backup exists
 ```
 
----
-
-## Enabling HTTPS (Let's Encrypt)
-
-Microsoft Entra ID **requires** an `https://` redirect URI for any non-localhost application. Run this section before configuring SSO.
-
-### Step 1 — Open port 443 in the Azure NSG
-
-1. In the [Azure Portal](https://portal.azure.com), navigate to your VM → **Networking** → **Network security group**.
-2. Click **Add inbound security rule**:
-   - Source: `Any`
-   - Source port ranges: `*`
-   - Destination: `Any`
-   - Destination port ranges: `443`
-   - Protocol: `TCP`
-   - Action: `Allow`
-   - Priority: `340` (or any unused priority below `Deny All`)
-   - Name: `HTTPS`
-3. Click **Add** and wait ~30 seconds for the rule to apply.
-
-### Step 2 — Run the HTTPS setup script
-
-SSH into the VM and run the provided script:
+### HTTPS certificate expired
 
 ```bash
-ssh itadmin@rrp.cityu.edu
-cd /mnt/c/Development/CityU-Research-Tracker
-sudo bash scripts/enable-https.sh
+sudo certbot renew
+sudo service apache2 reload
 ```
 
-The script will:
-- Install **Certbot** and the Apache plugin
-- Obtain a free **Let's Encrypt** certificate for `rrp.cityu.edu`
-- Configure Apache to serve HTTPS on port 443
-- Add an automatic **HTTP → HTTPS redirect** (301)
-- Update WordPress `siteurl` and `home` to `https://`
-- Install an **auto-renewal cron** (certificates renew every 60 days; valid for 90)
+---
 
-> The script is idempotent — safe to re-run if something fails partway through.
+## 10. Security Hardening
 
-### Step 3 — Verify HTTPS is working
+### Content Security Policy
+
+The plugin sets a strict CSP header on all pages:
+
+```
+Content-Security-Policy:
+  default-src 'self';
+  script-src  'self' 'unsafe-inline' https://cdnjs.cloudflare.com;
+  style-src   'self' 'unsafe-inline';
+  font-src    'self' https://cdnjs.cloudflare.com;
+  img-src     'self' data:;
+  frame-src   'self' blob:;
+  connect-src 'self';
+```
+
+Do **not** add `cdn.jsdelivr.net` or other CDNs unless you also update the plugin's CSP header in `research-review-portal.php`.
+
+### WordPress hardening checklist
+
+- [ ] Change `admin` / `Admin1234!` default credentials immediately after installation
+- [ ] Set `WP_DEBUG_DISPLAY = false` in `wp-config.php` on production
+- [ ] Use a strong, unique `AUTH_KEY`, `SECURE_AUTH_KEY`, and related salts in `wp-config.php` (generate at [api.wordpress.org/secret-key/1.1/salt/](https://api.wordpress.org/secret-key/1.1/salt/))
+- [ ] Restrict `data/` directory so it is not web-accessible (the plugin's `.htaccess` drop-in does this; verify with `curl https://host/.../data/config.json` — should return 403)
+- [ ] Enable HTTPS and ensure HTTP redirects to HTTPS
+- [ ] Keep WordPress core and plugins updated
+- [ ] Limit login attempts (install a bruteforce-protection plugin such as **Limit Login Attempts Reloaded**)
+
+### Data directory `.htaccess` protection
+
+The plugin writes a `.htaccess` file in `data/` on activation:
+
+```apache
+Options -Indexes
+Deny from all
+```
+
+This prevents direct web access to JSON files and uploaded documents. Verify it is present:
 
 ```bash
-# HTTP should redirect to HTTPS
-curl -I http://rrp.cityu.edu
-# Expected: HTTP/1.1 301 Moved Permanently  + Location: https://...
-
-# HTTPS should return 200
-curl -I https://rrp.cityu.edu
-# Expected: HTTP/1.1 200 OK
+cat /var/www/html/wp-content/plugins/research-review-portal/data/.htaccess
 ```
 
-Open `https://rrp.cityu.edu` in a browser — you should see a padlock (🔒) and no security warning.
+### SMTP password encryption
 
-### Step 4 — Update the Redirect URI everywhere
-
-After enabling HTTPS, update the redirect URI in **both** places:
-
-| Where | Old value | New value |
-|-------|-----------|----------|
-| Portal Settings → SSO → Redirect URI | `http://rrp.../auth/callback` | `https://rrp.cityu.edu/wp-json/research-portal/v1/auth/callback` |
-| Azure App Registration → Authentication → Redirect URIs | same `http://` URI | same `https://` URI |
-
-### Certificate renewal
-
-Let's Encrypt certificates are valid for 90 days. Certbot installs a cron job at `/etc/cron.d/certbot` that runs twice daily and automatically renews any certificate expiring within 30 days, then reloads Apache.
-
-To manually test renewal:
-```bash
-sudo certbot renew --dry-run
-```
-
-To check certificate expiry:
-```bash
-sudo certbot certificates
-```
-
----
-
-## Microsoft Entra SSO
-
-The portal supports Microsoft Entra ID (Azure AD) as a Single Sign-On provider. When enabled, users click **Login with Microsoft** and are authenticated by Entra — no separate WordPress password is required.
-
-> **Authorization is still local.** Entra only proves *who* the user is. Portal roles (Student / Reviewer / Coordinator / Admin) are assigned by a portal administrator after first login. A brand-new Entra user has no portal access until a role is assigned.
-
----
-
-### Prerequisites
-
-- An **Azure subscription** with permission to create or manage App Registrations in Entra ID.
-- **HTTPS must be enabled** on the portal server. Entra ID enforces `https://` redirect URIs for any non-localhost application. See [Enabling HTTPS (Let's Encrypt)](#enabling-https-lets-encrypt) above.
-- You have the portal's public HTTPS URL: `https://rrp.cityu.edu`.
-
----
-
-### Step 1 — Configure the App Registration in Azure Portal
-
-1. Sign in to [portal.azure.com](https://portal.azure.com) and open **Microsoft Entra ID**.
-
-2. Go to **App registrations** → select your existing enterprise application (or create a new one).
-
-3. On the **Overview** page, note down:
-   - **Application (client) ID** — looks like `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`
-   - **Directory (tenant) ID** — same format
-
-4. Go to **Authentication** → **Add a platform** → choose **Web**.
-
-5. Set the **Redirect URI** to:
-   ```
-   https://rrp.cityu.edu/wp-json/research-portal/v1/auth/callback
-   ```
-   *(Replace the hostname with your actual domain if different. Must be `https://` — Entra does not accept plain `http://` for non-localhost URIs.)*
-
-6. Under **Implicit grant and hybrid flows**, leave both checkboxes **unchecked** (the portal uses the Authorization Code flow).
-
-7. Click **Save**.
-
-8. Go to **Certificates & secrets** → **Client secrets** → **New client secret**.
-   - Description: `Research Review Portal`
-   - Expiry: choose an appropriate expiry (12 or 24 months)
-   - Click **Add**, then **immediately copy the secret Value** — it is only shown once.
-
-9. Go to **API permissions** → confirm the following **delegated** permissions are present (they are defaults for any App Registration):
-   - `openid`
-   - `profile`
-   - `email`
-
-   If any are missing, click **Add a permission → Microsoft Graph → Delegated → add them**. Then click **Grant admin consent**.
-
----
-
-### Step 2 — Configure SSO in the Portal Settings UI
-
-This is the **recommended method** — credentials are stored encrypted in the WordPress database using AES-256-GCM.
-
-1. Log in to the portal as a **Coordinator** or **Admin**.
-
-2. In the left sidebar, click **Settings → Portal Settings**.
-
-3. Scroll to the **Single Sign-On (SSO)** fieldset:
-
-   | Field | Value |
-   |-------|-------|
-   | Enable SSO | ✅ checked |
-   | SSO Provider | Microsoft Entra ID (Azure AD) |
-   | Tenant ID | paste your Directory (tenant) ID |
-   | Client ID | paste your Application (client) ID |
-   | Client Secret | paste the secret value you copied in Step 1.8 |
-   | Redirect URI | `https://rrp.cityu.edu/wp-json/research-portal/v1/auth/callback` |
-   | Auto-provision new users | ✅ recommended (creates WP account on first login; no portal role until admin assigns one) |
-
-   > **Note:** If the Redirect URI field shows `http://` (before HTTPS was enabled), update it to `https://` here and in the Azure App Registration.
-
-4. Click **💾 Save Settings**.
-
-5. The client secret is encrypted with AES-256-GCM before being written to the database. The Settings page will show `[encrypted]` in the secret field on subsequent visits — this is expected.
-
----
-
-### Step 3 — (Alternative) Configure via `wp-config.php` constants
-
-If you prefer to keep all secrets out of the database entirely, add these constants to `wp-config.php` on the VM **before** the `/* That's all, stop editing! */` line.
+SMTP credentials in `config.json` are stored AES-256-GCM encrypted. The encryption key is derived from `AUTH_KEY` in `wp-config.php`. Keep `wp-config.php` outside the web root or restrict its permissions:
 
 ```bash
-ssh itadmin@rrp.cityu.edu
-sudo nano /var/www/html/wp-config.php
+chmod 600 /var/www/html/wp-config.php
 ```
 
-Add:
+### Upload security
 
-```php
-// ── Research Review Portal — Entra SSO ──────────────────────────────────
-define( 'RRP_AUTH_PROVIDER',      'entra' );
-define( 'RRP_ENTRA_TENANT_ID',    'YOUR-TENANT-ID-HERE' );
-define( 'RRP_ENTRA_CLIENT_ID',    'YOUR-CLIENT-ID-HERE' );
-define( 'RRP_ENTRA_CLIENT_SECRET','YOUR-CLIENT-SECRET-HERE' );
-define( 'RRP_ENTRA_REDIRECT_URI', 'https://rrp.cityu.edu/wp-json/research-portal/v1/auth/callback' );
-```
+Every uploaded file goes through:
+1. **Extension whitelist** — only configured extensions are accepted
+2. **MIME-type verification** — `finfo_file()` checks the actual file content
+3. **ClamAV scan** — full virus scan before the file is stored
+4. **Filename sanitisation** — special characters stripped from stored filename
 
-> Constants take **priority over** the database settings. If both are set, `wp-config.php` wins.
-
-> ⚠ **Never commit `wp-config.php` to git.** It is already in `.gitignore`.
-
----
-
-### Step 4 — Test the SSO login flow
-
-1. Open a **private/incognito browser window**.
-
-2. Navigate to `https://rrp.cityu.edu` (the portal home page) **or** go directly to `https://rrp.cityu.edu/wp-login.php`.
-
-3. Both login paths now redirect automatically to `login.microsoftonline.com` when Entra SSO is enabled.
-
-4. Sign in with a university Microsoft account.
-
-5. On first login, a new WordPress account is created automatically (if Auto-provision is on). The portal will show a message that no role is assigned yet.
-
-6. As an admin, go to **Settings → Portal Settings** or **WP Admin → Users**, find the new user, and assign the appropriate portal role (`rrp_student`, `rrp_reviewer`, etc.).
-
-7. The user can now log in again and access the portal with their assigned role.
-
----
-
-### Step 5 — Test the logout flow
-
-Logging out calls the Entra single-logout endpoint, which signs the user out of Entra SSO as well. Verify by:
-1. Clicking **Logout** in the portal top bar.
-2. Confirming the browser lands back on the portal home page.
-3. Clicking **Login** again — the user should be prompted by Microsoft (not silently re-authenticated).
-
----
-
-### Rotating the Client Secret
-
-Entra client secrets expire. To rotate:
-
-1. In [portal.azure.com](https://portal.azure.com), go to your App Registration → **Certificates & secrets** → add a **New client secret**.
-2. Copy the new secret value.
-3. In the portal **Settings → Portal Settings**, paste the new secret and click **Save**. The old secret is overwritten.
-4. Back in Azure Portal, delete the old (expired) secret.
-5. Test a login to confirm the new secret works before the old one expires.
-
----
-
-### Emergency Local Login Bypass
-
-The login page always shows **both** options: a **Sign in with Microsoft** button (visible only when Entra SSO is enabled) and the standard WordPress username/password form below it. There is no auto-redirect, so local login is always accessible at:
-
-```
-https://rrp.cityu.edu/wp-login.php
-```
-
-Simply scroll past the Microsoft button and use the username/password form. If you need to disable SSO entirely from the command line:
-
-```bash
-wp --path=/var/www/html --allow-root eval-file /tmp/disable_sso.php
-# or directly:
-wp --path=/var/www/html --allow-root option patch update rrp_portal_settings sso_enabled false --format=json
-```
-
----
-
-### Troubleshooting SSO
-
-| Symptom | Likely cause | Fix |
-|---------|-------------|-----|
-| Redirected to WP login instead of Microsoft | SSO not enabled or tenant/client ID missing | Check Portal Settings → SSO fields are filled and Enable SSO is checked |
-| `wp-login.php` shows password form | SSO is disabled or `local_login=1` bypass is in use | Enable SSO in Portal Settings; remove `?local_login=1` from URL |
-| `AADSTS50011 — redirect URI mismatch` | Redirect URI in Entra doesn't exactly match the portal's URI | Copy the URI character-for-character from Portal Settings into Entra App Registration → Authentication |
-| `AADSTS700016 — application not found` | Wrong tenant ID | Verify Directory (tenant) ID in Portal Settings matches the App Registration |
-| `AADSTS7000215 — invalid client secret` | Secret expired or copied incorrectly | Rotate the secret (see above) |
-| `403 Invalid authentication state` | Browser cleared cookies mid-flow | Retry from a clean browser tab |
-| User logs in but sees "No portal role" | Auto-provision created account but no role assigned | Admin assigns role via Users panel or WP Admin → Users |
-| Logout doesn't sign out of Microsoft | Entra single-logout not configured | Verify `post_logout_redirect_uri` is an allowed reply URL in Entra App Registration → Authentication |
-
----
-
-### Disabling SSO
-
-To revert to WordPress-native login:
-
-- **UI method:** Portal Settings → uncheck **Enable SSO** → Save.
-- **wp-config method:** Change `RRP_AUTH_PROVIDER` from `'entra'` to `'wordpress'` (or remove the constant entirely).
-
-Existing user accounts are preserved — users will just log in with their WordPress password instead.
-
----
-
-## Security Hardening
-
-### Required for any internet-facing deployment
-
-1. **Change default credentials** immediately:
-   - WP admin password: WP Admin → Users → Administrator → Set Password
-   - DB root password: update `DB_ROOT_PASSWORD` in `.env` then `make reset` (or `ALTER USER` in MySQL directly)
-
-2. **Set strong `AUTH_KEY` / `SECURE_AUTH_KEY` salts** in `wp-config.php`:
-   - Generate new salts at `https://api.wordpress.org/secret-key/1.1/salt/`
-   - Paste into `wp-config.php` (replaces the placeholder keys)
-
-3. **Restrict WP Admin access** to internal IP ranges using Apache or an NSG rule:
-   ```apache
-   <Location /wp-admin>
-     Require ip 10.0.0.0/8 192.168.0.0/16
-   </Location>
-   ```
-
-4. **Enable HTTPS** with Let's Encrypt — see [Enabling HTTPS (Let's Encrypt)](#enabling-https-lets-encrypt) in this manual. Run `sudo bash scripts/enable-https.sh` on the VM.
-
-5. **File permission hardening** — the `data/` directory should not be web-accessible directly. Apache serves PHP which reads the files; direct URL access to `.json` files should return 403:
-   ```apache
-   <Files "*.json">
-     Require all denied
-   </Files>
-   ```
-
-6. **Disable XML-RPC** (not needed by the portal):
-   ```php
-   // In wp-config.php or a must-use plugin:
-   add_filter( 'xmlrpc_enabled', '__return_false' );
-   ```
-
-7. **Review Azure NSG rules** — only port 80 (and 443 if HTTPS is configured) should be open from the internet. Port 22 (SSH) should be restricted to known admin IPs.
-
-### OWASP considerations in the plugin code
-
-| Concern | Mitigation |
-|---------|-----------|
-| SQL injection | No custom SQL queries; all DB interaction via WordPress abstraction (WP_Query, wp_usermeta) |
-| XSS | All output passed through `esc_html()`, `esc_attr()`, `esc_url()`; JS data via `wp_json_encode()` |
-| CSRF | All state-changing REST endpoints require a valid `X-WP-Nonce` header |
-| Path traversal | Upload filenames sanitised with `sanitize_file_name()`; stored under submission-ID-scoped subdirectory |
-| Broken access control | All REST endpoints enforce `is_user_logged_in()` + role capability checks via WordPress permission callbacks |
-| SSRF | No outbound HTTP requests made by the plugin |
-
----
-
-## Updating the Plugin
-
-### Update via file copy (bare-metal)
-
-```bash
-# 1. Pull latest code on your local machine
-git pull origin main
-
-# 2. Copy changed files to the VM
-# (Using Send-FileSSH or scp — see DEPLOYMENT.md)
-scp -r . itadmin@<VM-HOSTNAME>:/mnt/c/Development/CityU-Research-Tracker/
-
-# 3. On the VM: no restart is needed unless PHP files changed
-# WordPress loads PHP on each request; JS/CSS have cache-busted query strings
-```
-
-### Update via Docker rebuild
-
-```bash
-git pull origin main    # get latest code
-make down
-make build              # rebuild image (picks up Dockerfile / php.ini changes)
-make up
-# No wp-cli init required — data volumes are preserved
-```
-
-### Checking for WordPress core updates
-
-```bash
-wp core check-update --allow-root
-wp core update --allow-root   # if an update is available
-```
-
-> Test on Docker/dev environment before updating production.
-
----
-
-*Developed by Kiran Kumar Vejendla — [vejendlakirankumar@cityu.edu](mailto:vejendlakirankumar@cityu.edu)*  
-*City University of Seattle · School of Technology and Computing (STC)*
+Files are stored outside the web root and served via a PHP proxy endpoint — direct file URLs are never exposed to users.

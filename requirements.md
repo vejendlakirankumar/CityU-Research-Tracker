@@ -2,7 +2,7 @@
 
 > **Last updated:** March 18, 2026 — All features complete. 4.11 collaborative multi-reviewer notes verified; §9 backlog fully resolved  
 > **Last validated:** March 18, 2026 — PHP lint clean on all 5 files; 12 PHP + 12 JS new feature refs confirmed on VM; all §1–§8 requirements ✅  
-> **Environment:** Azure VM (`rcgapimtest.eastus2.cloudapp.azure.com`) — HTTPS active  
+> **Environment:** Azure VM (`portal.your-institution.edu`) — HTTPS active  
 > **Plugin path:** `/mnt/c/Development/CityU-Research-Tracker`  
 > **Health check:** `GET /wp-json/research-portal/v1/health` → `{"ok":true}`
 
@@ -225,9 +225,9 @@
 
 | Item | Value |
 |---|---|
-| VM | `rcgapimtest.eastus2.cloudapp.azure.com` |
+| VM | `portal.your-institution.edu` |
 | WP admin | `admin` / `admin123` (default fallback — disabled when real rrp_admin users exist) |
-| VM user | `azureadmin` / `Microsoft12345` |
+| VM user | `<vm-user>` / *(set at provisioning)* |
 | Plugin path (VM) | `/var/www/html/wp-content/plugins/research-review-portal/` |
 | Local path | `d:\Development\CityU-Research-Tracker` |
 | Health endpoint | `GET /wp-json/rrp/v1/health` |

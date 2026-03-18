@@ -1,232 +1,338 @@
-# Deployment Guide — Research Review Portal
+# Deployment Guide — CityU Research Review Portal
 
-> **Recommended path: Option A (Docker).** Works on any machine with Docker Desktop — no PHP, Apache, or MySQL install required. Options B covers bare-metal / WSL Ubuntu for servers without Docker.
-
----
-
-## Production stack (what runs in production today)
-
-| Component  | Version            |
-|------------|--------------------|
-| OS         | Ubuntu 22.04 LTS   |
-| Web server | Apache 2.4.52      |
-| PHP        | 8.1.2              |
-| MySQL      | 8.0.45             |
-| WordPress  | 6.7                |
-| PHP ext.   | curl, gd, mbstring, mysqli, xml, zip, opcache |
+> **Current production:** Azure VM — HTTPS, WordPress 6.7, PHP 8.1
 
 ---
 
-## Option A — Docker (recommended)
+## Table of Contents
+
+1. [Option A — Docker (Recommended)](#1-option-a--docker-recommended)
+2. [Option B — Bare-metal / Azure VM](#2-option-b--bare-metal--azure-vm)
+3. [Updating an Existing Install](#3-updating-an-existing-install)
+4. [Enabling HTTPS (Let's Encrypt)](#4-enabling-https-lets-encrypt)
+5. [Microsoft Entra ID SSO Setup](#5-microsoft-entra-id-sso-setup)
+6. [Default Credentials](#6-default-credentials)
+7. [Environment Variables Reference](#7-environment-variables-reference)
+
+---
+
+## 1. Option A — Docker (Recommended)
 
 ### Prerequisites
-- [Docker Desktop](https://www.docker.com/products/docker-desktop/) installed and running  
-- The repository cloned to your local machine
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/) installed and running
+- Repository cloned to your local machine
 
-### Steps
+### 1.1 First-time setup
 
-**1. Create a `.env` file from the template:**
-```powershell
-# Windows PowerShell
-Copy-Item .env.example .env
-```
 ```bash
-# macOS / Linux / WSL
+# 1. Create your .env file
 cp .env.example .env
-```
+# Edit .env — set WP_URL to your server's URL (leave as http://localhost:8080 for local dev)
 
-Edit `.env` to set `WP_URL`:
-- **Local dev:** `WP_URL=http://localhost:8080` (default — no change needed)  
-- **Remote server on port 80:** `WP_URL=http://your-server.example.com` and `WP_PORT=80`
-
-**2. Build and start containers:**
-```bash
+# 2. Build and start containers
 make up
-# or without Make:
-docker compose up -d
-```
 
-**3. Install WordPress + activate plugin (first time only):**
-```bash
+# 3. Install WordPress + activate plugin (first time only)
 make init
-# or without Make:
-docker compose exec wordpress bash /usr/local/bin/docker-init.sh
 ```
 
-This command:
-- Installs WordPress core with the admin account from `.env`
-- Enables pretty permalinks (required for REST API)
-- Activates the Research Review Portal plugin
-- Creates the portal page and sets it as the front page
-- Fixes data directory write permissions
+### 1.2 Access the portal
 
-**4. Open the portal:**
-```
-http://localhost:8080          ← portal front page
-http://localhost:8080/wp-admin ← WordPress admin (admin / Admin1234!)
+| URL | Purpose |
+|-----|---------|
+| `http://localhost:8080` | Portal front page |
+| `http://localhost:8080/wp-admin` | WordPress admin |
+
+Default credentials after `make init`: `admin` / `Admin1234!`
+
+### 1.3 Create test users
+
+Run `make shell` to open a bash session inside the WordPress container, then:
+
+```bash
+wp user create student student@test.com --role=rrp_student --user_pass=test123 --allow-root
+wp user create reviewer reviewer@test.com --role=rrp_reviewer --user_pass=test123 --allow-root
+wp user create coordinator coord@test.com --role=rrp_coordinator --user_pass=test123 --allow-root
+wp user create rrpadmin admin@test.com --role=rrp_admin --user_pass=test123 --allow-root
 ```
 
-### Day-to-day commands
+### 1.4 Day-to-day commands
 
 | Command | Description |
 |---------|-------------|
 | `make up` | Start containers |
 | `make down` | Stop containers (data preserved) |
-| `make logs` | Tail Apache/PHP logs |
-| `make shell` | Open bash in the WordPress container |
-| `make build` | Rebuild the image after Dockerfile changes |
-| `make db-export` | Export DB → `data/rrp-db-export.sql` |
+| `make logs` | Tail Apache / PHP error log |
+| `make shell` | Bash inside WordPress container |
+| `make build` | Rebuild image after Dockerfile changes |
+| `make db-export` | Export MySQL → `data/rrp-db-export.sql` |
 | `make db-import` | Import `data/rrp-db-export.sql` |
-| `make reset` | ⚠ Destroy volumes and start fresh |
+| `make reset` | ⚠ Destroy all volumes and start fresh |
 
-### Redeploy to a different server
+### 1.5 Deploying to a remote server via Docker
 
-1. Clone the repo on the new server  
-2. Copy `.env.example` to `.env` and set `WP_URL=http://new-server` and `WP_PORT=80`  
-3. Run `make up && make init`  
-4. Optionally restore data: `make db-import` (after copying `data/rrp-db-export.sql`)
+1. Clone the repo on the remote server.
+2. Create `.env` with `WP_URL=http://your-server.example.com` and `WP_PORT=80`.
+3. Run `make up && make init`.
+4. (Optional) restore previous data: `make db-import` after copying `data/rrp-db-export.sql`.
 
-> **Note:** The `data/` folder (submissions, reviewers, config, uploads) is bind-mounted from the repo — it is automatically present without any import step.
+> The `data/` folder (submissions, reviewers, config, uploads) is bind-mounted from the repo — no additional import step is needed for JSON data.
 
 ---
 
-## Option B — Bare-metal Ubuntu / WSL
+## 2. Option B — Bare-metal / Azure VM
 
-Use this when Docker is not available (e.g., a plain Ubuntu VM).
+Use this when Docker is not available.
 
-### Prerequisites
-- Ubuntu 22.04 LTS (bare-metal, VM, or WSL2)
-- The repository cloned or accessible at any local path
+### 2.1 Prerequisites
+- Ubuntu 22.04 LTS
+- Sudo access
+- Repository cloned at any local path
 
-### Steps
+### 2.2 Installation
 
 ```bash
-# Set the public URL if not localhost
-export WP_URL="http://deployvm.cityu.edu"
+# Optional: set the public URL (defaults to http://localhost)
+export WP_URL="https://portal.your-institution.edu"
 
-# Run from anywhere inside the cloned repo
+# Run the install script
 chmod +x scripts/install-wsl.sh
 ./scripts/install-wsl.sh
 ```
 
-The script auto-detects the repo path from its own location — no manual path editing is needed.
+The script installs Apache, PHP 8.1, MySQL, WordPress, activates the plugin, sets up pretty permalinks, and fixes data directory permissions.
 
-After installation, start services on every boot:
+### 2.3 Start services on boot
 
 ```bash
-sudo service mysql  start
 sudo service apache2 start
+sudo service mysql start
 ```
 
-### Change the public URL on an existing WSL install
+Or enable systemd:
+```bash
+sudo systemctl enable apache2 mysql
+```
+
+### 2.4 Change the public URL on an existing install
 
 ```bash
-# Quick swap — updates DB option and wp-config constants
-export NEW_URL="http://new-hostname.example.com"
+export NEW_URL="https://new-hostname.example.com"
 ./scripts/set-public-url.sh "$NEW_URL"
 ```
 
----
+This updates both the WordPress database `siteurl`/`home` options and the `wp-config.php` constants.
 
-## Data persistence
+### 2.5 Deploy updated plugin files
 
-| What | Location | Notes |
-|------|----------|-------|
-| Submissions, config, reviewers | `data/*.json` | In the repo — bind-mounted in Docker |
-| Uploaded documents | `data/uploads/` | In the repo — bind-mounted in Docker |
-| WordPress user accounts | MySQL `wordpress` DB | Stored in Docker named volume `db_data` |
-| WordPress core files | `/var/www/html` | Stored in Docker named volume `wp_data` |
-
-To back up everything in Docker:
+After making code changes, copy modified files to the plugin directory:
 
 ```bash
-make db-export          # writes data/rrp-db-export.sql
-git add data/           # commits JSON data + db dump
+PLUGIN=/var/www/html/wp-content/plugins/research-review-portal
+
+# Copy one file
+sudo cp assets/portal.js $PLUGIN/assets/portal.js
+
+# Or sync the whole plugin (excludes data/ to protect live data)
+sudo rsync -av --exclude='data/' ./ $PLUGIN/
+```
+
+To deploy from a Windows development machine via paramiko (Python SFTP):
+
+```python
+import paramiko, os
+
+client = paramiko.SSHClient()
+client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+client.connect('portal.your-institution.edu',
+               username='<vm-user>', password='<password>', timeout=30)
+sftp = client.open_sftp()
+sftp.put('assets/portal.js',
+         '/var/www/html/wp-content/plugins/research-review-portal/assets/portal.js')
+sftp.close()
+client.close()
+```
+
+### 2.6 File permissions
+
+The web server user must have read/write access to the `data/` directory:
+
+```bash
+sudo chown -R www-data:www-data \
+  /var/www/html/wp-content/plugins/research-review-portal/data
+sudo chmod -R 775 \
+  /var/www/html/wp-content/plugins/research-review-portal/data
+```
+
+### 2.7 PHP configuration
+
+The plugin requires these PHP settings (set in a custom `.ini` drop-in or `php.ini`):
+
+```ini
+upload_max_filesize = 64M
+post_max_size       = 64M
+memory_limit        = 256M
+max_execution_time  = 60
+```
+
+On Ubuntu with PHP 8.1:
+```bash
+echo -e "upload_max_filesize=64M\npost_max_size=64M\nmemory_limit=256M\nmax_execution_time=60" \
+  | sudo tee /etc/php/8.1/apache2/conf.d/99-rrp.ini
+sudo service apache2 restart
+```
+
+### 2.8 Verify installation
+
+```bash
+curl -sf https://localhost/wp-json/research-portal/v1/health
+# Expected: {"ok":true,"bootId":<number>}
 ```
 
 ---
 
-## Default credentials
+## 3. Updating an Existing Install
 
-| Role | Username | Password |
-|------|----------|----------|
-| WP Admin | `admin` | `Admin1234!` |
+### 3.1 Docker
+
+```bash
+# Pull latest code
+git pull
+
+# Rebuild and restart
+make build
+make down
+make up
+```
+
+If the database schema changed (rare), run `make init` again — it is idempotent.
+
+### 3.2 Bare-metal (production Azure VM)
+
+Deploy changed files directly to the plugin directory:
+
+```bash
+ssh <vm-user>@portal.your-institution.edu
+cd /var/www/html/wp-content/plugins/research-review-portal
+
+# Pull if deployed from git
+git pull
+
+# Or copy specific files from dev machine (using paramiko/SFTP as shown in 2.5)
+```
+
+After updating `class-portal-rest.php` or `research-review-portal.php`, flush rewrite rules:
+```bash
+wp --path=/var/www/html --allow-root rewrite flush
+```
+
+---
+
+## 4. Enabling HTTPS (Let's Encrypt)
+
+Microsoft Entra SSO requires HTTPS. The production VM already has HTTPS active. Use this section when setting up a new server.
+
+### 4.1 Open port 443 in Azure NSG
+
+In the Azure Portal → VM → **Networking** → **Network Security Group** → **Add inbound rule**:
+- Destination port: `443`, Protocol: TCP, Action: Allow, Priority: `340`, Name: `HTTPS`
+
+### 4.2 Run the HTTPS setup script
+
+```bash
+ssh <vm-user>@portal.your-institution.edu
+cd /var/www/html/wp-content/plugins/research-review-portal
+sudo bash scripts/enable-https.sh
+```
+
+The script:
+- Installs Certbot + Apache plugin
+- Obtains a Let's Encrypt certificate for your domain
+- Configures HTTP → HTTPS redirect
+- Updates WordPress `siteurl` / `home` to `https://`
+- Installs auto-renewal cron (certificates renew every 60 days; valid for 90)
+
+The script is idempotent — safe to re-run.
+
+### 4.3 Verify HTTPS
+
+```bash
+curl -I http://your-domain.example.com   # should return 301 redirect
+curl -I https://your-domain.example.com  # should return 200
+```
+
+### 4.4 Test certificate renewal
+
+```bash
+sudo certbot renew --dry-run
+```
+
+---
+
+## 5. Microsoft Entra ID SSO Setup
+
+### 5.1 Create the App Registration
+
+1. In the [Azure Portal](https://portal.azure.com) → **Microsoft Entra ID** → **App registrations** → **New registration**.
+2. Name: `CityU Research Review Portal`
+3. Redirect URI (Web): `https://your-domain/wp-json/research-portal/v1/auth/callback`
+4. Click **Register**.
+
+### 5.2 Configure the App Registration
+
+1. **Certificates & secrets** → **New client secret** → copy the value immediately.
+2. **Overview** — note the **Application (client) ID** and **Directory (tenant) ID**.
+3. **Authentication** — enable **ID tokens** under Implicit grant.
+
+### 5.3 Configure the Portal
+
+In the portal, log in as an Admin and go to **Administration → Portal Settings → SSO**.
+
+| Field | Value |
+|-------|-------|
+| Tenant ID | Directory (tenant) ID from App Registration |
+| Client ID | Application (client) ID from App Registration |
+| Client Secret | Secret value you copied |
+| Redirect URI | `https://your-domain/wp-json/research-portal/v1/auth/callback` |
+| Enable SSO | Toggle On |
+
+Click **Save**. The "Sign in with Microsoft" button will appear on the login page.
+
+### 5.4 User provisioning
+
+On first SSO login, the portal automatically creates a WordPress user account for the user. New SSO users are assigned the `rrp_student` role by default. An admin can then change the role from the Users panel.
+
+---
+
+## 6. Default Credentials
+
+| Where | Username | Password |
+|-------|----------|----------|
+| WordPress Admin (Docker) | `admin` | `Admin1234!` |
 | Test student | `student@test.com` | `test123` |
 | Test reviewer | `reviewer@test.com` | `test123` |
 | Test coordinator | `coordinator@test.com` | `test123` |
 | Test portal admin | `rrpadmin@test.com` | `test123` |
+| Production VM (SSH) | `<vm-user>` | *(set at VM provisioning)* |
 
-> Change all passwords before exposing to the internet.
-
----
-
-## Post-install: Create test users
-
-The `make init` / `docker-init.sh` script creates the WordPress admin only. Create role-specific test users with WP-CLI (run inside the container with `make shell`):
-
-```bash
-wp user create student      student@test.com      --role=rrp_student      --user_pass=test123 --allow-root
-wp user create reviewer     reviewer@test.com     --role=rrp_reviewer     --user_pass=test123 --allow-root
-wp user create coordinator  coordinator@test.com  --role=rrp_coordinator  --user_pass=test123 --allow-root
-wp user create rrpadmin     rrpadmin@test.com     --role=rrp_admin        --user_pass=test123 --allow-root
-```
+> **Change all default passwords before exposing the site to the internet.**
 
 ---
 
-## Quick smoke test
+## 7. Environment Variables Reference
 
-| Step | URL / action | Expected result |
-|------|-------------|-----------------|
-| 1 | `/wp-json/research-portal/v1/health` | `{"ok":true,"bootId":"<number>"}` |
-| 2 | Log in as `student@test.com`, open portal | Submission form visible |
-| 3 | Submit a conference abstract | Confirmation with reference ID |
-| 4 | Log in as `reviewer@test.com`, open Reviewer Dashboard | Assigned submission listed |
-| 5 | Log in as `rrpadmin@test.com`, open Dashboard | All submissions listed |
-| 6 | Click **📋 Log** on any submission | Slide-in audit log with timestamped events |
+All variables come from `.env` (copy from `.env.example`):
 
----
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `WP_URL` | `http://localhost:8080` | Public URL of the portal |
+| `WP_PORT` | `8080` | Host port mapped to container port 80 |
+| `WP_ADMIN_USER` | `admin` | WordPress admin username |
+| `WP_ADMIN_PASS` | `Admin1234!` | WordPress admin password |
+| `WP_ADMIN_EMAIL` | `admin@example.com` | WordPress admin email |
+| `MYSQL_ROOT_PASSWORD` | `rootpass` | MySQL root password (Docker only) |
+| `MYSQL_DATABASE` | `wordpress` | MySQL database name |
+| `MYSQL_USER` | `wp` | MySQL application user |
+| `MYSQL_PASSWORD` | `wp_test_pass` | MySQL application password |
 
-## Troubleshooting
-
-| Symptom | Fix |
-|---------|-----|
-| REST API returns 401 | Set WordPress permalinks to **Post name** (Settings → Permalinks → Save) |
-| JSON write errors / submissions not saving | `chmod -R 777 data/` inside the plugin folder, or re-run `make init` |
-| "Portal API not configured" on page | Plugin not activated — run `make init` or activate via WP Admin → Plugins |
-| Roles not in Add User dropdown | Deactivate and re-activate the plugin (role registration runs on activation hook) |
-| File uploads silently fail | Verify `data/uploads/` exists and is writable; check `upload_max_filesize` in php.ini |
-| Chrome redirects to localhost | Ensure `WP_URL` in `.env` matches the hostname you are browsing from, then `make down && make up` |
-| Container won't start (port conflict) | Change `WP_PORT` in `.env` to an unused port and `make down && make up` |
-
----
-
-## Exposing a Docker container to the internet
-
-Set `WP_URL` and `WP_PORT` in `.env`, then rebuild:
-
-```bash
-# Example: public VM at deployvm.cityu.edu, port 80
-echo "WP_URL=http://deployvm.cityu.edu" >> .env
-echo "WP_PORT=80" >> .env
-make down
-make up
-make init   # only if first time on this server
-```
-
-**Azure NSG checklist** (portal → VM → Networking → Inbound port rules):
-
-| Check | Detail |
-|-------|--------|
-| TCP port 80 open | Inbound rule from Any → Any, port 80 |
-| Public IP is Static | VM → Overview → Public IP → Configuration |
-| Optional: port 443 | For HTTPS via Certbot |
-
-### Adding HTTPS (optional)
-
-```bash
-make shell
-apt-get install -y certbot python3-certbot-apache
-certbot --apache -d <YOUR-VM-HOSTNAME>
-```
-
-Then update `.env` with `WP_URL=https://...`, `make down && make up`.
+These variables are used by `docker-compose.yml` and `scripts/docker-init.sh`. They are not read at runtime by the PHP plugin (which uses WordPress's own database connection).
