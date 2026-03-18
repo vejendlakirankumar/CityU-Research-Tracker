@@ -506,11 +506,11 @@
 .rrp-portal .rrp-feedback-body blockquote { border-left: 3px solid #ccc; margin: 0.4rem 0; padding-left: 0.75rem; color: #555; }
 
 /* ── Built-in rich-text editor (no CDN — strict CSP compatible) ── */
-.rrp-portal .rrp-rte-toolbar { display: flex; flex-wrap: wrap; gap: .2rem; padding: .3rem .45rem; background: #f9fafb; border: 1px solid var(--rrp-border, #ddd); border-bottom: none; border-radius: .3rem .3rem 0 0; user-select: none; }
-.rrp-portal .rrp-rte-btn { padding: .15rem .45rem; border: 1px solid #d1d5db; border-radius: .2rem; background: #fff; font-size: .8rem; cursor: pointer; line-height: 1.4; min-width: 1.6rem; }
-.rrp-portal .rrp-rte-btn:hover, .rrp-portal .rrp-rte-btn:focus { background: #e5e7eb; outline: none; }
+.rrp-portal .rrp-rte-toolbar { display: flex; flex-wrap: wrap; gap: .2rem; padding: .3rem .45rem; background: #f9fafb; border: 1px solid var(--rrp-border, #ddd); border-bottom: none; border-radius: .3rem .3rem 0 0; user-select: none; color: #111827; }
+.rrp-portal .rrp-rte-btn { padding: .15rem .45rem; border: 1px solid #d1d5db; border-radius: .2rem; background: #fff; color: #111827; font-size: .8rem; cursor: pointer; line-height: 1.4; min-width: 1.6rem; }
+.rrp-portal .rrp-rte-btn:hover, .rrp-portal .rrp-rte-btn:focus { background: #e5e7eb; color: #111827; outline: none; }
 .rrp-portal .rrp-rte-sep { width: 1px; background: #d1d5db; margin: .1rem .15rem; align-self: stretch; }
-.rrp-portal .rrp-rte-editor { min-height: 120px; padding: .5rem .6rem; border: 1px solid var(--rrp-border, #ddd); border-radius: 0 0 .3rem .3rem; background: #fff; font-size: .9rem; line-height: 1.55; outline: none; overflow-y: auto; word-break: break-word; }
+.rrp-portal .rrp-rte-editor { min-height: 120px; padding: .5rem .6rem; border: 1px solid var(--rrp-border, #ddd); border-radius: 0 0 .3rem .3rem; background: #fff; color: #111827; font-size: .9rem; line-height: 1.55; outline: none; overflow-y: auto; word-break: break-word; }
 .rrp-portal .rrp-rte-editor.rrp-rte-empty::before { content: attr(data-placeholder); color: #9ca3af; pointer-events: none; display: block; }
 
 /* ── Type badge ── */
