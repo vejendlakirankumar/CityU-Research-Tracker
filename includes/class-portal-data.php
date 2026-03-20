@@ -91,6 +91,28 @@ class Portal_Data {
 		if ( ! file_exists( RRP_UPLOADS_DIR ) ) {
 			wp_mkdir_p( RRP_UPLOADS_DIR );
 		}
+		// Block direct HTTP access to both directories.
+		self::write_dir_protection( RRP_DATA_DIR );
+		self::write_dir_protection( RRP_UPLOADS_DIR );
+	}
+
+	/**
+	 * Write .htaccess and index.php into a directory to prevent direct web access.
+	 * .htaccess covers Apache with AllowOverride enabled.
+	 * index.php (silence is golden) prevents directory listing as a fallback.
+	 */
+	private static function write_dir_protection( string $dir ) {
+		$htaccess = $dir . '.htaccess';
+		if ( ! file_exists( $htaccess ) ) {
+			$rules  = "# Block all direct HTTP access to this directory.\n";
+			$rules .= "<IfModule mod_authz_core.c>\n    Require all denied\n</IfModule>\n";
+			$rules .= "<IfModule !mod_authz_core.c>\n    Order deny,allow\n    Deny from all\n</IfModule>\n";
+			file_put_contents( $htaccess, $rules, LOCK_EX );
+		}
+		$index = $dir . 'index.php';
+		if ( ! file_exists( $index ) ) {
+			file_put_contents( $index, "<?php\n// Silence is golden.\n", LOCK_EX );
+		}
 	}
 
 	/** Sanitize filename for storage (match Node sanitizeFilename). */
@@ -864,7 +886,14 @@ class Portal_Data {
 				return false;
 			} ) );
 		}
-		return $subs; // no filter = all
+		// Coordinator scoped to specific submission types (from reviewers.json authorization)
+		if ( ! empty( $params['submissionTypes'] ) && is_array( $params['submissionTypes'] ) ) {
+			$types = array_map( 'strtolower', array_map( 'trim', $params['submissionTypes'] ) );
+			return array_values( array_filter( $subs, function ( $s ) use ( $types ) {
+				return in_array( strtolower( trim( (string) ( $s['type'] ?? '' ) ) ), $types, true );
+			} ) );
+		}
+		return $subs; // no filter = all (admin path)
 	}
 
 	public static function get_review_criteria_templates() {

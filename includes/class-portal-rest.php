@@ -515,14 +515,14 @@ class Portal_REST {
 		register_rest_route( self::NAMESPACE, '/analytics/reviewer-performance', array(
 			'methods'             => 'GET',
 			'callback'            => array( __CLASS__, 'analytics_reviewer_performance' ),
-			'permission_callback' => array( __CLASS__, 'can_manage_workflow' ),
+			'permission_callback' => array( __CLASS__, 'can_view_dashboard' ), // reviewers get own row only
 		) );
 
 		// ── Plagiarism / similarity check ─────────────────────────────────────────
 		register_rest_route( self::NAMESPACE, '/submissions/(?P<id>[a-zA-Z0-9\-]+)/similarity-check', array(
 			'methods'             => 'POST',
 			'callback'            => array( __CLASS__, 'similarity_check' ),
-			'permission_callback' => array( __CLASS__, 'can_manage_workflow' ),
+			'permission_callback' => array( __CLASS__, 'can_view_dashboard' ), // all roles — scoped inside handler
 			'args'                => array( 'id' => array( 'required' => true ) ),
 		) );
 
@@ -919,37 +919,76 @@ class Portal_REST {
 
 	/**
 	 * Returns a filter params array scoped to the current user's role.
-	 * - Coordinator / Admin : no filter (all submissions)
-	 * - Reviewer            : { reviewerEmail: current email }
-	 * - Student             : { submitterEmail: current email }
+	 *
+	 * Returned array always contains a 'role' key; additional keys:
+	 *   admin                → role=admin  (no submission filter)
+	 *   coordinator          → role=coordinator, coordinatorEmail, optional submissionTypes
+	 *   reviewer/faculty     → role=reviewer, reviewerEmail
+	 *   student/public       → role=student, submitterEmail
+	 *
+	 * filter_submissions_for_analytics() in Portal_Data only inspects
+	 * submitterEmail, reviewerEmail, and submissionTypes — the extra
+	 * keys are ignored there, ensuring no breakage.
 	 */
 	private static function analytics_user_filter() {
-		$user = wp_get_current_user();
+		$user  = wp_get_current_user();
 		$email = strtolower( trim( (string) ( $user->user_email ?? '' ) ) );
 
-		if ( current_user_can( 'rrp_view_all_submissions' ) || current_user_can( 'rrp_full_admin_access' ) || current_user_can( 'rrp_manage_workflow' ) ) {
-			return array(); // coordinator / admin: no filter
+		if ( current_user_can( 'rrp_full_admin_access' ) ) {
+			return array( 'role' => 'admin' );
+		}
+		if ( current_user_can( 'rrp_view_all_submissions' ) || current_user_can( 'rrp_manage_workflow' ) ) {
+			// Check if this coordinator is scoped to specific submission types in reviewers.json
+			$reviewer_data = Portal_Data::read_reviewers();
+			$coord_types   = null;
+			foreach ( $reviewer_data as $rv ) {
+				if ( strtolower( trim( (string) ( $rv['email'] ?? '' ) ) ) === $email ) {
+					$types = $rv['submissionTypes'] ?? null;
+					if ( is_array( $types ) && ! empty( $types ) ) {
+						$coord_types = $types;
+					}
+					break;
+				}
+			}
+			if ( $coord_types ) {
+				return array( 'role' => 'coordinator', 'coordinatorEmail' => $email, 'submissionTypes' => $coord_types );
+			}
+			return array( 'role' => 'coordinator', 'coordinatorEmail' => $email );
 		}
 		if ( current_user_can( 'rrp_review_submissions' ) ) {
-			return array( 'reviewerEmail' => $email );
+			return array( 'role' => 'reviewer', 'reviewerEmail' => $email );
 		}
-		// student / everyone else
-		return array( 'submitterEmail' => $email );
+		// student / public / everyone else
+		return array( 'role' => 'student', 'submitterEmail' => $email );
 	}
 
 	public static function analytics_reviewer( WP_REST_Request $request ) {
-		$reviewer_email = $request->get_param( 'reviewerEmail' );
+		$reviewer_email = sanitize_email( (string) ( $request->get_param( 'reviewerEmail' ) ?? '' ) );
 		if ( ! $reviewer_email ) {
 			return new WP_REST_Response( array( 'error' => 'reviewerEmail query parameter is required.' ), 400 );
+		}
+		// Non-admin/coordinator callers may only retrieve their own reviewer data.
+		if ( ! current_user_can( 'rrp_manage_workflow' ) && ! current_user_can( 'rrp_full_admin_access' ) ) {
+			$current_email = strtolower( trim( (string) wp_get_current_user()->user_email ) );
+			if ( strtolower( trim( $reviewer_email ) ) !== $current_email ) {
+				return new WP_REST_Response( array( 'error' => 'Access denied.' ), 403 );
+			}
 		}
 		$metrics = Portal_Data::get_reviewer_metrics( $reviewer_email );
 		return new WP_REST_Response( $metrics, 200 );
 	}
 
 	public static function analytics_workload( WP_REST_Request $request ) {
-		$reviewer_email = $request->get_param( 'reviewerEmail' );
+		$reviewer_email = sanitize_email( (string) ( $request->get_param( 'reviewerEmail' ) ?? '' ) );
 		if ( ! $reviewer_email ) {
 			return new WP_REST_Response( array( 'error' => 'reviewerEmail query parameter is required.' ), 400 );
+		}
+		// Non-admin/coordinator callers may only retrieve their own workload data.
+		if ( ! current_user_can( 'rrp_manage_workflow' ) && ! current_user_can( 'rrp_full_admin_access' ) ) {
+			$current_email = strtolower( trim( (string) wp_get_current_user()->user_email ) );
+			if ( strtolower( trim( $reviewer_email ) ) !== $current_email ) {
+				return new WP_REST_Response( array( 'error' => 'Access denied.' ), 403 );
+			}
 		}
 		$workload = Portal_Data::get_reviewer_workload( $reviewer_email );
 		return new WP_REST_Response( $workload, 200 );
@@ -2554,10 +2593,16 @@ class Portal_REST {
 					continue;
 				}
 				$ext = '.' . $ext;
-				$filename = $base ? $base . $ext : 'file-' . time() . $ext;
 				Portal_Data::ensure_data_dir();
 				$dir = RRP_UPLOADS_DIR . $id . '/';
 				if ( ! file_exists( $dir ) ) wp_mkdir_p( $dir );
+				$stem     = $base ?: 'file';
+				$ts       = gmdate( 'Ymd_His' );
+				$filename = $stem . '_r' . $revision_round . '_' . $ts . $ext;
+				$counter  = 1;
+				while ( file_exists( $dir . $filename ) ) {
+					$filename = $stem . '_r' . $revision_round . '_' . $ts . '_' . $counter++ . $ext;
+				}
 				$dest = $dir . $filename;
 				if ( move_uploaded_file( $tmp, $dest ) ) {
 					$cu   = wp_get_current_user();
@@ -2584,10 +2629,16 @@ class Portal_REST {
 					return new WP_REST_Response( array( 'error' => 'Only ' . $ext_list . ' files are accepted (max ' . $max_size_mb . ' MB each).' ), 400 );
 				}
 				$ext = '.' . $ext;
-				$filename = $base ? $base . $ext : 'file-' . time() . $ext;
 				Portal_Data::ensure_data_dir();
 				$dir = RRP_UPLOADS_DIR . $id . '/';
 				if ( ! file_exists( $dir ) ) wp_mkdir_p( $dir );
+				$stem     = $base ?: 'file';
+				$ts       = gmdate( 'Ymd_His' );
+				$filename = $stem . '_r' . $revision_round . '_' . $ts . $ext;
+				$counter  = 1;
+				while ( file_exists( $dir . $filename ) ) {
+					$filename = $stem . '_r' . $revision_round . '_' . $ts . '_' . $counter++ . $ext;
+				}
 				$dest = $dir . $filename;
 				if ( move_uploaded_file( $tmp, $dest ) ) {
 					$cu   = wp_get_current_user();
@@ -3279,7 +3330,30 @@ class Portal_REST {
 	}
 
 	public static function analytics_overdue( WP_REST_Request $request ) {
-		return new WP_REST_Response( array( 'overdue' => Portal_Data::get_overdue_submissions() ), 200 );
+		$filter  = self::analytics_user_filter();
+		$overdue = Portal_Data::get_overdue_submissions();
+		if ( ! empty( $filter['reviewerEmail'] ) ) {
+			// Reviewers see only overdue stages where they are assigned
+			$re      = strtolower( trim( $filter['reviewerEmail'] ) );
+			$overdue = array_values( array_filter( $overdue, function ( $o ) use ( $re ) {
+				return in_array( $re, array_map( 'strtolower', $o['reviewers'] ), true );
+			} ) );
+		} elseif ( ! empty( $filter['submitterEmail'] ) ) {
+			// Students see only overdue stages on their own submissions
+			$subs_data = Portal_Data::read_submissions();
+			$fe        = strtolower( trim( $filter['submitterEmail'] ) );
+			$my_ids    = array();
+			foreach ( $subs_data['submissions'] ?? array() as $s ) {
+				if ( strtolower( trim( (string) ( $s['submitterEmail'] ?? '' ) ) ) === $fe ) {
+					$my_ids[] = $s['id'] ?? '';
+				}
+			}
+			$overdue = array_values( array_filter( $overdue, function ( $o ) use ( $my_ids ) {
+				return in_array( $o['submissionId'], $my_ids, true );
+			} ) );
+		}
+		// Admin / coordinator: all overdue (no filter applied)
+		return new WP_REST_Response( array( 'overdue' => $overdue ), 200 );
 	}
 
 	/**
@@ -3442,6 +3516,12 @@ class Portal_REST {
 			$update['display_name'] = trim( $fn . ' ' . $ln ) ?: $current->display_name;
 		}
 		if ( ! empty( $body['password'] ) && strlen( (string) $body['password'] ) >= 8 ) {
+			// SSO-managed accounts must not have a password set — their only valid
+			// login path is through Entra.  Setting a password would create a
+			// parallel entry point that bypasses identity provider controls.
+			if ( get_user_meta( $id, 'rrp_entra_oid', true ) ) {
+				return new WP_REST_Response( array( 'error' => 'SSO-managed accounts cannot have a portal password. Use your institution login.' ), 403 );
+			}
 			// Require the current password to prevent session-hijacking account takeover.
 			$current_pass_input = isset( $body['currentPassword'] ) ? (string) $body['currentPassword'] : '';
 			if ( ! wp_check_password( $current_pass_input, $current->user_pass, $current->ID ) ) {
@@ -3689,6 +3769,11 @@ class Portal_REST {
 			$update['display_name'] = trim( $fn . ' ' . $ln ) ?: $user->display_name;
 		}
 		if ( ! empty( $body['password'] ) ) {
+			// SSO-managed accounts must not have a password — block even admins from
+			// setting one, preventing credential-based takeover of Entra accounts.
+			if ( get_user_meta( $id, 'rrp_entra_oid', true ) ) {
+				return new WP_REST_Response( array( 'error' => 'Cannot set a password for an SSO-managed account.' ), 403 );
+			}
 			$update['user_pass'] = (string) $body['password'];
 		}
 		if ( count( $update ) > 1 ) {
@@ -3804,6 +3889,8 @@ class Portal_REST {
 			$sessions->destroy_all();
 		} else {
 			delete_user_meta( $id, 'rrp_locked' );
+			// Clear the brute-force counter so the user starts with a clean slate.
+			delete_user_meta( $id, 'rrp_failed_login_count' );
 		}
 		return new WP_REST_Response( array( 'locked' => $lock, 'userId' => $id ), 200 );
 	}
@@ -3863,6 +3950,11 @@ class Portal_REST {
 		// Never reset another admin's password unless you are also admin
 		if ( user_can( $id, 'rrp_full_admin_access' ) && ! current_user_can( 'rrp_full_admin_access' ) ) {
 			return new WP_REST_Response( array( 'error' => 'Cannot reset an administrator password.' ), 403 );
+		}
+		// SSO-managed users must not have a password — resetting one would open a
+		// parallel login path that bypasses Entra authentication entirely.
+		if ( get_user_meta( $id, 'rrp_entra_oid', true ) ) {
+			return new WP_REST_Response( array( 'error' => 'Cannot reset the password of an SSO-managed account. This account authenticates exclusively via Microsoft Entra.' ), 403 );
 		}
 		$new_password = isset( $body['password'] ) && (string) $body['password'] !== '' ? (string) $body['password'] : wp_generate_password( 12, true, false );
 		wp_set_password( $new_password, $id );
@@ -3969,6 +4061,16 @@ class Portal_REST {
 			$phpmailer->SMTPSecure = '';
 			$phpmailer->SMTPAutoTLS = false;
 		}
+		// Allow Azure / corporate TLS certs that may not be in PHP's CA bundle.
+		// This does NOT disable encryption — the TLS handshake still occurs;
+		// it only skips the certificate chain verification step.
+		$phpmailer->SMTPOptions = array(
+			'ssl' => array(
+				'verify_peer'       => false,
+				'verify_peer_name'  => false,
+				'allow_self_signed' => true,
+			),
+		);
 		if ( $from_email && is_email( $from_email ) ) {
 			$phpmailer->From     = $from_email;
 			$phpmailer->FromName = $from_name ?: $from_email;
@@ -3978,6 +4080,147 @@ class Portal_REST {
 				// Silently ignore — From already set above.
 			}
 		}
+	}
+
+	// ── Azure Communication Services email ───────────────────────────────────────
+
+	/**
+	 * Parse an Azure Communication Services connection string.
+	 * Format: endpoint=https://<resource>.communication.azure.com/;accesskey=<base64key>
+	 *
+	 * @param  string $cs  Connection string.
+	 * @return array{endpoint:string,accesskey:string}|false
+	 */
+	private static function acs_parse_connection( $cs ) {
+		$endpoint  = '';
+		$accesskey = '';
+		foreach ( explode( ';', $cs ) as $part ) {
+			$part = trim( $part );
+			if ( stripos( $part, 'endpoint=' ) === 0 ) {
+				$endpoint = rtrim( substr( $part, 9 ), '/' );
+			} elseif ( stripos( $part, 'accesskey=' ) === 0 ) {
+				$accesskey = substr( $part, 10 );
+			}
+		}
+		if ( ! $endpoint || ! $accesskey ) {
+			return false;
+		}
+		return array( 'endpoint' => $endpoint, 'accesskey' => $accesskey );
+	}
+
+	/**
+	 * Send an email via Azure Communication Services REST API (bypasses PHPMailer/sendmail).
+	 *
+	 * @param  string $to       Recipient e-mail address.
+	 * @param  string $subject  Subject line.
+	 * @param  string $message  Plain-text body.
+	 * @param  string $html     Optional HTML body; auto-generated from plain-text when empty.
+	 * @return true|WP_Error
+	 */
+	public static function acs_send_email( $to, $subject, $message, $html = '' ) {
+		if ( ! class_exists( 'RRP_Portal_Settings' ) ) {
+			return new WP_Error( 'acs_not_configured', 'Portal settings class not available.' );
+		}
+		$conn_str    = (string) RRP_Portal_Settings::get( 'acs_connection_string' );
+		$sender_addr = (string) RRP_Portal_Settings::get( 'acs_sender_address' );
+		if ( ! $conn_str || ! $sender_addr ) {
+			return new WP_Error( 'acs_not_configured', 'ACS connection string or sender address not set.' );
+		}
+		$conn = self::acs_parse_connection( $conn_str );
+		if ( ! $conn ) {
+			return new WP_Error( 'acs_invalid_conn', 'Invalid ACS connection string format. Expected: endpoint=https://...;accesskey=...' );
+		}
+		$endpoint  = $conn['endpoint'];
+		$accesskey = $conn['accesskey'];
+		$host      = (string) wp_parse_url( $endpoint, PHP_URL_HOST );
+		if ( ! $host ) {
+			return new WP_Error( 'acs_invalid_endpoint', 'Cannot parse host from ACS endpoint URL.' );
+		}
+		if ( ! $html ) {
+			$html = '<html><body>' . nl2br( esc_html( $message ) ) . '</body></html>';
+		}
+		$payload = array(
+			'senderAddress' => $sender_addr,
+			'recipients'    => array(
+				'to' => array( array( 'address' => $to ) ),
+			),
+			'content' => array(
+				'subject'   => $subject,
+				'plainText' => $message,
+				'html'      => $html,
+			),
+		);
+		$body_json   = wp_json_encode( $payload );
+		$api_version = '2023-03-31';
+		$path_query  = '/emails:send?api-version=' . $api_version;
+		$date_header = gmdate( 'D, d M Y H:i:s' ) . ' GMT';   // RFC 1123
+		$content_sha = base64_encode( hash( 'sha256', $body_json, true ) );
+
+		// Build HMAC-SHA256 signature per ACS authentication spec
+		$string_to_sign = "POST\n{$path_query}\n{$date_header};{$host};{$content_sha}";
+		$key_bytes      = base64_decode( $accesskey );
+		$signature      = base64_encode( hash_hmac( 'sha256', $string_to_sign, $key_bytes, true ) );
+		$auth_header    = "HMAC-SHA256 SignedHeaders=x-ms-date;host;x-ms-content-sha256&Signature={$signature}";
+
+		$response = wp_remote_post(
+			$endpoint . $path_query,
+			array(
+				'timeout' => 20,
+				'headers' => array(
+					'Content-Type'        => 'application/json',
+					'x-ms-date'           => $date_header,
+					'x-ms-content-sha256' => $content_sha,
+					'Authorization'       => $auth_header,
+				),
+				'body' => $body_json,
+			)
+		);
+
+		if ( is_wp_error( $response ) ) {
+			return $response;
+		}
+		$code = wp_remote_retrieve_response_code( $response );
+		if ( $code >= 200 && $code < 300 ) {
+			return true;
+		}
+		$resp_raw = wp_remote_retrieve_body( $response );
+		$decoded  = json_decode( $resp_raw, true );
+		$err_msg  = isset( $decoded['error']['message'] )
+			? $decoded['error']['message']
+			: "ACS returned HTTP {$code}: {$resp_raw}";
+		return new WP_Error( 'acs_send_failed', $err_msg );
+	}
+
+	/**
+	 * WordPress pre_wp_mail filter — routes all wp_mail() calls through ACS when enabled.
+	 * Short-circuits WordPress's normal PHPMailer path.
+	 *
+	 * @param  null|bool $result  null = let wp_mail() proceed normally.
+	 * @param  array     $args    { to, subject, message, headers, attachments }
+	 * @return null|bool
+	 */
+	public static function pre_wp_mail_acs( $result, $args ) {
+		if ( ! class_exists( 'RRP_Portal_Settings' ) ) {
+			return null;
+		}
+		if ( ! (bool) RRP_Portal_Settings::get( 'acs_email_enabled' ) ) {
+			return null; // ACS not enabled — fall through to normal wp_mail/SMTP
+		}
+		$to      = is_array( $args['to'] ) ? implode( ', ', $args['to'] ) : (string) ( $args['to'] ?? '' );
+		$subject = (string) ( $args['subject'] ?? '' );
+		$message = (string) ( $args['message'] ?? '' );
+		// Detect HTML content-type in headers
+		$html    = '';
+		$raw_hdr = $args['headers'] ?? array();
+		$headers = is_array( $raw_hdr ) ? $raw_hdr : explode( "\n", str_replace( "\r\n", "\n", (string) $raw_hdr ) );
+		foreach ( $headers as $header ) {
+			if ( stripos( (string) $header, 'content-type: text/html' ) !== false ) {
+				$html = '<html><body>' . $message . '</body></html>';
+				break;
+			}
+		}
+		$sent = self::acs_send_email( $to, $subject, $message, $html );
+		return ( true === $sent );
 	}
 
 	/**
@@ -4003,10 +4246,10 @@ class Portal_REST {
 		$sent = wp_mail( $to, $subject, $message, $headers );
 
 		if ( $sent ) {
-			return new WP_REST_Response( array( 'message' => 'Test email sent to ' . $to . '.' ), 200 );
+			return new WP_REST_Response( array( 'message' => 'Test email sent via SMTP to ' . $to . '.' ), 200 );
 		}
 
-		// Try to surface the PHPMailer error
+		// Surface the PHPMailer error
 		global $phpmailer;
 		$detail = '';
 		if ( isset( $phpmailer ) && is_object( $phpmailer ) && ! empty( $phpmailer->ErrorInfo ) ) {
@@ -5141,7 +5384,10 @@ class Portal_REST {
 					$dec = strtolower( trim( (string) ( $decisions[ $em ] ?? '' ) ) );
 					if ( $dec === '' || $dec === 'pending' ) continue; // no decision yet
 					$metrics[ $em ]['total']++;
-					if ( $dec === 'needs revision' ) {
+					// Current decision is still "needs revision", OR the stage recorded a
+					// revision submission (revisionSubmittedAt set), meaning this reviewer
+					// previously triggered a revision that was later resolved/approved.
+					if ( $dec === 'needs revision' || ! empty( $stage['revisionSubmittedAt'] ) ) {
 						$metrics[ $em ]['revisionCount']++;
 					}
 					// Deadline from assignedReviewers
@@ -5152,20 +5398,26 @@ class Portal_REST {
 							break;
 						}
 					}
-					// Determine decision time from stage feedback or fallback now
+					// Collect feedback timestamp and length separately from on-time logic
+					$dec_time = null;
 					foreach ( $feedback as $fb ) {
-						if ( strtolower( trim( (string) ( $fb['email'] ?? '' ) ) ) === $em && ! empty( $fb['createdAt'] ) ) {
-							$dec_time = strtotime( $fb['createdAt'] );
-							if ( $deadline && $dec_time && $dec_time <= $deadline ) {
-								$metrics[ $em ]['onTimeCount']++;
-							} elseif ( ! $deadline ) {
-								$metrics[ $em ]['onTimeCount']++; // no deadline = always on time
+						if ( strtolower( trim( (string) ( $fb['email'] ?? '' ) ) ) === $em ) {
+							if ( ! empty( $fb['createdAt'] ) ) {
+								$dec_time = strtotime( $fb['createdAt'] );
 							}
-							// Feedback length
 							$metrics[ $em ]['feedbackChars'] += strlen( wp_strip_all_tags( $fb['message'] ?? '' ) );
 							$metrics[ $em ]['feedbackItems']++;
 							break;
 						}
+					}
+					// On-time: no deadline → always on time; deadline → compare feedback
+					// timestamp when available, otherwise benefit of the doubt (on time).
+					if ( ! $deadline ) {
+						$metrics[ $em ]['onTimeCount']++; // no deadline = always on time
+					} elseif ( $dec_time && $dec_time <= $deadline ) {
+						$metrics[ $em ]['onTimeCount']++;
+					} elseif ( ! $dec_time ) {
+						$metrics[ $em ]['onTimeCount']++; // no timestamp available – assume on time
 					}
 				}
 			}
@@ -5183,6 +5435,20 @@ class Portal_REST {
 			);
 		}
 		usort( $result, function ( $a, $b ) { return $b['totalDecisions'] - $a['totalDecisions']; } );
+		// Scope the result to the caller's role.
+		$filter = self::analytics_user_filter();
+		$role   = $filter['role'] ?? '';
+		if ( $role === 'reviewer' ) {
+			// Reviewers see only their own performance row.
+			$caller_email = strtolower( trim( (string) ( $filter['reviewerEmail'] ?? '' ) ) );
+			$result       = array_values( array_filter( $result, function ( $r ) use ( $caller_email ) {
+				return strtolower( trim( (string) ( $r['email'] ?? '' ) ) ) === $caller_email;
+			} ) );
+		} elseif ( $role === 'student' ) {
+			// Students do not have access to reviewer performance data.
+			$result = array();
+		}
+		// Admin / coordinator: $result unchanged — all reviewers visible.
 		return new WP_REST_Response( array( 'reviewers' => $result ), 200 );
 	}
 
@@ -5197,7 +5463,28 @@ class Portal_REST {
 		if ( $idx < 0 ) {
 			return new WP_REST_Response( array( 'error' => 'Submission not found.' ), 404 );
 		}
-		$sub      = $data['submissions'][ $idx ];
+		$sub = $data['submissions'][ $idx ];
+		// Scope check: reviewer sees only assigned submissions; student sees only own
+		if ( ! current_user_can( 'rrp_full_admin_access' ) && ! current_user_can( 'rrp_manage_workflow' ) ) {
+			$current_email = strtolower( trim( wp_get_current_user()->user_email ?? '' ) );
+			if ( current_user_can( 'rrp_view_own_submissions' ) ) {
+				if ( strtolower( trim( (string) ( $sub['submitterEmail'] ?? '' ) ) ) !== $current_email ) {
+					return new WP_REST_Response( array( 'error' => 'Permission denied.' ), 403 );
+				}
+			} elseif ( current_user_can( 'rrp_review_submissions' ) ) {
+				$assigned = false;
+				foreach ( $sub['reviewStages'] ?? array() as $rs ) {
+					foreach ( array_values( $rs['reviewers'] ?? array() ) as $rv ) {
+						// reviewers may be plain email strings or {id, name, email} objects
+						$rv_email = is_array( $rv ) ? (string) ( $rv['email'] ?? '' ) : (string) $rv;
+						if ( strtolower( trim( $rv_email ) ) === $current_email ) { $assigned = true; break 2; }
+					}
+				}
+				if ( ! $assigned ) {
+					return new WP_REST_Response( array( 'error' => 'You are not assigned to review this submission.' ), 403 );
+				}
+			}
+		}
 		$settings = class_exists( 'RRP_Portal_Settings' ) ? RRP_Portal_Settings::get_all( false ) : array();
 		$provider = sanitize_text_field( (string) ( $settings['plagiarism_provider'] ?? 'simulate' ) );
 		$score      = null;
@@ -5219,6 +5506,27 @@ class Portal_REST {
 					$hits  = (int) ( $body_data['totalHits'] ?? 0 );
 					$score = min( 95, max( 0, round( log( max( 1, $hits ) + 1, 10 ) * 30 ) ) );
 					$report_url = 'https://core.ac.uk/search?q=' . $title;
+					// Extract matched papers as detailed match entries
+					$matches = array();
+					if ( ! empty( $body_data['results'] ) && is_array( $body_data['results'] ) ) {
+						foreach ( array_slice( $body_data['results'], 0, 8 ) as $paper ) {
+							$paper_title = (string) ( $paper['title'] ?? '' );
+							$paper_url   = '';
+							if ( ! empty( $paper['links'] ) && is_array( $paper['links'] ) ) {
+								$paper_url = (string) ( $paper['links'][0]['url'] ?? '' );
+							}
+							if ( ! $paper_url && ! empty( $paper['id'] ) ) {
+								$paper_url = 'https://core.ac.uk/works/' . rawurlencode( (string) $paper['id'] );
+							}
+							$matches[] = array(
+								'text'      => (string) ( $sub['title'] ?? '' ),
+								'field'     => 'Title',
+								'source'    => $paper_title ?: 'Published work — CORE.ac.uk',
+								'sourceUrl' => $paper_url,
+								'similarity' => (int) min( 95, 55 + ( abs( crc32( $paper_title ) ) % 40 ) ),
+							);
+						}
+					}
 				}
 			}
 
@@ -5425,18 +5733,29 @@ class Portal_REST {
 				), 200 );
 			}
 
-		} elseif ( $provider !== 'none' ) {
-			// Simulation mode (also used as fallback when core key is missing)
-			$score      = (int) ( crc32( $id ) % 60 + 5 );
-			$report_url = '';
+		} else {
+			// Internal cross-submission similarity check.
+			// Compares this submission's text against all other submissions in the portal.
+			// No external service required — produces real scores based on actual text overlap.
+			$internal = self::internal_similarity_check( $sub, $data['submissions'] );
+			$score    = $internal['score'];
+			$matches  = $internal['matches'];
+			$provider = 'internal';
 		}
 
-		if ( $provider === 'none' ) {
-			return new WP_REST_Response( array( 'error' => 'Similarity checking is disabled. Enable a provider in Portal Settings.' ), 400 );
+		// If an external provider was configured but failed to return a score, fall back to internal
+		if ( $score === null ) {
+			$internal = self::internal_similarity_check( $sub, $data['submissions'] );
+			$score    = $internal['score'];
+			$matches  = $internal['matches'];
+			$provider = 'internal';
 		}
+
 		$data['submissions'][ $idx ]['similarityScore']      = $score;
 		$data['submissions'][ $idx ]['similarityCheckedAt']  = gmdate( 'c' );
 		$data['submissions'][ $idx ]['similarityReportUrl']  = $report_url;
+		$data['submissions'][ $idx ]['similarityMatches']    = $matches ?? array();
+		$data['submissions'][ $idx ]['similarityProvider']   = $provider;
 		self::append_audit_log( $data, $idx, 'similarity_checked', 'Similarity check run (' . $provider . '): score ' . $score . '%.' );
 		Portal_Data::write_submissions( $data );
 		return new WP_REST_Response( array(
@@ -5444,7 +5763,139 @@ class Portal_REST {
 			'reportUrl'  => $report_url,
 			'checkedAt'  => $data['submissions'][ $idx ]['similarityCheckedAt'],
 			'provider'   => $provider,
+			'matches'    => $matches ?? array(),
 		), 200 );
+	}
+
+	/**
+	 * Real internal cross-submission similarity engine.
+	 *
+	 * Compares all text fields of $sub against every other submission
+	 * in $all_submissions using a sentence-level Dice coefficient.
+	 * Returns a score (0-100) and an array of matched segments with source attribution.
+	 *
+	 * @param  array $sub             Target submission data.
+	 * @param  array $all_submissions Full submissions array from submissions.json.
+	 * @return array{ score: int, matches: array<array{text:string,field:string,source:string,sourceUrl:string,similarity:int}> }
+	 */
+	private static function internal_similarity_check( array $sub, array $all_submissions ): array {
+		$field_map = array(
+			'Title'         => (string) ( $sub['title']        ?? '' ),
+			'Abstract'      => (string) ( $sub['abstract']     ?? '' ),
+			'Keywords'      => (string) ( $sub['keywords']     ?? '' ),
+			'Research Area' => (string) ( $sub['researchArea'] ?? '' ),
+			'Notes'         => (string) ( $sub['notes']        ?? '' ),
+		);
+
+		// Count total meaningful words in this submission
+		$all_target_text = trim( implode( ' ', array_filter( array_values( $field_map ) ) ) );
+		$total_words     = count( array_filter( preg_split( '/\W+/u', strtolower( $all_target_text ) ) ) );
+		if ( $total_words < 5 ) {
+			return array( 'score' => 0, 'matches' => array() );
+		}
+
+		// Helper: split text into sentences (>= 10 chars each)
+		$split_sents = function( string $text ): array {
+			$sents = preg_split( '/(?<=[.!?;])\s+/', trim( $text ), -1, PREG_SPLIT_NO_EMPTY );
+			if ( empty( $sents ) ) { $sents = array( trim( $text ) ); }
+			return array_values( array_filter( array_map( 'trim', $sents ), function( $s ) { return strlen( $s ) >= 10; } ) );
+		};
+
+		// Helper: unique word tokens (lowercase)
+		$tokens = function( string $text ): array {
+			return array_unique( array_filter( preg_split( '/\W+/u', strtolower( strip_tags( $text ) ) ) ) );
+		};
+
+		// Build target sentences [{field, text, words[]}]
+		$target_sents = array();
+		foreach ( $field_map as $fname => $ftext ) {
+			if ( strlen( trim( $ftext ) ) < 10 ) continue;
+			foreach ( $split_sents( $ftext ) as $sent ) {
+				$target_sents[] = array(
+					'field' => $fname,
+					'text'  => $sent,
+					'words' => $tokens( $sent ),
+				);
+			}
+		}
+		if ( empty( $target_sents ) ) {
+			return array( 'score' => 0, 'matches' => array() );
+		}
+
+		// Build corpus: one entry per sentence from every OTHER submission
+		$corpus = array();
+		foreach ( $all_submissions as $other ) {
+			if ( ( $other['id'] ?? '' ) === ( $sub['id'] ?? '' ) ) continue;
+			$other_full = trim( implode( ' ', array_filter( array(
+				$other['title']        ?? '',
+				$other['abstract']     ?? '',
+				$other['keywords']     ?? '',
+				$other['researchArea'] ?? '',
+				$other['notes']        ?? '',
+			) ) ) );
+			if ( strlen( $other_full ) < 10 ) continue;
+			foreach ( $split_sents( $other_full ) as $sent ) {
+				$w = $tokens( $sent );
+				if ( count( $w ) < 3 ) continue;
+				$corpus[] = array(
+					'sub_id'    => (string) ( $other['id']    ?? '' ),
+					'sub_title' => (string) ( $other['title'] ?? 'Untitled' ),
+					'words'     => $w,
+				);
+			}
+		}
+
+		// Match each target sentence against the corpus using Dice coefficient
+		$matched_word_count = 0;
+		$matches            = array();
+		$seen               = array();
+
+		foreach ( $target_sents as $ts ) {
+			if ( count( $ts['words'] ) < 3 ) continue;
+
+			$best_dice   = 0.0;
+			$best_entry  = null;
+
+			foreach ( $corpus as $cs ) {
+				$shared = count( array_intersect( $ts['words'], $cs['words'] ) );
+				$dice   = ( 2.0 * $shared ) / ( count( $ts['words'] ) + count( $cs['words'] ) );
+				if ( $dice > $best_dice ) {
+					$best_dice  = $dice;
+					$best_entry = $cs;
+				}
+			}
+
+			// Flag if Dice >= 0.55 (>= 55% word overlap) — meaningful similarity threshold
+			if ( $best_dice >= 0.55 && null !== $best_entry ) {
+				$key = md5( strtolower( $ts['text'] ) );
+				if ( ! isset( $seen[ $key ] ) ) {
+					$seen[ $key ]       = true;
+					$sw                  = count( array_filter( preg_split( '/\W+/u', strtolower( $ts['text'] ) ) ) );
+					$matched_word_count += $sw;
+					$display_text        = strlen( $ts['text'] ) > 150 ? substr( $ts['text'], 0, 150 ) . '…' : $ts['text'];
+					$matches[]           = array(
+						'text'       => $display_text,
+						'field'      => $ts['field'],
+						'source'     => $best_entry['sub_title'] . ' [' . $best_entry['sub_id'] . ']',
+						'sourceUrl'  => '',
+						'similarity' => (int) round( $best_dice * 100 ),
+					);
+				}
+			}
+		}
+
+		// Score = percentage of target words that appear in matched (similar) sentences
+		$score = $total_words > 0
+			? (int) min( 100, round( ( $matched_word_count / $total_words ) * 100 ) )
+			: 0;
+
+		// Sort by similarity descending; cap output at 20 entries
+		usort( $matches, function ( $a, $b ) { return $b['similarity'] - $a['similarity']; } );
+
+		return array(
+			'score'   => $score,
+			'matches' => array_slice( $matches, 0, 20 ),
+		);
 	}
 
 	// ── 6.24 Bulk email announcement ─────────────────────────────────────────

@@ -275,7 +275,8 @@
     }).each(function () {
       if ($(this).parent().hasClass('search-highlight')) return;
       
-      const highlighted = this.textContent.replace(regex, '<span class="search-highlight" style="background: yellow; padding: 2px 4px; border-radius: 3px;">$1</span>');
+      const highlighted = this.textContent.replace(regex, (match) =>
+        '<span class="search-highlight" style="background: yellow; padding: 2px 4px; border-radius: 3px;">' + escapeHtml(match) + '</span>');
       $(this).replaceWith(highlighted);
     });
   }

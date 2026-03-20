@@ -16,7 +16,7 @@ REPO_WIN="$(dirname "$SCRIPT_DIR")"
 
 WP_ADMIN_PASS='Admin1234!'   # single quotes required — bash expands ! in double quotes
 # Override WP_URL before running this script to set a public hostname:
-#   WP_URL="http://rcgapimtest.eastus2.cloudapp.azure.com" ./scripts/install-wsl.sh
+#   WP_URL="http://your-portal.example.com" ./scripts/install-wsl.sh
 WP_URL="${WP_URL:-http://localhost}"
 
 # ── 1. System packages ────────────────────────────────────────────────────────

@@ -910,12 +910,13 @@
               '<li><button type="button" class="rrp-nav-link" data-view="public">&#127760; Public</button></li>' +
             '</ul>' +
           '</div>' +
-          '<div class="rrp-nav-card">' +
+          (_viewerIsAdmin ?
+            '<div class="rrp-nav-card">' +
             '<div class="rrp-nav-card-title">Settings</div>' +
             '<ul class="rrp-nav-list">' +
               '<li><button type="button" class="rrp-nav-link" data-view="portal-settings">&#9881; Portal Settings</button></li>' +
             '</ul>' +
-          '</div>' +
+          '</div>' : '') +
           (_viewerIsAdmin ?
             '<div class="rrp-nav-card">' +
               '<div class="rrp-nav-card-title">Administration</div>' +
@@ -2330,209 +2331,574 @@
     });
   }
 
+  // Returns the current user's primary portal role for analytics branching.
+  function _analyticsRole() {
+    var roles = (window.RRP && Array.isArray(window.RRP.userRoles))
+      ? window.RRP.userRoles
+      : [(window.RRP && window.RRP.userRole) || ''];
+    if (roles.indexOf('Admin') !== -1)       return 'admin';
+    if (roles.indexOf('Coordinator') !== -1) return 'coordinator';
+    if (roles.indexOf('Reviewer') !== -1 || roles.indexOf('Faculty') !== -1) return 'reviewer';
+    return 'student';
+  }
+
+  // Renders a side-by-side paragraph-level diff between two plain-text documents.
+  // Removed paragraphs shown in red (left), added paragraphs shown in green (right).
+  // Returns HTML <tr> rows suitable for insertion into rrp-diff-tbody.
+  function _renderDocDiff(beforeText, afterText) {
+    var splitParas = function (text) {
+      return text.split(/\r?\n+/).map(function (l) { return l.trim(); }).filter(function (l) { return l.length > 0; });
+    };
+    var a = splitParas(beforeText);
+    var b = splitParas(afterText);
+    if (!a.length && !b.length) {
+      return '<tr><td colspan="2" style="padding:1rem;text-align:center;color:var(--rrp-text-muted);">Both documents appear to be empty or unreadable.</td></tr>';
+    }
+    // Cap at 500 paragraphs each side to keep O(n²) LCS manageable in the browser
+    var cap = 500;
+    var ac = a.slice(0, cap), bc = b.slice(0, cap);
+    var mc = ac.length, nc = bc.length;
+    // Build LCS DP table
+    var dp = [];
+    for (var ii = 0; ii <= mc; ii++) { dp[ii] = new Array(nc + 1).fill(0); }
+    for (var ii = 1; ii <= mc; ii++) {
+      for (var jj = 1; jj <= nc; jj++) {
+        dp[ii][jj] = ac[ii-1] === bc[jj-1] ? dp[ii-1][jj-1] + 1 : Math.max(dp[ii-1][jj], dp[ii][jj-1]);
+      }
+    }
+    // Traceback into ops
+    var ops = [];
+    var pi = mc, pj = nc;
+    while (pi > 0 || pj > 0) {
+      if (pi > 0 && pj > 0 && ac[pi-1] === bc[pj-1]) { ops.unshift({t:'eq', v: ac[pi-1]}); pi--; pj--; }
+      else if (pj > 0 && (pi === 0 || dp[pi][pj-1] >= dp[pi-1][pj])) { ops.unshift({t:'ins', v: bc[pj-1]}); pj--; }
+      else { ops.unshift({t:'del', v: ac[pi-1]}); pi--; }
+    }
+    // Append any capped overflow as bulk change
+    for (var k = cap; k < a.length; k++) ops.push({t:'del', v: a[k]});
+    for (var k = cap; k < b.length; k++) ops.push({t:'ins', v: b[k]});
+
+    var changeCount = ops.filter(function(o) { return o.t !== 'eq'; }).length;
+    if (changeCount === 0) {
+      return '<tr><td colspan="2" style="padding:1rem;text-align:center;color:#15803d;">&#10003; Documents are identical \u2014 no changes detected.</td></tr>';
+    }
+
+    // Show context lines 2 before/after any change
+    var CONTEXT = 2;
+    var isChanged = ops.map(function(o) { return o.t !== 'eq'; });
+    var showEq = ops.map(function(_, idx) {
+      if (ops[idx].t !== 'eq') return true;
+      for (var d = 1; d <= CONTEXT; d++) {
+        if (idx - d >= 0 && isChanged[idx - d]) return true;
+        if (idx + d < ops.length && isChanged[idx + d]) return true;
+      }
+      return false;
+    });
+
+    var rows = '';
+    var skipping = false;
+    var ri = 0;
+    while (ri < ops.length) {
+      var op = ops[ri];
+      if (op.t === 'eq' && !showEq[ri]) {
+        if (!skipping) {
+          rows += '<tr><td colspan="2" style="text-align:center;font-size:.78rem;color:#6b7280;padding:.15rem .4rem;background:#f8fafc;border-bottom:1px solid #e5e7eb;">&hellip; unchanged &hellip;</td></tr>';
+          skipping = true;
+        }
+        ri++; continue;
+      }
+      skipping = false;
+      if (op.t === 'eq') {
+        var eqv = escapeHtml(op.v);
+        rows += '<tr><td style="padding:.3rem .5rem;vertical-align:top;border-bottom:1px solid #f1f5f9;width:50%;white-space:pre-wrap;font-size:.83rem;color:#374151;">' + eqv + '</td>' +
+          '<td style="padding:.3rem .5rem;vertical-align:top;border-bottom:1px solid #f1f5f9;width:50%;white-space:pre-wrap;font-size:.83rem;color:#374151;">' + eqv + '</td></tr>';
+        ri++;
+      } else if (op.t === 'del' && ri + 1 < ops.length && ops[ri+1].t === 'ins') {
+        // Changed paragraph: old on left, new on right
+        rows += '<tr>' +
+          '<td style="padding:.3rem .5rem;vertical-align:top;border-bottom:1px solid #fecaca;width:50%;white-space:pre-wrap;font-size:.83rem;color:#991b1b;background:#fef2f2;"><span style="font-weight:700;margin-right:.3rem;">\u2212</span>' + escapeHtml(op.v) + '</td>' +
+          '<td style="padding:.3rem .5rem;vertical-align:top;border-bottom:1px solid #bbf7d0;width:50%;white-space:pre-wrap;font-size:.83rem;color:#166534;background:#f0fdf4;"><span style="font-weight:700;margin-right:.3rem;">+</span>' + escapeHtml(ops[ri+1].v) + '</td>' +
+          '</tr>';
+        ri += 2;
+      } else if (op.t === 'del') {
+        rows += '<tr>' +
+          '<td style="padding:.3rem .5rem;vertical-align:top;border-bottom:1px solid #fecaca;width:50%;white-space:pre-wrap;font-size:.83rem;color:#991b1b;background:#fef2f2;"><span style="font-weight:700;margin-right:.3rem;">\u2212</span>' + escapeHtml(op.v) + '</td>' +
+          '<td style="border-bottom:1px solid #fecaca;background:#fff5f5;"></td></tr>';
+        ri++;
+      } else {
+        // ins
+        rows += '<tr>' +
+          '<td style="border-bottom:1px solid #bbf7d0;background:#f9fffe;"></td>' +
+          '<td style="padding:.3rem .5rem;vertical-align:top;border-bottom:1px solid #bbf7d0;width:50%;white-space:pre-wrap;font-size:.83rem;color:#166534;background:#f0fdf4;"><span style="font-weight:700;margin-right:.3rem;">+</span>' + escapeHtml(op.v) + '</td>' +
+          '</tr>';
+        ri++;
+      }
+    }
+    return rows;
+  }
+
+  // Renders the detailed matches table for a similarity check result.
+  function _buildSimMatchesHtml(matches) {
+    if (!matches || !matches.length) return '';
+    var rows = matches.map(function (m) {
+      var mc = m.similarity >= 70 ? '#b91c1c' : m.similarity >= 40 ? '#b45309' : '#15803d';
+      var txt = (m.text || '').substring(0, 130) + ((m.text || '').length > 130 ? '\u2026' : '');
+      var srcHtml = m.sourceUrl
+        ? '<a href="' + escapeHtml(m.sourceUrl) + '" target="_blank" rel="noopener">' + escapeHtml(m.source || '\u2014') + '</a>'
+        : escapeHtml(m.source || '\u2014');
+      return '<tr style="border-bottom:1px solid var(--rrp-border,#e5e7eb);">' +
+        '<td style="padding:.3rem .45rem;white-space:nowrap;">' + escapeHtml(m.field || '') + '</td>' +
+        '<td style="padding:.3rem .45rem;max-width:260px;"><em>&ldquo;' + escapeHtml(txt) + '&rdquo;</em></td>' +
+        '<td style="padding:.3rem .45rem;">' + srcHtml + '</td>' +
+        '<td style="padding:.3rem .45rem;text-align:center;font-weight:700;color:' + mc + ';">' + m.similarity + '%</td>' +
+      '</tr>';
+    }).join('');
+    return '<details style="margin-top:.55rem;">' +
+      '<summary style="cursor:pointer;font-size:.85rem;color:var(--rrp-accent,#1d4ed8);user-select:none;">&#128269; View ' + matches.length + ' matched segment(s)</summary>' +
+      '<div style="overflow-x:auto;margin-top:.4rem;">' +
+      '<table style="width:100%;border-collapse:collapse;font-size:.82rem;">' +
+      '<thead><tr style="background:var(--rrp-bg-soft,#f1f5f9);">' +
+        '<th style="padding:.3rem .45rem;text-align:left;border-bottom:1px solid var(--rrp-border,#e5e7eb);">Section</th>' +
+        '<th style="padding:.3rem .45rem;text-align:left;border-bottom:1px solid var(--rrp-border,#e5e7eb);">Matched Text</th>' +
+        '<th style="padding:.3rem .45rem;text-align:left;border-bottom:1px solid var(--rrp-border,#e5e7eb);">Potential Source</th>' +
+        '<th style="padding:.3rem .45rem;text-align:center;border-bottom:1px solid var(--rrp-border,#e5e7eb);">Match</th>' +
+      '</tr></thead>' +
+      '<tbody>' + rows + '</tbody>' +
+      '</table></div></details>';
+  }
+
   function renderAnalytics(container, backFn) {
+    var role      = _analyticsRole();
+    var userEmail = ((window.RRP && window.RRP.userEmail) || '').toLowerCase();
+    var showExport = (role === 'admin' || role === 'coordinator');
+
     container.innerHTML =
       '<h1>&#128202; Analytics</h1>' +
       '<button type="button" class="rrp-btn secondary" style="margin-bottom:1rem;" data-back>&#8592; Back</button>' +
       '<div id="rrp-analytics-content"><p class="rrp-loading">Loading analytics&hellip;</p></div>' +
-      '<div class="rrp-analytics-actions" style="margin-top:1rem;">' +
-        '<button class="rrp-btn" id="rrp-export-csv">Export CSV</button>' +
-        '<button class="rrp-btn" id="rrp-export-xlsx" style="margin-left:0.5rem;">Export XLSX</button>' +
-      '</div>';
+      (showExport
+        ? '<div class="rrp-analytics-actions" style="margin-top:1rem;">' +
+            '<button class="rrp-btn" id="rrp-export-csv">Export CSV</button>' +
+            '<button class="rrp-btn" id="rrp-export-xlsx" style="margin-left:0.5rem;">Export XLSX</button>' +
+          '</div>'
+        : '');
 
     container.querySelector('[data-back]').addEventListener('click', function () {
       if (typeof backFn === 'function') backFn(); else renderSelection(container);
     });
 
-    Promise.all([
-      api('GET', '/analytics/workflow'),
-      api('GET', '/analytics/performance'),
-      api('GET', '/analytics/daily').catch(function () { return { dates: [], series: [] }; })
-    ]).then(function (results) {
-      var w     = results[0];
-      var p     = results[1];
-      var daily = results[2];
-      var el = document.getElementById('rrp-analytics-content');
-      if (!el) return;
+    if (role === 'admin' || role === 'coordinator') {
+      // ── Admin / Coordinator: full analytics view ──────────────────────────
+      Promise.all([
+        api('GET', '/analytics/workflow'),
+        api('GET', '/analytics/performance'),
+        api('GET', '/analytics/daily').catch(function () { return { dates: [], series: [] }; })
+      ]).then(function (results) {
+        var w     = results[0];
+        var p     = results[1];
+        var daily = results[2];
+        var el = document.getElementById('rrp-analytics-content');
+        if (!el) return;
 
-      // ── Status distribution bar chart ─────────────────────────────────────
-      var byStatus = w.totalByStatus || {};
-      var byType   = w.totalByType   || {};
-      var total    = w.totalSubmissions || 0;
+        var byStatus = w.totalByStatus || {};
+        var byType   = w.totalByType   || {};
+        var total    = w.totalSubmissions || 0;
 
-      var STATUS_COLORS = {
-        'Submitted':          '#3b82f6',
-        'Under Review':       '#f59e0b',
-        'Under Initial Review': '#f59e0b',
-        'Administrative Review': '#f59e0b',
-        'Revision Required':  '#8b5cf6',
-        'Revision Submitted': '#a78bfa',
-        'Approved':           '#22c55e',
-        'Confirmed for Presentation': '#22c55e',
-        'Published':          '#22c55e',
-        'Approved for Submission': '#22c55e',
-        'Rejected':           '#ef4444',
-        'Draft':              '#94a3b8'
-      };
-      function statusColor(s) {
-        if (STATUS_COLORS[s]) return STATUS_COLORS[s];
-        if (s && s.indexOf(': In Progress') !== -1) return '#f59e0b';
-        return DEFAULT_COLOR;
-      }
-      var DEFAULT_COLOR = '#64748b';
+        var STATUS_COLORS = {
+          'Submitted':          '#3b82f6',
+          'Under Review':       '#f59e0b',
+          'Under Initial Review': '#f59e0b',
+          'Administrative Review': '#f59e0b',
+          'Revision Required':  '#8b5cf6',
+          'Revision Submitted': '#a78bfa',
+          'Approved':           '#22c55e',
+          'Confirmed for Presentation': '#22c55e',
+          'Published':          '#22c55e',
+          'Approved for Submission': '#22c55e',
+          'Rejected':           '#ef4444',
+          'Draft':              '#94a3b8'
+        };
+        function statusColor(s) {
+          if (STATUS_COLORS[s]) return STATUS_COLORS[s];
+          if (s && s.indexOf(': In Progress') !== -1) return '#f59e0b';
+          return DEFAULT_COLOR;
+        }
+        var DEFAULT_COLOR = '#64748b';
+        var statusEntries = Object.keys(byStatus).sort(function (a, b) { return byStatus[b] - byStatus[a]; });
+        var maxCount = statusEntries.length ? byStatus[statusEntries[0]] : 1;
+        var barsHtml = statusEntries.map(function (status) {
+          var count = byStatus[status];
+          var pct   = total > 0 ? Math.round((count / total) * 100) : 0;
+          var barW  = maxCount > 0 ? Math.round((count / maxCount) * 100) : 0;
+          var color = statusColor(status);
+          return '<div class="rrp-chart-row">' +
+            '<div class="rrp-chart-label">' + escapeHtml(status) + '</div>' +
+            '<div class="rrp-chart-bar-wrap">' +
+              '<div class="rrp-chart-bar" style="width:' + barW + '%;background:' + color + ';" title="' + count + ' submissions"></div>' +
+            '</div>' +
+            '<div class="rrp-chart-value">' + count + ' <span class="rrp-chart-pct">(' + pct + '%)</span></div>' +
+          '</div>';
+        }).join('') || '<p style="color:var(--rrp-text-muted)">No submissions yet.</p>';
 
-      // Sort statuses by count desc
-      var statusEntries = Object.keys(byStatus).sort(function (a, b) { return byStatus[b] - byStatus[a]; });
-      var maxCount = statusEntries.length ? byStatus[statusEntries[0]] : 1;
+        var typeEntries = Object.keys(byType).sort(function (a, b) { return byType[b] - byType[a]; });
+        var typesHtml = typeEntries.map(function (t) {
+          var count = byType[t];
+          var pct   = total > 0 ? Math.round((count / total) * 100) : 0;
+          var barW  = maxCount > 0 ? Math.round((count / maxCount) * 100) : 0;
+          return '<div class="rrp-chart-row">' +
+            '<div class="rrp-chart-label">' + escapeHtml(typeLabel(t)) + '</div>' +
+            '<div class="rrp-chart-bar-wrap">' +
+              '<div class="rrp-chart-bar" style="width:' + barW + '%;background:#0ea5e9;"></div>' +
+            '</div>' +
+            '<div class="rrp-chart-value">' + count + ' <span class="rrp-chart-pct">(' + pct + '%)</span></div>' +
+          '</div>';
+        }).join('') || '<p style="color:var(--rrp-text-muted)">No submissions yet.</p>';
 
-      var barsHtml = statusEntries.map(function (status) {
-        var count = byStatus[status];
-        var pct   = total > 0 ? Math.round((count / total) * 100) : 0;
-        var barW  = maxCount > 0 ? Math.round((count / maxCount) * 100) : 0;
-        var color = statusColor(status);
-        return '<div class="rrp-chart-row">' +
-          '<div class="rrp-chart-label">' + escapeHtml(status) + '</div>' +
-          '<div class="rrp-chart-bar-wrap">' +
-            '<div class="rrp-chart-bar" style="width:' + barW + '%;background:' + color + ';" title="' + count + ' submissions"></div>' +
+        el.innerHTML =
+          '<div class="rrp-analytics-card">' +
+            '<h2 class="rrp-analytics-card-title">Daily Submissions by Status</h2>' +
+            buildLineChart(daily) +
           '</div>' +
-          '<div class="rrp-chart-value">' + count + ' <span class="rrp-chart-pct">(' + pct + '%)</span></div>' +
-        '</div>';
-      }).join('') || '<p style="color:var(--rrp-text-muted)">No submissions yet.</p>';
-
-      // ── Submission type breakdown ─────────────────────────────────────────
-      var typeEntries = Object.keys(byType).sort(function (a, b) { return byType[b] - byType[a]; });
-      var typesHtml = typeEntries.map(function (t) {
-        var count = byType[t];
-        var pct   = total > 0 ? Math.round((count / total) * 100) : 0;
-        var barW  = maxCount > 0 ? Math.round((count / maxCount) * 100) : 0;
-        return '<div class="rrp-chart-row">' +
-          '<div class="rrp-chart-label">' + escapeHtml(typeLabel(t)) + '</div>' +
-          '<div class="rrp-chart-bar-wrap">' +
-            '<div class="rrp-chart-bar" style="width:' + barW + '%;background:#0ea5e9;"></div>' +
+          '<div class="rrp-analytics-card">' +
+            '<h2 class="rrp-analytics-card-title">Submissions by Status</h2>' +
+            '<div class="rrp-chart">' + barsHtml + '</div>' +
           '</div>' +
-          '<div class="rrp-chart-value">' + count + ' <span class="rrp-chart-pct">(' + pct + '%)</span></div>' +
-        '</div>';
-      }).join('') || '<p style="color:var(--rrp-text-muted)">No submissions yet.</p>';
+          '<div class="rrp-analytics-card">' +
+            '<h2 class="rrp-analytics-card-title">Submissions by Type</h2>' +
+            '<div class="rrp-chart">' + typesHtml + '</div>' +
+          '</div>' +
+          '<div class="rrp-analytics-card">' +
+            '<h2 class="rrp-analytics-card-title">Summary</h2>' +
+            '<div class="rrp-analytics-tiles">' +
+              '<div class="rrp-analytics-tile">' +
+                '<div class="rrp-analytics-tile-val">' + total + '</div>' +
+                '<div class="rrp-analytics-tile-lbl">Total Submissions</div>' +
+              '</div>' +
+              '<div class="rrp-analytics-tile rrp-tile-green">' +
+                '<div class="rrp-analytics-tile-val">' + (p.finalizedCount || 0) + '</div>' +
+                '<div class="rrp-analytics-tile-lbl">Finalized</div>' +
+              '</div>' +
+              '<div class="rrp-analytics-tile rrp-tile-amber">' +
+                '<div class="rrp-analytics-tile-val">' + (p.inProgressCount || 0) + '</div>' +
+                '<div class="rrp-analytics-tile-lbl">In Progress</div>' +
+              '</div>' +
+              '<div class="rrp-analytics-tile rrp-tile-gray">' +
+                '<div class="rrp-analytics-tile-val">' + (p.withdrawnCancelledCount || 0) + '</div>' +
+                '<div class="rrp-analytics-tile-lbl">Withdrawn / Cancelled</div>' +
+              '</div>' +
+              '<div class="rrp-analytics-tile rrp-tile-red">' +
+                '<div class="rrp-analytics-tile-val">' + (p.lateReviewAlerts || 0) + '</div>' +
+                '<div class="rrp-analytics-tile-lbl">Late Alerts</div>' +
+              '</div>' +
+              '<div class="rrp-analytics-tile">' +
+                '<div class="rrp-analytics-tile-val">' + (p.averageTimeToDecisionDays != null ? p.averageTimeToDecisionDays + 'd' : '—') + '</div>' +
+                '<div class="rrp-analytics-tile-lbl">Avg. Time to Decision</div>' +
+              '</div>' +
+              '<div class="rrp-analytics-tile">' +
+                '<div class="rrp-analytics-tile-val">' + (w.averageStages || 0) + '</div>' +
+                '<div class="rrp-analytics-tile-lbl">Avg. Stages / Submission</div>' +
+              '</div>' +
+              '<div class="rrp-analytics-tile">' +
+                '<div class="rrp-analytics-tile-val">' + (w.meanReviewerLoad || 0) + '</div>' +
+                '<div class="rrp-analytics-tile-lbl">Mean Reviewer Load</div>' +
+              '</div>' +
+            '</div>' +
+          '</div>';
 
-      el.innerHTML =
-        // ── Line chart: daily submissions by status ─────────────────────────
-        '<div class="rrp-analytics-card">' +
-          '<h2 class="rrp-analytics-card-title">Daily Submissions by Status</h2>' +
-          buildLineChart(daily) +
-        '</div>' +
+        api('GET', '/analytics/reviewer-performance').then(function (pr) {
+          var revs = (pr && pr.reviewers) ? pr.reviewers : [];
+          var rowsHtml;
+          if (!revs.length) {
+            rowsHtml = '<tr><td colspan="5" style="text-align:center;color:var(--rrp-text-muted);padding:1rem;">No reviewer data yet.</td></tr>';
+          } else {
+            rowsHtml = revs.map(function (r) {
+              var onTime = r.onTimeRate != null ? r.onTimeRate : null;
+              var revTrig = r.revisionTriggerRate != null ? r.revisionTriggerRate : null;
+              var onTimeColor = onTime == null ? '' : onTime >= 80 ? 'color:#22c55e;font-weight:700;' : onTime >= 50 ? 'color:#f59e0b;font-weight:700;' : 'color:#ef4444;font-weight:700;';
+              return '<tr>' +
+                '<td>' + escapeHtml(r.name || r.email || '—') + '</td>' +
+                '<td style="text-align:center;">' + (r.totalDecisions || 0) + '</td>' +
+                '<td style="text-align:center;' + onTimeColor + '">' + (onTime != null ? onTime + '%' : '—') + '</td>' +
+                '<td style="text-align:center;">' + (revTrig != null ? revTrig + '%' : '—') + '</td>' +
+                '<td style="text-align:center;">' + (r.avgFeedbackLength != null ? Math.round(r.avgFeedbackLength) + ' ch' : '—') + '</td>' +
+              '</tr>';
+            }).join('');
+          }
+          var perfHtml = '<div class="rrp-analytics-card" style="margin-top:1rem;">' +
+            '<h2 class="rrp-analytics-card-title">&#128101; Reviewer Performance</h2>' +
+            '<div style="overflow-x:auto;">' +
+              '<table style="width:100%;border-collapse:collapse;font-size:0.875rem;">' +
+                '<thead>' +
+                  '<tr style="border-bottom:2px solid var(--rrp-border);">' +
+                    '<th style="text-align:left;padding:0.5rem 0.75rem;">Reviewer</th>' +
+                    '<th style="text-align:center;padding:0.5rem 0.75rem;">Decisions</th>' +
+                    '<th style="text-align:center;padding:0.5rem 0.75rem;">On-Time Rate</th>' +
+                    '<th style="text-align:center;padding:0.5rem 0.75rem;">Revision Trigger</th>' +
+                    '<th style="text-align:center;padding:0.5rem 0.75rem;">Avg Feedback</th>' +
+                  '</tr>' +
+                '</thead>' +
+                '<tbody>' + rowsHtml + '</tbody>' +
+              '</table>' +
+            '</div>' +
+          '</div>';
+          var el2 = document.getElementById('rrp-analytics-content');
+          if (el2) el2.innerHTML += perfHtml;
+        }).catch(function () {});
 
-        // ── Chart: Status distribution ──────────────────────────────────────
-        '<div class="rrp-analytics-card">' +
-          '<h2 class="rrp-analytics-card-title">Submissions by Status</h2>' +
-          '<div class="rrp-chart">' + barsHtml + '</div>' +
-        '</div>' +
+        document.getElementById('rrp-export-csv').addEventListener('click', function () {
+          api('GET', '/reports/export?type=workflow&format=csv').then(function (resp) {
+            var blob = new Blob([atob(resp.content)], { type: 'text/csv' });
+            var a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+            a.download = resp.filename || 'rrp-workflow.csv'; a.click();
+          }).catch(function () { alert('Export failed'); });
+        });
 
-        // ── Chart: By type ──────────────────────────────────────────────────
-        '<div class="rrp-analytics-card">' +
-          '<h2 class="rrp-analytics-card-title">Submissions by Type</h2>' +
-          '<div class="rrp-chart">' + typesHtml + '</div>' +
-        '</div>' +
+        document.getElementById('rrp-export-xlsx').addEventListener('click', function () {
+          api('GET', '/reports/export?type=workflow&format=xlsx').then(function (resp) {
+            var blob = new Blob([atob(resp.content)], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+            var a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+            a.download = resp.filename || 'rrp-workflow.xlsx'; a.click();
+          }).catch(function () { alert('Export failed'); });
+        });
 
-        // ── Summary stat tiles ──────────────────────────────────────────────
-        '<div class="rrp-analytics-card">' +
-          '<h2 class="rrp-analytics-card-title">Summary</h2>' +
+      }).catch(function () {
+        var el = document.getElementById('rrp-analytics-content');
+        if (el) el.innerHTML = '<div class="rrp-error">Unable to load analytics. Please login and try again.</div>';
+      });
+
+    } else if (role === 'reviewer') {
+      // ── Reviewer: scoped to their assigned submissions only ───────────────
+      Promise.all([
+        api('GET', '/analytics/workflow'),
+        api('GET', '/analytics/performance'),
+        api('GET', '/analytics/daily').catch(function () { return { dates: [], series: [] }; }),
+        api('GET', '/analytics/reviewer-performance').catch(function () { return { reviewers: [] }; })
+      ]).then(function (results) {
+        var w     = results[0];
+        var p     = results[1];
+        var daily = results[2];
+        var pr    = results[3];
+        var el = document.getElementById('rrp-analytics-content');
+        if (!el) return;
+
+        var byStatus = w.totalByStatus || {};
+        var byType   = w.totalByType   || {};
+        var total    = w.totalSubmissions || 0;
+
+        var RV_STATUS_COLORS = {
+          'Submitted': '#3b82f6', 'Under Review': '#f59e0b',
+          'Under Initial Review': '#f59e0b', 'Administrative Review': '#f59e0b',
+          'Revision Required': '#8b5cf6', 'Revision Submitted': '#a78bfa',
+          'Approved': '#22c55e', 'Confirmed for Presentation': '#22c55e',
+          'Published': '#22c55e', 'Approved for Submission': '#22c55e',
+          'Rejected': '#ef4444', 'Draft': '#94a3b8'
+        };
+        var rvStatusEntries = Object.keys(byStatus).sort(function (a, b) { return byStatus[b] - byStatus[a]; });
+        var rvMaxCount = rvStatusEntries.length ? byStatus[rvStatusEntries[0]] : 1;
+        var barsHtml = rvStatusEntries.map(function (status) {
+          var count = byStatus[status];
+          var pct   = total > 0 ? Math.round((count / total) * 100) : 0;
+          var barW  = rvMaxCount > 0 ? Math.round((count / rvMaxCount) * 100) : 0;
+          var color = RV_STATUS_COLORS[status] || (status.indexOf(': In Progress') !== -1 ? '#f59e0b' : '#64748b');
+          return '<div class="rrp-chart-row">' +
+            '<div class="rrp-chart-label">' + escapeHtml(status) + '</div>' +
+            '<div class="rrp-chart-bar-wrap">' +
+              '<div class="rrp-chart-bar" style="width:' + barW + '%;background:' + color + ';" title="' + count + ' submissions"></div>' +
+            '</div>' +
+            '<div class="rrp-chart-value">' + count + ' <span class="rrp-chart-pct">(' + pct + '%)</span></div>' +
+          '</div>';
+        }).join('') || '<p style="color:var(--rrp-text-muted)">No assigned submissions yet.</p>';
+
+        var rvTypeEntries = Object.keys(byType).sort(function (a, b) { return byType[b] - byType[a]; });
+        var rvTypeMax = rvTypeEntries.length ? byType[rvTypeEntries[0]] : 1;
+        var typesHtml = rvTypeEntries.map(function (t) {
+          var count = byType[t];
+          var pct   = total > 0 ? Math.round((count / total) * 100) : 0;
+          var barW  = rvTypeMax > 0 ? Math.round((count / rvTypeMax) * 100) : 0;
+          return '<div class="rrp-chart-row">' +
+            '<div class="rrp-chart-label">' + escapeHtml(typeLabel(t)) + '</div>' +
+            '<div class="rrp-chart-bar-wrap">' +
+              '<div class="rrp-chart-bar" style="width:' + barW + '%;background:#0ea5e9;"></div>' +
+            '</div>' +
+            '<div class="rrp-chart-value">' + count + ' <span class="rrp-chart-pct">(' + pct + '%)</span></div>' +
+          '</div>';
+        }).join('') || '<p style="color:var(--rrp-text-muted)">No assigned submissions yet.</p>';
+
+        // My own performance row (server-side already scoped to this reviewer)
+        var myPerf = null;
+        (pr.reviewers || []).forEach(function (r) {
+          if ((r.email || '').toLowerCase() === userEmail) myPerf = r;
+        });
+        var onTime  = myPerf && myPerf.onTimeRate  != null ? myPerf.onTimeRate  : null;
+        var revTrig = myPerf && myPerf.revisionTriggerRate != null ? myPerf.revisionTriggerRate : null;
+        var onTimeColor = onTime == null ? '' : onTime >= 80 ? 'color:#22c55e;font-weight:700;' : onTime >= 50 ? 'color:#f59e0b;font-weight:700;' : 'color:#ef4444;font-weight:700;';
+        var myPerfHtml = '<div class="rrp-analytics-card">' +
+          '<h2 class="rrp-analytics-card-title">&#127942; My Performance</h2>' +
           '<div class="rrp-analytics-tiles">' +
             '<div class="rrp-analytics-tile">' +
-              '<div class="rrp-analytics-tile-val">' + total + '</div>' +
-              '<div class="rrp-analytics-tile-lbl">Total Submissions</div>' +
-            '</div>' +
-            '<div class="rrp-analytics-tile rrp-tile-green">' +
-              '<div class="rrp-analytics-tile-val">' + (p.finalizedCount || 0) + '</div>' +
-              '<div class="rrp-analytics-tile-lbl">Finalized</div>' +
-            '</div>' +
-            '<div class="rrp-analytics-tile rrp-tile-amber">' +
-              '<div class="rrp-analytics-tile-val">' + (p.inProgressCount || 0) + '</div>' +
-              '<div class="rrp-analytics-tile-lbl">In Progress</div>' +
-            '</div>' +
-            '<div class="rrp-analytics-tile rrp-tile-gray">' +
-              '<div class="rrp-analytics-tile-val">' + (p.withdrawnCancelledCount || 0) + '</div>' +
-              '<div class="rrp-analytics-tile-lbl">Withdrawn / Cancelled</div>' +
-            '</div>' +
-            '<div class="rrp-analytics-tile rrp-tile-red">' +
-              '<div class="rrp-analytics-tile-val">' + (p.lateReviewAlerts || 0) + '</div>' +
-              '<div class="rrp-analytics-tile-lbl">Late Alerts</div>' +
+              '<div class="rrp-analytics-tile-val">' + (myPerf ? myPerf.totalDecisions || 0 : '—') + '</div>' +
+              '<div class="rrp-analytics-tile-lbl">Total Decisions</div>' +
             '</div>' +
             '<div class="rrp-analytics-tile">' +
-              '<div class="rrp-analytics-tile-val">' + (p.averageTimeToDecisionDays != null ? p.averageTimeToDecisionDays + 'd' : '—') + '</div>' +
-              '<div class="rrp-analytics-tile-lbl">Avg. Time to Decision</div>' +
+              '<div class="rrp-analytics-tile-val" style="' + onTimeColor + '">' + (onTime != null ? onTime + '%' : '—') + '</div>' +
+              '<div class="rrp-analytics-tile-lbl">On-Time Rate</div>' +
             '</div>' +
             '<div class="rrp-analytics-tile">' +
-              '<div class="rrp-analytics-tile-val">' + (w.averageStages || 0) + '</div>' +
-              '<div class="rrp-analytics-tile-lbl">Avg. Stages / Submission</div>' +
+              '<div class="rrp-analytics-tile-val">' + (revTrig != null ? revTrig + '%' : '—') + '</div>' +
+              '<div class="rrp-analytics-tile-lbl">Revision Trigger</div>' +
             '</div>' +
             '<div class="rrp-analytics-tile">' +
-              '<div class="rrp-analytics-tile-val">' + (w.meanReviewerLoad || 0) + '</div>' +
-              '<div class="rrp-analytics-tile-lbl">Mean Reviewer Load</div>' +
+              '<div class="rrp-analytics-tile-val">' + (myPerf && myPerf.avgFeedbackLength != null ? Math.round(myPerf.avgFeedbackLength) + ' ch' : '—') + '</div>' +
+              '<div class="rrp-analytics-tile-lbl">Avg. Feedback Length</div>' +
             '</div>' +
           '</div>' +
         '</div>';
 
-      // ── Reviewer Performance panel ────────────────────────────────────────
-      api('GET', '/analytics/reviewer-performance').then(function (pr) {
-        var revs = (pr && pr.reviewers) ? pr.reviewers : [];
-        var rowsHtml;
-        if (!revs.length) {
-          rowsHtml = '<tr><td colspan="5" style="text-align:center;color:var(--rrp-text-muted);padding:1rem;">No reviewer data yet.</td></tr>';
-        } else {
-          rowsHtml = revs.map(function (r) {
-            var onTime = r.onTimeRate != null ? Math.round(r.onTimeRate * 100) : null;
-            var revTrig = r.revisionTriggerRate != null ? Math.round(r.revisionTriggerRate * 100) : null;
-            var onTimeColor = onTime == null ? '' : onTime >= 80 ? 'color:#22c55e;font-weight:700;' : onTime >= 50 ? 'color:#f59e0b;font-weight:700;' : 'color:#ef4444;font-weight:700;';
-            return '<tr>' +
-              '<td>' + escapeHtml(r.name || r.email || '—') + '</td>' +
-              '<td style="text-align:center;">' + (r.totalDecisions || 0) + '</td>' +
-              '<td style="text-align:center;' + onTimeColor + '">' + (onTime != null ? onTime + '%' : '—') + '</td>' +
-              '<td style="text-align:center;">' + (revTrig != null ? revTrig + '%' : '—') + '</td>' +
-              '<td style="text-align:center;">' + (r.avgFeedbackLength != null ? Math.round(r.avgFeedbackLength) + ' ch' : '—') + '</td>' +
-            '</tr>';
-          }).join('');
-        }
-        var perfHtml = '<div class="rrp-analytics-card" style="margin-top:1rem;">' +
-          '<h2 class="rrp-analytics-card-title">&#128101; Reviewer Performance</h2>' +
-          '<div style="overflow-x:auto;">' +
-            '<table style="width:100%;border-collapse:collapse;font-size:0.875rem;">' +
-              '<thead>' +
-                '<tr style="border-bottom:2px solid var(--rrp-border);">' +
-                  '<th style="text-align:left;padding:0.5rem 0.75rem;">Reviewer</th>' +
-                  '<th style="text-align:center;padding:0.5rem 0.75rem;">Decisions</th>' +
-                  '<th style="text-align:center;padding:0.5rem 0.75rem;">On-Time Rate</th>' +
-                  '<th style="text-align:center;padding:0.5rem 0.75rem;">Revision Trigger</th>' +
-                  '<th style="text-align:center;padding:0.5rem 0.75rem;">Avg Feedback</th>' +
-                '</tr>' +
-              '</thead>' +
-              '<tbody>' + rowsHtml + '</tbody>' +
-            '</table>' +
+        el.innerHTML =
+          '<div class="rrp-analytics-card">' +
+            '<h2 class="rrp-analytics-card-title">My Daily Activity</h2>' +
+            buildLineChart(daily) +
           '</div>' +
-        '</div>';
-        var el2 = document.getElementById('rrp-analytics-content');
-        if (el2) el2.innerHTML += perfHtml;
-      }).catch(function () {});
+          '<div class="rrp-analytics-card">' +
+            '<h2 class="rrp-analytics-card-title">My Assigned Submissions by Status</h2>' +
+            '<div class="rrp-chart">' + barsHtml + '</div>' +
+          '</div>' +
+          '<div class="rrp-analytics-card">' +
+            '<h2 class="rrp-analytics-card-title">Assignments by Type</h2>' +
+            '<div class="rrp-chart">' + typesHtml + '</div>' +
+          '</div>' +
+          '<div class="rrp-analytics-card">' +
+            '<h2 class="rrp-analytics-card-title">Summary</h2>' +
+            '<div class="rrp-analytics-tiles">' +
+              '<div class="rrp-analytics-tile">' +
+                '<div class="rrp-analytics-tile-val">' + total + '</div>' +
+                '<div class="rrp-analytics-tile-lbl">Total Assigned</div>' +
+              '</div>' +
+              '<div class="rrp-analytics-tile rrp-tile-green">' +
+                '<div class="rrp-analytics-tile-val">' + (p.finalizedCount || 0) + '</div>' +
+                '<div class="rrp-analytics-tile-lbl">Finalized</div>' +
+              '</div>' +
+              '<div class="rrp-analytics-tile rrp-tile-amber">' +
+                '<div class="rrp-analytics-tile-val">' + (p.inProgressCount || 0) + '</div>' +
+                '<div class="rrp-analytics-tile-lbl">In Progress</div>' +
+              '</div>' +
+              '<div class="rrp-analytics-tile rrp-tile-red">' +
+                '<div class="rrp-analytics-tile-val">' + (p.lateReviewAlerts || 0) + '</div>' +
+                '<div class="rrp-analytics-tile-lbl">Late Alerts</div>' +
+              '</div>' +
+              '<div class="rrp-analytics-tile">' +
+                '<div class="rrp-analytics-tile-val">' + (p.averageTimeToDecisionDays != null ? p.averageTimeToDecisionDays + 'd' : '—') + '</div>' +
+                '<div class="rrp-analytics-tile-lbl">Avg. Time to Decision</div>' +
+              '</div>' +
+            '</div>' +
+          '</div>' +
+          myPerfHtml;
 
-      document.getElementById('rrp-export-csv').addEventListener('click', function () {
-        api('GET', '/reports/export?type=workflow&format=csv').then(function (resp) {
-          var blob = new Blob([atob(resp.content)], { type: 'text/csv' });
-          var a = document.createElement('a'); a.href = URL.createObjectURL(blob);
-          a.download = resp.filename || 'rrp-workflow.csv'; a.click();
-        }).catch(function () { alert('Export failed'); });
+      }).catch(function () {
+        var el = document.getElementById('rrp-analytics-content');
+        if (el) el.innerHTML = '<div class="rrp-error">Unable to load analytics. Please login and try again.</div>';
       });
 
-      document.getElementById('rrp-export-xlsx').addEventListener('click', function () {
-        api('GET', '/reports/export?type=workflow&format=xlsx').then(function (resp) {
-          var blob = new Blob([atob(resp.content)], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-          var a = document.createElement('a'); a.href = URL.createObjectURL(blob);
-          a.download = resp.filename || 'rrp-workflow.xlsx'; a.click();
-        }).catch(function () { alert('Export failed'); });
-      });
+    } else {
+      // ── Student: scoped to their own submissions only ─────────────────────
+      Promise.all([
+        api('GET', '/analytics/workflow'),
+        api('GET', '/analytics/performance'),
+        api('GET', '/analytics/daily').catch(function () { return { dates: [], series: [] }; })
+      ]).then(function (results) {
+        var w     = results[0];
+        var p     = results[1];
+        var daily = results[2];
+        var el = document.getElementById('rrp-analytics-content');
+        if (!el) return;
 
-    }).catch(function () {
-      var el = document.getElementById('rrp-analytics-content');
-      if (el) el.innerHTML = '<div class="rrp-error">Unable to load analytics. Please login and try again.</div>';
-    });
+        var byStatus = w.totalByStatus || {};
+        var byType   = w.totalByType   || {};
+        var total    = w.totalSubmissions || 0;
+
+        var ST_STATUS_COLORS = {
+          'Submitted': '#3b82f6', 'Under Review': '#f59e0b',
+          'Under Initial Review': '#f59e0b', 'Administrative Review': '#f59e0b',
+          'Revision Required': '#8b5cf6', 'Revision Submitted': '#a78bfa',
+          'Approved': '#22c55e', 'Confirmed for Presentation': '#22c55e',
+          'Published': '#22c55e', 'Approved for Submission': '#22c55e',
+          'Rejected': '#ef4444', 'Draft': '#94a3b8'
+        };
+        var stStatusEntries = Object.keys(byStatus).sort(function (a, b) { return byStatus[b] - byStatus[a]; });
+        var stMaxCount = stStatusEntries.length ? byStatus[stStatusEntries[0]] : 1;
+        var barsHtml = stStatusEntries.map(function (status) {
+          var count = byStatus[status];
+          var pct   = total > 0 ? Math.round((count / total) * 100) : 0;
+          var barW  = stMaxCount > 0 ? Math.round((count / stMaxCount) * 100) : 0;
+          var color = ST_STATUS_COLORS[status] || (status.indexOf(': In Progress') !== -1 ? '#f59e0b' : '#64748b');
+          return '<div class="rrp-chart-row">' +
+            '<div class="rrp-chart-label">' + escapeHtml(status) + '</div>' +
+            '<div class="rrp-chart-bar-wrap">' +
+              '<div class="rrp-chart-bar" style="width:' + barW + '%;background:' + color + ';" title="' + count + ' submissions"></div>' +
+            '</div>' +
+            '<div class="rrp-chart-value">' + count + ' <span class="rrp-chart-pct">(' + pct + '%)</span></div>' +
+          '</div>';
+        }).join('') || '<p style="color:var(--rrp-text-muted)">No submissions yet.</p>';
+
+        var stTypeEntries = Object.keys(byType).sort(function (a, b) { return byType[b] - byType[a]; });
+        var stTypeMax = stTypeEntries.length ? byType[stTypeEntries[0]] : 1;
+        var typesHtml = stTypeEntries.map(function (t) {
+          var count = byType[t];
+          var pct   = total > 0 ? Math.round((count / total) * 100) : 0;
+          var barW  = stTypeMax > 0 ? Math.round((count / stTypeMax) * 100) : 0;
+          return '<div class="rrp-chart-row">' +
+            '<div class="rrp-chart-label">' + escapeHtml(typeLabel(t)) + '</div>' +
+            '<div class="rrp-chart-bar-wrap">' +
+              '<div class="rrp-chart-bar" style="width:' + barW + '%;background:#0ea5e9;"></div>' +
+            '</div>' +
+            '<div class="rrp-chart-value">' + count + ' <span class="rrp-chart-pct">(' + pct + '%)</span></div>' +
+          '</div>';
+        }).join('') || '<p style="color:var(--rrp-text-muted)">No submissions yet.</p>';
+
+        el.innerHTML =
+          '<div class="rrp-analytics-card">' +
+            '<h2 class="rrp-analytics-card-title">My Submissions Activity</h2>' +
+            buildLineChart(daily) +
+          '</div>' +
+          '<div class="rrp-analytics-card">' +
+            '<h2 class="rrp-analytics-card-title">My Submissions by Status</h2>' +
+            '<div class="rrp-chart">' + barsHtml + '</div>' +
+          '</div>' +
+          '<div class="rrp-analytics-card">' +
+            '<h2 class="rrp-analytics-card-title">Submissions by Type</h2>' +
+            '<div class="rrp-chart">' + typesHtml + '</div>' +
+          '</div>' +
+          '<div class="rrp-analytics-card">' +
+            '<h2 class="rrp-analytics-card-title">My Summary</h2>' +
+            '<div class="rrp-analytics-tiles">' +
+              '<div class="rrp-analytics-tile">' +
+                '<div class="rrp-analytics-tile-val">' + total + '</div>' +
+                '<div class="rrp-analytics-tile-lbl">Total Submitted</div>' +
+              '</div>' +
+              '<div class="rrp-analytics-tile rrp-tile-green">' +
+                '<div class="rrp-analytics-tile-val">' + (p.finalizedCount || 0) + '</div>' +
+                '<div class="rrp-analytics-tile-lbl">Finalized</div>' +
+              '</div>' +
+              '<div class="rrp-analytics-tile rrp-tile-amber">' +
+                '<div class="rrp-analytics-tile-val">' + (p.inProgressCount || 0) + '</div>' +
+                '<div class="rrp-analytics-tile-lbl">In Progress</div>' +
+              '</div>' +
+              '<div class="rrp-analytics-tile rrp-tile-gray">' +
+                '<div class="rrp-analytics-tile-val">' + (p.withdrawnCancelledCount || 0) + '</div>' +
+                '<div class="rrp-analytics-tile-lbl">Withdrawn / Cancelled</div>' +
+              '</div>' +
+              '<div class="rrp-analytics-tile">' +
+                '<div class="rrp-analytics-tile-val">' + (p.averageTimeToDecisionDays != null ? p.averageTimeToDecisionDays + 'd' : '—') + '</div>' +
+                '<div class="rrp-analytics-tile-lbl">Avg. Time to Decision</div>' +
+              '</div>' +
+            '</div>' +
+          '</div>';
+
+      }).catch(function () {
+        var el = document.getElementById('rrp-analytics-content');
+        if (el) el.innerHTML = '<div class="rrp-error">Unable to load analytics. Please login and try again.</div>';
+      });
+    }
   }
 
   function renderReviewerDashboard(container, activeFilter) {
@@ -3179,8 +3545,9 @@
           var fields = ['title', 'abstract', 'keywords', 'researchArea'];
           var fLabels = { title: 'Title', abstract: 'Abstract', keywords: 'Keywords', researchArea: 'Research Area' };
           var roundOpts = rh.map(function (snap, i) {
-            return '<option value="' + i + '">Round ' + escapeHtml(String(snap.round || (i + 1))) +
-              (snap.submittedAt ? ' \u2014 ' + new Date(snap.submittedAt).toLocaleDateString() : '') + '</option>';
+            var roundNum = (snap.round != null) ? snap.round + 1 : (i + 1);
+            return '<option value="' + i + '">Round ' + escapeHtml(String(roundNum)) +
+              (snap.capturedAt ? ' \u2014 ' + new Date(snap.capturedAt).toLocaleDateString() : '') + '</option>';
           }).join('');
           return '<div class="rrp-detail-section">' +
             '<h3>&#128202; Revision History</h3>' +
@@ -3196,21 +3563,32 @@
             '</div>' +
           '</div>';
         })() : '') +
+        // ── Similarity Check — visible to all roles ────────────────────────────
+        '<div class="rrp-detail-section" id="rrp-similarity-section">' +
+          '<h3>&#128196; Similarity Check</h3>' +
+          (!isLocked ? '<button type="button" class="rrp-btn secondary" id="rrp-similarity-btn">&#128196; Run Similarity Check</button>' : '') +
+          '<div id="rrp-similarity-result" style="margin-top:.5rem;">' +
+            (sub.similarityScore != null ? (function () {
+              var sc  = sub.similarityScore;
+              var col = sc < 10 ? '#15803d' : sc < 30 ? '#b45309' : '#b91c1c';
+              var providerNote = sub.similarityProvider === 'internal'
+                ? ' <span style="font-size:.78rem;color:var(--rrp-text-muted);">(checked against portal submissions)</span>'
+                : (sub.similarityProvider ? ' <span style="font-size:.78rem;color:var(--rrp-text-muted);">via ' + escapeHtml(sub.similarityProvider) + '</span>' : '');
+              return '<span style="font-size:.88rem;color:var(--rrp-text-muted);">Last check: ' +
+                '<strong style="color:' + col + ';">' + sc + '%</strong> similarity' +
+                (sub.similarityCheckedAt ? ' on ' + new Date(sub.similarityCheckedAt).toLocaleDateString() : '') +
+                providerNote +
+                (sub.similarityReportUrl ? ' &mdash; <a href="' + safeUrl(sub.similarityReportUrl) + '" target="_blank" rel="noopener">&#128203; View Full Report</a>' : '') +
+                '</span>' + _buildSimMatchesHtml(sub.similarityMatches);
+            })() : '<span style="font-size:.85rem;color:var(--rrp-text-muted);">No similarity check has been run yet.</span>') +
+          '</div>' +
+        '</div>' +
+        // ── Administrative Controls — admin/coordinator only ─────────────────
         (isAdmin && !isLocked ? '<div id="rrp-admin-controls" class="rrp-detail-section"><h3>Administrative Controls</h3>' +
           '<div style="display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;">' +
             '<button type="button" class="rrp-btn secondary" id="rrp-skip-stage-btn">&#9193; Skip Current Stage</button>' +
-            '<button type="button" class="rrp-btn secondary" id="rrp-similarity-btn">&#128196; Run Similarity Check</button>' +
             (canCancel ? '<button type="button" class="rrp-btn danger" id="rrp-cancel-submission-btn">&#10060; Cancel Submission</button>' : '') +
           '</div>' +
-          '<div id="rrp-similarity-result">' +
-            (sub.similarityScore != null
-              ? '<span style="font-size:.88rem;color:var(--rrp-text-muted);">Last check: ' +
-                  '<strong style="color:' + (sub.similarityScore < 10 ? '#15803d' : sub.similarityScore < 30 ? '#b45309' : '#b91c1c') + ';">' + sub.similarityScore + '%</strong>' +
-                  ' similarity' + (sub.similarityCheckedAt ? ' on ' + new Date(sub.similarityCheckedAt).toLocaleDateString() : '') +
-                  (sub.similarityReportUrl ? ' &mdash; <a href="' + safeUrl(sub.similarityReportUrl) + '" target="_blank" rel="noopener">View Report</a>' : '') +
-                '</span>'
-              : '')
-          + '</div>' +
           '<span id="rrp-skip-msg" style="margin-top:.5rem;display:block;"></span>' +
         '</div>' : '');
 
@@ -3533,10 +3911,15 @@
                 if (resEl) resEl.innerHTML = '<span style="font-size:.88rem;color:var(--rrp-text-muted);">&#8987; ' + escapeHtml(r.message || 'Similarity check in progress. Try again in a few minutes.') + '</span>';
               } else {
                 var col = r.score < 10 ? '#15803d' : r.score < 30 ? '#b45309' : '#b91c1c';
-                if (resEl) resEl.innerHTML = '<span style="font-size:.88rem;color:var(--rrp-text-muted);">Score: <strong style="color:' + col + ';">' + r.score + '%</strong> similarity' +
+                var providerNote = r.provider === 'internal'
+                  ? ' <span style="font-size:.78rem;color:var(--rrp-text-muted);">(checked against portal submissions)</span>'
+                  : (r.provider ? ' <span style="font-size:.78rem;color:var(--rrp-text-muted);">via ' + escapeHtml(r.provider) + '</span>' : '');
+                var baseHtml = '<span style="font-size:.88rem;color:var(--rrp-text-muted);">Score: <strong style="color:' + col + ';">' + r.score + '%</strong> similarity' +
                   (r.checkedAt ? ' on ' + new Date(r.checkedAt).toLocaleDateString() : '') +
-                  (r.reportUrl ? ' &mdash; <a href="' + safeUrl(r.reportUrl) + '" target="_blank" rel="noopener">View Report</a>' : '') +
+                  providerNote +
+                  (r.reportUrl ? ' &mdash; <a href="' + safeUrl(r.reportUrl) + '" target="_blank" rel="noopener">&#128203; View Full Report</a>' : '') +
                   '</span>';
+                if (resEl) resEl.innerHTML = baseHtml + _buildSimMatchesHtml(r.matches);
               }
             })
             .catch(function (err) {
@@ -3625,28 +4008,110 @@
         function buildDiff() {
           var idx  = roundSel ? parseInt(roundSel.value, 10) : rh.length - 1;
           var snap = rh[idx] || rh[rh.length - 1];
-          var roundLabel = 'Round ' + (snap.round || (idx + 1));
-          var rows = fields.map(function (f) {
-            var ov = snap[f] || ''; var nv = sub[f] || '';
-            var changed = ov !== nv;
-            return '<tr' + (changed ? ' class="rrp-diff-changed"' : '') + '>' +
-              '<td><strong>' + fLabels[f] + '</strong></td>' +
-              '<td class="rrp-diff-old">' + escapeHtml(ov) + '</td>' +
-              '<td class="rrp-diff-new"><strong>' + escapeHtml(nv) + '</strong></td>' +
-            '</tr>';
-          }).join('');
+          var roundLabel  = 'Round ' + ((snap.round != null) ? snap.round + 1 : (idx + 1));
+          var beforeRound = (snap.round != null) ? snap.round : idx;
+          var afterRound  = beforeRound + 1;
+
+          // Find before/after documents (skip reviewer uploads)
+          var attachments = sub.attachments || [];
+          var beforeDoc = (attachments.filter(function (a) {
+            return (a.revisionRound != null ? a.revisionRound : 0) === beforeRound && !a.uploadedByReviewer;
+          })[0]) || null;
+          var afterDoc = (attachments.filter(function (a) {
+            return (a.revisionRound != null ? a.revisionRound : 0) === afterRound && !a.uploadedByReviewer;
+          })[0]) || null;
+
           var hdr = document.getElementById('rrp-diff-header');
           var th  = document.getElementById('rrp-diff-thead');
           var tb  = document.getElementById('rrp-diff-tbody');
-          if (hdr) hdr.innerHTML = '<h3>Revision Comparison \u2014 ' + escapeHtml(roundLabel) + ' vs Current</h3>' +
-            '<button type="button" class="rrp-btn secondary" id="rrp-diff-close">&#10005; Close</button>';
-          if (th)  th.innerHTML  = '<tr><th>Field</th><th>Before (' + escapeHtml(roundLabel) + ')</th><th>After (Current)</th></tr>';
-          if (tb)  tb.innerHTML  = rows;
-          var cl = document.getElementById('rrp-diff-close');
-          if (cl) cl.addEventListener('click', function () {
-            diffModal.style.display = 'none';
-            diffBtn.textContent = '\uD83D\uDCCA Show Comparison';
-          });
+
+          var closeBtn = '<button type="button" class="rrp-btn secondary" id="rrp-diff-close">&#10005; Close</button>';
+          function wireClose() {
+            var cl = document.getElementById('rrp-diff-close');
+            if (cl) cl.addEventListener('click', function () {
+              diffModal.style.display = 'none';
+              diffBtn.textContent = '\uD83D\uDCCA Show Comparison';
+            });
+          }
+
+          if (hdr) hdr.innerHTML = '<h3>Document Comparison \u2014 ' + escapeHtml(roundLabel) + ' vs Current</h3>' + closeBtn;
+          if (th)  th.innerHTML  = '<tr>' +
+            '<th style="width:50%;padding:.4rem .5rem;text-align:left;border-bottom:2px solid #e5e7eb;">Before (' + escapeHtml(roundLabel) + ')</th>' +
+            '<th style="width:50%;padding:.4rem .5rem;text-align:left;border-bottom:2px solid #e5e7eb;">After (Current)</th>' +
+            '</tr>';
+
+          if (!beforeDoc && !afterDoc) {
+            if (tb) tb.innerHTML = '<tr><td colspan="2" style="padding:1rem;text-align:center;color:var(--rrp-text-muted);">No documents found for this revision round.</td></tr>';
+            wireClose();
+            return;
+          }
+
+          var getExt = function (doc) { return doc ? (doc.name || doc.filename || '').toLowerCase().split('.').pop() : ''; };
+          var beforeExt = getExt(beforeDoc);
+          var afterExt  = getExt(afterDoc);
+
+          var makeUrl = function (doc, inline) {
+            if (!doc) return '';
+            var u = restBase + '/submissions/' + encodeURIComponent(submissionId) + '/attachments/' + encodeURIComponent(doc.filename || doc.name) + '?_wpnonce=' + nonce;
+            return inline ? u + '&inline=1' : u;
+          };
+
+          // DOCX + DOCX: extract text and compute paragraph-level diff
+          if (beforeExt === 'docx' && afterExt === 'docx' && window.mammoth) {
+            if (tb) tb.innerHTML = '<tr><td colspan="2" style="padding:1rem;text-align:center;"><span class="rrp-loading">Extracting document text for comparison\u2026</span></td></tr>';
+            wireClose();
+            var fetchText = function (url) {
+              return fetch(url, { headers: { 'X-WP-Nonce': nonce } })
+                .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.arrayBuffer(); })
+                .then(function (buf) { return window.mammoth.extractRawText({ arrayBuffer: buf }); })
+                .then(function (result) { return result.value || ''; });
+            };
+            Promise.all([
+              fetchText(makeUrl(beforeDoc, true)),
+              fetchText(makeUrl(afterDoc,  true))
+            ]).then(function (texts) {
+              if (tb) tb.innerHTML = _renderDocDiff(texts[0], texts[1]);
+              wireClose();
+            }).catch(function (err) {
+              if (tb) tb.innerHTML = '<tr><td colspan="2" style="padding:1rem;" class="rrp-error">Could not extract document text: ' + escapeHtml(err.message || 'Unknown error') + '</td></tr>';
+              wireClose();
+            });
+
+          } else {
+            // PDF or unknown: show side-by-side inline viewers
+            var cellHtml = function (doc, ext, label) {
+              if (!doc) return '<em style="color:var(--rrp-text-muted);">' + escapeHtml(label) + '</em>';
+              var url = makeUrl(doc, true);
+              if (ext === 'pdf') {
+                return '<div style="font-size:.8rem;color:#6b7280;margin-bottom:.3rem;">&#128196; ' + escapeHtml(doc.name || doc.filename) + '</div>' +
+                  '<iframe src="' + escapeHtml(url) + '" style="width:100%;height:480px;border:1px solid #e5e7eb;border-radius:4px;"></iframe>';
+              }
+              if (ext === 'docx' && window.mammoth) {
+                return '<div style="font-size:.8rem;color:#6b7280;margin-bottom:.3rem;">&#128196; ' + escapeHtml(doc.name || doc.filename) + '</div>' +
+                  '<div style="padding:.75rem;background:#fff;border:1px solid #e5e7eb;border-radius:4px;max-height:480px;overflow-y:auto;" id="rrp-diff-docx-' + (doc === beforeDoc ? 'before' : 'after') + '"><span class="rrp-loading">Loading\u2026</span></div>';
+              }
+              return '<div style="font-size:.8rem;color:#6b7280;margin-bottom:.3rem;">&#128196; ' + escapeHtml(doc.name || doc.filename) + '</div>' +
+                '<a class="rrp-btn secondary" href="' + escapeHtml(makeUrl(doc, false)) + '" target="_blank">&#8595; Download</a>';
+            };
+            if (tb) tb.innerHTML = '<tr>' +
+              '<td style="width:50%;vertical-align:top;padding:.5rem;">' + cellHtml(beforeDoc, beforeExt, 'No document for this round') + '</td>' +
+              '<td style="width:50%;vertical-align:top;padding:.5rem;">' + cellHtml(afterDoc, afterExt, 'No revised document uploaded') + '</td>' +
+              '</tr>';
+            // Load DOCX panes asynchronously if applicable
+            ['before', 'after'].forEach(function (side) {
+              var doc = side === 'before' ? beforeDoc : afterDoc;
+              var ext = side === 'before' ? beforeExt : afterExt;
+              if (!doc || ext !== 'docx' || !window.mammoth) return;
+              var pane = document.getElementById('rrp-diff-docx-' + side);
+              if (!pane) return;
+              fetch(makeUrl(doc, true), { headers: { 'X-WP-Nonce': nonce } })
+                .then(function (r) { return r.arrayBuffer(); })
+                .then(function (buf) { return window.mammoth.convertToHtml({ arrayBuffer: buf }); })
+                .then(function (result) { if (pane) pane.innerHTML = '<div style="font-family:Georgia,serif;line-height:1.6;">' + result.value + '</div>'; })
+                .catch(function () { if (pane) pane.innerHTML = '<em style="color:#6b7280;">Could not render document.</em>'; });
+            });
+            wireClose();
+          }
         }
 
         diffBtn.addEventListener('click', function () {

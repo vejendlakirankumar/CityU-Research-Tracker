@@ -46,6 +46,16 @@ class Research_Review_Portal {
 		add_action( 'wp_logout', array( __CLASS__, 'clear_entra_session_flag_on_logout' ) );
 		// Block locked accounts from logging in via username+password.
 		add_filter( 'authenticate', array( __CLASS__, 'block_locked_users' ), 30, 3 );
+		// Block SSO-provisioned accounts from logging in via username+password.
+		add_filter( 'authenticate', array( __CLASS__, 'block_sso_users_from_password_login' ), 31, 3 );
+		// Replace verbose WP core auth errors with a generic message to prevent
+		// username enumeration (OWASP A07). Runs last (priority 99) so our own
+		// meaningful errors (account_locked, sso_account_no_password) are seen first.
+		add_filter( 'authenticate', array( __CLASS__, 'normalize_auth_errors' ), 99, 3 );
+		// Track successive failed login attempts; auto-lock after 3 failures.
+		add_action( 'wp_login_failed', array( __CLASS__, 'track_failed_login' ) );
+		// Reset the failure counter whenever a user logs in successfully.
+		add_action( 'wp_login', array( __CLASS__, 'reset_login_counter' ), 9, 2 );
 	}
 
 	/**
@@ -78,6 +88,108 @@ class Research_Review_Portal {
 			. '<div class="rrp-divider"><span>or sign in with username &amp; password</span></div>'
 			. '</div>';
 		return $message . $btn;
+	}
+
+	/**
+	 * Replace all WP core authentication error messages with a single generic
+	 * "Invalid username or password." response to prevent username enumeration
+	 * (OWASP A07 — Identification and Authentication Failures).
+	 *
+	 * Portal-specific error codes (account_locked, sso_account_no_password) are
+	 * intentionally preserved — they carry actionable guidance for the user.
+	 * ALL other auth errors (invalid_username, invalid_email, incorrect_password,
+	 * empty_username, empty_password, and any future WP core codes) are collapsed
+	 * into the single generic message so attackers cannot enumerate valid usernames.
+	 */
+	public static function normalize_auth_errors( $user, $username, $password ) {
+		if ( ! is_wp_error( $user ) ) {
+			return $user;
+		}
+		$preserve = array( 'account_locked', 'sso_account_no_password' );
+		if ( in_array( $user->get_error_code(), $preserve, true ) ) {
+			return $user;
+		}
+		return new WP_Error(
+			'authentication_failed',
+			__( '<strong>Error:</strong> Invalid username or password.', 'rrp' )
+		);
+	}
+
+	/**
+	 * Track successive failed password-based login attempts per user account.
+	 * After 3 failures the account is automatically locked (rrp_locked = 1) and
+	 * all active sessions are destroyed immediately.
+	 *
+	 * SSO accounts are excluded — they cannot authenticate via password anyway.
+	 * Already-locked accounts are skipped to avoid unnecessary DB writes.
+	 *
+	 * @param string $username Username or email address that failed to log in.
+	 */
+	public static function track_failed_login( $username ) {
+		$user = get_user_by( 'login', $username );
+		if ( ! $user ) {
+			$user = get_user_by( 'email', $username );
+		}
+		if ( ! $user ) {
+			return; // Unknown username — no account record to update.
+		}
+		// SSO-managed accounts have password login blocked separately.
+		if ( get_user_meta( $user->ID, 'rrp_entra_oid', true ) ) {
+			return;
+		}
+		// Account already locked — no need to increment further.
+		if ( get_user_meta( $user->ID, 'rrp_locked', true ) ) {
+			return;
+		}
+		$attempts = (int) get_user_meta( $user->ID, 'rrp_failed_login_count', true ) + 1;
+		update_user_meta( $user->ID, 'rrp_failed_login_count', $attempts );
+		if ( $attempts >= 3 ) {
+			update_user_meta( $user->ID, 'rrp_locked', '1' );
+			// Destroy all active sessions so any hijacked session is terminated.
+			$sessions = WP_Session_Tokens::get_instance( $user->ID );
+			$sessions->destroy_all();
+		}
+	}
+
+	/**
+	 * Clear the failed-login counter when a user authenticates successfully.
+	 * Registered at priority 9 to run before other wp_login handlers.
+	 */
+	public static function reset_login_counter( $user_login, $user ) {
+		delete_user_meta( $user->ID, 'rrp_failed_login_count' );
+	}
+
+	/**
+	 * Prevent SSO-provisioned accounts from completing a username+password login.
+	 *
+	 * Users whose account was created or linked to Entra ID (they have the
+	 * rrp_entra_oid usermeta) must authenticate exclusively through the SSO
+	 * flow.  Password-based login is blocked so that a guessed / reset password
+	 * cannot be used as an alternative entry point into an Entra-managed account.
+	 *
+	 * Only enforced when Entra SSO is actually configured; if SSO is disabled the
+	 * restriction is lifted so administrators can still access their accounts.
+	 */
+	public static function block_sso_users_from_password_login( $user, $username, $password ) {
+		if ( is_wp_error( $user ) || ! ( $user instanceof WP_User ) ) {
+			return $user;
+		}
+		// Only enforce while Entra SSO is active — avoids admin lockout if SSO is disabled.
+		if ( ! class_exists( 'RRP_Auth_Provider' ) || ! RRP_Auth_Provider::is_entra_active() ) {
+			return $user;
+		}
+		if ( get_user_meta( $user->ID, 'rrp_entra_oid', true ) ) {
+			$sso_url = esc_url( RRP_Auth_Provider::get_login_url() );
+			return new WP_Error(
+				'sso_account_no_password',
+				sprintf(
+					/* translators: %s = SSO login URL */
+					__( 'This account is managed by your institution. Please <a href="%s">sign in with Microsoft</a> instead.', 'rrp' ),
+					$sso_url
+				)
+			);
+		}
+		return $user;
 	}
 
 	/**
@@ -1208,6 +1320,7 @@ a{text-decoration:none;color:inherit}
 	add_action( 'send_headers', function () {
 		header( 'X-Content-Type-Options: nosniff' );
 		header( 'X-Frame-Options: SAMEORIGIN' );
+		header( 'Strict-Transport-Security: max-age=31536000; includeSubDomains' );
 		header( 'Referrer-Policy: strict-origin-when-cross-origin' );
 		header( 'Permissions-Policy: geolocation=(), camera=(), microphone=(), payment=()' );
 		// Content-Security-Policy: allow our own origin + the Mammoth CDN script only.
@@ -1301,6 +1414,8 @@ a{text-decoration:none;color:inherit}
 	add_action( 'rrp_escalation_check',   array( 'Portal_REST', 'send_escalation_emails' ) );
 	add_action( 'rrp_auto_backup',        array( 'Portal_REST', 'run_auto_backup' ) );
 	add_action( 'phpmailer_init',         array( 'Portal_REST', 'configure_phpmailer' ) );
+	// Route all wp_mail() calls through ACS when ACS email is enabled (bypasses PHPMailer/sendmail)
+	add_filter( 'pre_wp_mail',            array( 'Portal_REST', 'pre_wp_mail_acs' ), 10, 2 );
 
 	// Register a custom weekly recurrence for auto-backup.
 	add_filter( 'cron_schedules', function ( $schedules ) {

@@ -7,7 +7,7 @@
 #
 # Usage (from WSL):
 #   chmod +x scripts/set-public-url.sh
-#   ./scripts/set-public-url.sh http://rcgapimtest.eastus2.cloudapp.azure.com
+#   ./scripts/set-public-url.sh http://your-portal.example.com
 #
 # What this script does:
 #   1. Updates siteurl + home in the WordPress database
@@ -23,7 +23,7 @@ NEW_URL="${1:-}"
 
 if [ -z "$NEW_URL" ]; then
   echo "Usage:   $0 <new-url>"
-  echo "Example: $0 http://rcgapimtest.eastus2.cloudapp.azure.com"
+  echo "Example: $0 http://your-portal.example.com"
   exit 1
 fi
 

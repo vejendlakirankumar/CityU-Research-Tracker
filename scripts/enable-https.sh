@@ -9,11 +9,11 @@
 # Prerequisites:
 #   - Port 443 open in Azure NSG (see OPERATIONS-MANUAL.md)
 #   - Port 80 open (used for ACME HTTP-01 challenge)
-#   - Domain resolves publicly (e.g. rcgapimtest.eastus2.cloudapp.azure.com)
+#   - Domain resolves publicly (e.g. your-portal.example.com)
 # ============================================================
 set -euo pipefail
 
-DOMAIN="${DOMAIN:-rcgapimtest.eastus2.cloudapp.azure.com}"
+DOMAIN="${DOMAIN:-your-portal.example.com}"
 ADMIN_EMAIL="${ADMIN_EMAIL:-vejendlakirankumar@cityu.edu}"
 WP_PATH="/var/www/html"
 

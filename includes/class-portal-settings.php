@@ -39,9 +39,10 @@ class RRP_Portal_Settings {
 	const ENCRYPTED_FIELDS = array(
 		'entra_client_secret',
 		'smtp_password',
-		'azure_blob_sas_url',   // Container SAS URL — contains auth token
-		'turnitin_api_key',      // Turnitin v3 integration key
-		'ithenticate_api_key',   // iThenticate v2 API key
+		'azure_blob_sas_url',      // Container SAS URL — contains auth token
+		'acs_connection_string',   // Azure Communication Services connection string
+		'turnitin_api_key',        // Turnitin v3 integration key
+		'ithenticate_api_key',     // iThenticate v2 API key
 	);
 
 	/** Default values for every known setting. */
@@ -72,7 +73,10 @@ class RRP_Portal_Settings {
 		'smtp_password'   => '',      // encrypted at rest (already in ENCRYPTED_FIELDS)
 		'smtp_from_name'  => '',
 		'smtp_from_email' => '',
-
+		// ── Azure Communication Services Email ────────────────────────────────────────
+		'acs_email_enabled'    => false,
+		'acs_connection_string' => '',  // encrypted at rest; format: endpoint=https://…;accesskey=…
+		'acs_sender_address'   => '',   // e.g. DoNotReply@yourdomain.azurecomm.net
 		// ── Auto Backup / Azure Blob ────────────────────────────────────────────
 		'azure_blob_sas_url'   => '',    // Container SAS URL — encrypted at rest
 		'auto_backup_enabled'  => false,
