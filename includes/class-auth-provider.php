@@ -126,8 +126,22 @@ class RRP_Auth_Provider {
 		$state = wp_create_nonce( 'rrp_entra_state' );
 
 		if ( $redirect_to ) {
-			// Store the post-login destination for 5 minutes
-			set_transient( 'rrp_entra_post_login_' . $state, $redirect_to, 300 );
+			// Clamp redirect_to to same-origin to prevent open-redirect abuse.
+			// External URLs are silently dropped; relative paths and same-host URLs
+			// are accepted. This stops an attacker from phishing via a crafted
+			// login URL that bounces the victim to a malicious site after authentication.
+			$home_parts   = wp_parse_url( home_url() );
+			$redir_parts  = wp_parse_url( $redirect_to );
+			$is_relative  = ( strpos( $redirect_to, '/' ) === 0 && strpos( $redirect_to, '//' ) !== 0 );
+			$same_origin  = $is_relative || (
+				isset( $redir_parts['host'] ) &&
+				strtolower( (string) ( $redir_parts['host'] ?? '' ) ) === strtolower( (string) ( $home_parts['host'] ?? '' ) ) &&
+				( $redir_parts['scheme'] ?? 'https' ) === ( $home_parts['scheme'] ?? 'https' )
+			);
+			if ( $same_origin ) {
+				set_transient( 'rrp_entra_post_login_' . $state, $redirect_to, 300 );
+			}
+			// If not same-origin, fall through to redirect to portal home after login.
 		}
 
 		$params = array(

@@ -11,7 +11,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 class Portal_Data {
 
 	const SUBMISSIONS_FILE = 'submissions.json';
-	const REVIEWERS_FILE   = 'reviewers.json';
+
 	const CONFIG_FILE      = 'config.json';
 	const WEBHOOKS_FILE    = 'webhooks.json';
 
@@ -75,13 +75,15 @@ class Portal_Data {
 	}
 
 	const DEFAULT_REVIEWERS = array(
-		array( 'id' => 'r1', 'name' => 'Cris Ewell', 'email' => 'cewell@cityu.edu', 'submissionTypes' => array( 'conference', 'publication', 'grant' ) ),
-		array( 'id' => 'r2', 'name' => 'George Bragg', 'email' => 'gbragg@cityu.edu', 'submissionTypes' => array( 'conference', 'publication' ) ),
-		array( 'id' => 'r3', 'name' => 'Greg Surber', 'email' => 'gsurber@cityu.edu', 'submissionTypes' => array( 'conference', 'publication', 'student-project' ) ),
-		array( 'id' => 'r4', 'name' => 'Jemell Garris', 'email' => 'garrisjemell@cityu.edu', 'submissionTypes' => array( 'conference', 'publication', 'student-project', 'grant' ) ),
-		array( 'id' => 'r5', 'name' => 'Jenny Ju', 'email' => 'jju@cityu.edu', 'submissionTypes' => array( 'conference', 'publication', 'student-project' ) ),
-		array( 'id' => 'r6', 'name' => 'Patrick Offor', 'email' => 'poffor@cityu.edu', 'submissionTypes' => array( 'conference', 'publication', 'grant' ) ),
-		array( 'id' => 'r7', 'name' => 'Morgan Zantua', 'email' => 'mzantua@cityu.edu', 'submissionTypes' => array( 'conference', 'publication', 'student-project', 'grant' ) ),
+		// Seed data uses placeholder emails. Replace with real addresses via the
+		// admin Users panel — never hardcode institutional email addresses in source.
+		array( 'id' => 'r1', 'name' => 'Reviewer One',   'email' => 'reviewer1@example.com', 'submissionTypes' => array( 'conference', 'publication', 'grant' ) ),
+		array( 'id' => 'r2', 'name' => 'Reviewer Two',   'email' => 'reviewer2@example.com', 'submissionTypes' => array( 'conference', 'publication' ) ),
+		array( 'id' => 'r3', 'name' => 'Reviewer Three', 'email' => 'reviewer3@example.com', 'submissionTypes' => array( 'conference', 'publication', 'student-project' ) ),
+		array( 'id' => 'r4', 'name' => 'Reviewer Four',  'email' => 'reviewer4@example.com', 'submissionTypes' => array( 'conference', 'publication', 'student-project', 'grant' ) ),
+		array( 'id' => 'r5', 'name' => 'Reviewer Five',  'email' => 'reviewer5@example.com', 'submissionTypes' => array( 'conference', 'publication', 'student-project' ) ),
+		array( 'id' => 'r6', 'name' => 'Reviewer Six',   'email' => 'reviewer6@example.com', 'submissionTypes' => array( 'conference', 'publication', 'grant' ) ),
+		array( 'id' => 'r7', 'name' => 'Reviewer Seven', 'email' => 'reviewer7@example.com', 'submissionTypes' => array( 'conference', 'publication', 'student-project', 'grant' ) ),
 	);
 
 	public static function ensure_data_dir() {
@@ -128,59 +130,109 @@ class Portal_Data {
 		return substr( $name, 0, 100 );
 	}
 
+	/**
+	 * Read all submissions from the database.
+	 * Returns the same { submissions: [], nextIds: {} } envelope that all callers expect.
+	 */
 	public static function read_submissions() {
-		self::ensure_data_dir();
-		$path = RRP_DATA_DIR . self::SUBMISSIONS_FILE;
-		if ( ! file_exists( $path ) ) {
-			return array( 'submissions' => array(), 'nextIds' => array() );
+		global $wpdb;
+		self::ensure_data_dir(); // Keeps the uploads/ directory protected.
+		$table = $wpdb->prefix . 'rrp_submissions';
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching
+		$rows  = $wpdb->get_col( "SELECT `data` FROM `{$table}` ORDER BY `created_at` ASC, `submission_id` ASC" );
+		$submissions = array();
+		if ( is_array( $rows ) ) {
+			foreach ( $rows as $json ) {
+				$sub = json_decode( (string) $json, true );
+				if ( is_array( $sub ) ) {
+					$submissions[] = $sub;
+				}
+			}
 		}
-		$raw = file_get_contents( $path );
-		if ( substr( $raw, 0, 3 ) === "\xEF\xBB\xBF" ) {
-			$raw = substr( $raw, 3 );
+		// Re-derive status for non-terminal submissions so stale DB values never surface.
+		$_preserved_statuses = array( 'Draft', 'Withdrawn', 'Cancelled', 'Full Paper Invited', 'Appeal Pending', 'Appeal Under Review' );
+		foreach ( $submissions as &$_sub ) {
+			if ( ! in_array( $_sub['status'] ?? '', $_preserved_statuses, true ) ) {
+				$_sub['status'] = self::derive_submission_status( $_sub );
+			}
 		}
-		$data = json_decode( $raw, true );
-		if ( ! is_array( $data ) ) {
-			return array( 'submissions' => array(), 'nextIds' => array() );
-		}
-		if ( empty( $data['submissions'] ) || ! is_array( $data['submissions'] ) ) {
-			$data['submissions'] = array();
-		}
-		if ( empty( $data['nextIds'] ) || ! is_array( $data['nextIds'] ) ) {
-			$data['nextIds'] = array();
-		}
-		return $data;
-	}
-
-	public static function write_submissions( $data ) {
-		self::ensure_data_dir();
-		file_put_contents( RRP_DATA_DIR . self::SUBMISSIONS_FILE, wp_json_encode( $data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES ), LOCK_EX );
-	}
-
-	public static function next_id( $type ) {
-		$data   = self::read_submissions();
-		$year   = (int) gmdate( 'Y' );
-		$key    = $type . '-' . $year;
-		$num    = ( isset( $data['nextIds'][ $key ] ) ? (int) $data['nextIds'][ $key ] : 0 ) + 1;
-		$data['nextIds'][ $key ] = $num;
-		$prefix_map = array(
-			'conference'      => 'ARS',
-			'publication'     => 'PUB',
-			'student-project' => 'PROJ',
-			'grant'           => 'GRN',
-			'dissertation'    => 'DIS',
-			'capstone'        => 'CAP',
-			'research-paper'  => 'RES',
-			'grant-proposal'  => 'GRP',
+		unset( $_sub );
+		$nextIds = get_option( 'rrp_next_ids', array() );
+		return array(
+			'submissions' => $submissions,
+			'nextIds'     => is_array( $nextIds ) ? $nextIds : array(),
 		);
-		if ( isset( $prefix_map[ $type ] ) ) {
-			$prefix = $prefix_map[ $type ];
-		} else {
-			// Derive a 3-letter prefix from the type slug for any future dynamic type.
-			$slug   = strtoupper( preg_replace( '/[^a-zA-Z]/', '', $type ) );
-			$prefix = substr( $slug, 0, 3 ) ?: 'SUB';
+	}
+
+	/**
+	 * Persist the full submissions data set to the database.
+	 * Upserts every submission present in $data and removes any rows no longer
+	 * in the array — exactly mirroring the previous whole-file-write behaviour.
+	 * The entire operation runs inside a transaction for atomicity.
+	 */
+	public static function write_submissions( $data ) {
+		global $wpdb;
+		$table       = $wpdb->prefix . 'rrp_submissions';
+		$submissions = isset( $data['submissions'] ) ? (array) $data['submissions'] : array();
+		$nextIds     = isset( $data['nextIds'] )     ? (array) $data['nextIds']     : array();
+
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery
+		$wpdb->query( 'START TRANSACTION' );
+
+		$ids_in_data = array();
+		foreach ( $submissions as $sub ) {
+			$id = $sub['id'] ?? null;
+			if ( ! $id || ! is_string( $id ) ) {
+				continue;
+			}
+			$ids_in_data[]  = (string) $id;
+			$created_raw    = $sub['createdAt'] ?? null;
+			$created_ts     = $created_raw ? strtotime( $created_raw ) : false;
+			$created_at_db  = ( false !== $created_ts ) ? gmdate( 'Y-m-d H:i:s', $created_ts ) : current_time( 'mysql', true );
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery
+			$wpdb->replace(
+				$table,
+				array(
+					'submission_id'   => (string) $id,
+					'status'          => (string) ( $sub['status'] ?? '' ),
+					'submitter_email' => strtolower( trim( (string) ( $sub['submitterEmail'] ?? '' ) ) ),
+					'submission_type' => (string) ( $sub['submissionType'] ?? $sub['type'] ?? '' ),
+					'created_at'      => $created_at_db,
+					'data'            => (string) wp_json_encode( $sub, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE ),
+				),
+				array( '%s', '%s', '%s', '%s', '%s', '%s' )
+			);
 		}
-		self::write_submissions( $data );
-		return $prefix . '-' . $year . '-' . str_pad( (string) $num, 3, '0', STR_PAD_LEFT );
+
+		// Purge rows no longer present in the caller's data set.
+		if ( ! empty( $ids_in_data ) ) {
+			$placeholders = implode( ',', array_fill( 0, count( $ids_in_data ), '%s' ) );
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare
+			$wpdb->query( $wpdb->prepare( "DELETE FROM `{$table}` WHERE `submission_id` NOT IN ({$placeholders})", ...$ids_in_data ) );
+		} else {
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery
+			$wpdb->query( "TRUNCATE TABLE `{$table}`" );
+		}
+
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery
+		$wpdb->query( 'COMMIT' );
+		update_option( 'rrp_next_ids', $nextIds, false );
+	}
+
+	/**
+	 * Generate the next sequential submission ID for the given type + year.
+	 * Reads and writes only the rrp_next_ids option — never touches the
+	 * submissions table — making it both fast and free of race conditions
+	 * with concurrent submission writes.
+	 */
+	public static function next_id( $type ) {
+		$year    = (int) gmdate( 'Y' );
+		$key     = $type . '-' . $year;
+		$nextIds = (array) ( get_option( 'rrp_next_ids', array() ) ?: array() );
+		$num     = ( (int) ( $nextIds[ $key ] ?? 0 ) ) + 1;
+		$nextIds[ $key ] = $num;
+		update_option( 'rrp_next_ids', $nextIds, false );
+		return $type . '-' . $year . '-' . str_pad( (string) $num, 3, '0', STR_PAD_LEFT );
 	}
 
 	public static function word_count( $text ) {
@@ -305,102 +357,102 @@ class Portal_Data {
 		return $errors;
 	}
 
+	/**
+	 * Return all reviewers from the WordPress database (single source of truth).
+	 * Only users with the rrp_reviewer role are included — rrp_faculty is a
+	 * separate advisor role and is not part of the reviewer assignment pool.
+	 * Returns the same [{id, name, email, submissionTypes}] shape used everywhere
+	 * in the portal so all callers work without modification.
+	 */
 	public static function read_reviewers() {
-		$path = RRP_DATA_DIR . self::REVIEWERS_FILE;
-		if ( ! file_exists( $path ) ) {
-			return self::DEFAULT_REVIEWERS;
+		$users = get_users( array(
+			'role__in' => array( 'rrp_reviewer' ),
+			'orderby'  => 'display_name',
+			'order'    => 'ASC',
+		) );
+		$list = array();
+		foreach ( $users as $user ) {
+			// Prefer explicit per-reviewer submission types; fall back to allowed types.
+			$types = (array) ( get_user_meta( $user->ID, 'rrp_submission_types', true ) ?: array() );
+			if ( empty( $types ) ) {
+				$types = (array) ( get_user_meta( $user->ID, 'rrp_allowed_submission_types', true ) ?: array() );
+			}
+			$rid    = (string) ( get_user_meta( $user->ID, 'rrp_reviewer_id', true ) ?: 'wp_' . $user->ID );
+			$list[] = array(
+				'id'              => $rid,
+				'name'            => $user->display_name,
+				'email'           => $user->user_email,
+				'submissionTypes' => array_values( array_filter( array_map( 'strval', $types ) ) ),
+			);
 		}
-		$raw = file_get_contents( $path );
-		$list = json_decode( $raw, true );
-		return is_array( $list ) ? $list : self::DEFAULT_REVIEWERS;
-	}
-
-	public static function write_reviewers( $list ) {
-		self::ensure_data_dir();
-		file_put_contents( RRP_DATA_DIR . self::REVIEWERS_FILE, wp_json_encode( array_values( $list ), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES ), LOCK_EX );
+		return $list;
 	}
 
 	/**
-	 * Sync a WordPress reviewer user to reviewers.json (create or update the entry).
+	 * No-op: reviewers now live in the WordPress database only.
+	 * Kept for backward compatibility; callers may safely be removed over time.
+	 */
+	public static function write_reviewers( $list ) {
+		// DB is the single source of truth — nothing to write to disk.
+	}
+
+	/**
+	 * No-op: reviewer data is read directly from the WordPress database via
+	 * read_reviewers(). No JSON file needs to be kept in sync.
 	 */
 	public static function sync_reviewer_to_json( $user_id ) {
-		$user = get_userdata( $user_id );
-		if ( ! $user ) return;
-		$types = (array) ( get_user_meta( $user_id, 'rrp_submission_types', true ) ?: array() );
-		$rid   = (string) ( get_user_meta( $user_id, 'rrp_reviewer_id', true ) ?: 'wp_' . $user_id );
-		$list  = self::read_reviewers();
-		$found = false;
-		foreach ( $list as &$r ) {
-			if ( strtolower( trim( (string) ( $r['email'] ?? '' ) ) ) === strtolower( trim( $user->user_email ) ) ) {
-				$r['id']              = $rid;
-				$r['name']            = $user->display_name;
-				$r['submissionTypes'] = $types;
-				$found = true;
-				break;
-			}
-		}
-		unset( $r );
-		if ( ! $found ) {
-			$list[] = array( 'id' => $rid, 'name' => $user->display_name, 'email' => $user->user_email, 'submissionTypes' => $types );
-		}
-		self::write_reviewers( $list );
+		// DB is the single source of truth — nothing to sync.
 	}
 
 	/**
-	 * Remove a reviewer entry from reviewers.json by email.
+	 * No-op: reviewer removal is handled by WordPress role management.
+	 * When a user loses the rrp_reviewer/rrp_faculty role or is deleted,
+	 * read_reviewers() will no longer return them automatically.
 	 */
 	public static function remove_reviewer_from_json( $email ) {
-		$list    = self::read_reviewers();
-		$email_l = strtolower( trim( (string) $email ) );
-		$list    = array_values( array_filter( $list, function ( $r ) use ( $email_l ) {
-			return strtolower( trim( (string) ( $r['email'] ?? '' ) ) ) !== $email_l;
-		} ) );
-		self::write_reviewers( $list );
+		// DB is the single source of truth — nothing to remove from disk.
 	}
 
+	/**
+	 * Read portal configuration from wp_options (replaces config.json).
+	 */
 	public static function read_config() {
-		$path = RRP_DATA_DIR . self::CONFIG_FILE;
 		$defaults = array(
-			'stageRequirements'      => array(),
-			'reviewerPools'          => array(),
-			'poolCohorts'            => array(),
-			'activeCohort'           => null,
+			'stageRequirements'       => array(),
+			'reviewerPools'           => array(),
+			'poolCohorts'             => array(),
+			'activeCohort'            => null,
 			'defaultReviewersByStage' => array(),
-			'programs'               => array(),
+			'programs'                => array(),
 		);
-		if ( ! file_exists( $path ) ) {
-			return $defaults;
+		$stored = get_option( 'rrp_config', null );
+		if ( is_array( $stored ) ) {
+			// Merge persisted data over defaults so all keys are always present.
+			return array_merge( $defaults, $stored );
 		}
-		$raw = file_get_contents( $path );
-		if ( substr( $raw, 0, 3 ) === "\xEF\xBB\xBF" ) {
-			$raw = substr( $raw, 3 );
-		}
-		$data = json_decode( $raw, true );
-		if ( ! is_array( $data ) ) {
-			return $defaults;
-		}
-		// Merge persisted data over defaults so all keys (programs, templates, COI, etc.) are preserved.
-		return array_merge( $defaults, $data );
+		return $defaults;
 	}
 
+	/**
+	 * Persist portal configuration to wp_options (replaces config.json).
+	 */
 	public static function write_config( $config ) {
-		self::ensure_data_dir();
-		file_put_contents( RRP_DATA_DIR . self::CONFIG_FILE, wp_json_encode( $config, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES ), LOCK_EX );
+		update_option( 'rrp_config', $config, false );
 	}
 
+	/**
+	 * Read webhook registrations from wp_options (replaces webhooks.json).
+	 */
 	public static function read_webhooks(): array {
-		$path = RRP_DATA_DIR . self::WEBHOOKS_FILE;
-		if ( ! file_exists( $path ) ) {
-			return array();
-		}
-		$raw  = file_get_contents( $path );
-		$data = json_decode( $raw, true );
-		return is_array( $data ) ? $data : array();
+		$stored = get_option( 'rrp_webhooks', array() );
+		return is_array( $stored ) ? $stored : array();
 	}
 
+	/**
+	 * Persist webhook registrations to wp_options (replaces webhooks.json).
+	 */
 	public static function write_webhooks( array $webhooks ): void {
-		self::ensure_data_dir();
-		file_put_contents( RRP_DATA_DIR . self::WEBHOOKS_FILE, wp_json_encode( $webhooks, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES ), LOCK_EX );
+		update_option( 'rrp_webhooks', $webhooks, false );
 	}
 
 	public static function select_from_pool( $config, $type, $count, $exclude_ids, $advance_round_robin = false ) {
@@ -886,7 +938,7 @@ class Portal_Data {
 				return false;
 			} ) );
 		}
-		// Coordinator scoped to specific submission types (from reviewers.json authorization)
+		// Coordinator scoped to specific submission types (from user meta via DB)
 		if ( ! empty( $params['submissionTypes'] ) && is_array( $params['submissionTypes'] ) ) {
 			$types = array_map( 'strtolower', array_map( 'trim', $params['submissionTypes'] ) );
 			return array_values( array_filter( $subs, function ( $s ) use ( $types ) {
@@ -1203,5 +1255,232 @@ class Portal_Data {
 			}
 		}
 		return false;
+	}
+
+	// ── Database setup & migration ─────────────────────────────────────────────
+
+	/**
+	 * Scan all in-progress submissions and set / clear the `reviewerRemoved` flag
+	 * based on whether their assigned reviewers still hold the rrp_reviewer role
+	 * in WordPress.
+	 *
+	 * This catches reviewers who were removed before the flag mechanism existed,
+	 * as well as any edge-case where the delete/role-change hook was bypassed.
+	 *
+	 * Rate-limited to once per 5 minutes via a transient so it does not add
+	 * overhead to every single coordinator page-load.
+	 *
+	 * @param bool $force Skip the rate-limit and always scan.
+	 */
+	public static function flag_orphaned_reviewer_assignments( bool $force = false ): void {
+		if ( ! $force && get_transient( 'rrp_reviewer_scan' ) ) {
+			return;
+		}
+		set_transient( 'rrp_reviewer_scan', '1', 5 * MINUTE_IN_SECONDS );
+
+		global $wpdb;
+		$table = $wpdb->prefix . 'rrp_submissions';
+
+		// 'fields' => 'user_email' (string) returns a plain array of email strings.
+		$active_emails = array();
+		$raw_emails    = get_users( array(
+			'role__in' => array( 'rrp_reviewer' ),
+			'fields'   => 'user_email',
+		) );
+		foreach ( (array) $raw_emails as $e ) {
+			$active_emails[] = strtolower( trim( (string) $e ) );
+		}
+
+		// Terminal statuses — no reassignment needed.
+		$terminal = array(
+			'Withdrawn', 'Cancelled', 'Approved', 'Rejected', 'Published',
+			'Confirmed for Presentation', 'Approved for Submission',
+		);
+
+		// Read directly from DB; update each changed row individually to avoid
+		// the risk of the full write_submissions() DELETE-NOT-IN pass.
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching
+		$rows = $wpdb->get_results(
+			"SELECT `submission_id`, `status`, `data` FROM `{$table}`",
+			ARRAY_A
+		);
+		if ( ! is_array( $rows ) ) {
+			return;
+		}
+
+		foreach ( $rows as $row ) {
+			$sub = json_decode( (string) $row['data'], true );
+			if ( ! is_array( $sub ) ) {
+				continue;
+			}
+
+			$is_terminal  = in_array( $row['status'], $terminal, true );
+			$current_flag = ! empty( $sub['reviewerRemoved'] );
+			$desired_flag = false;
+
+			if ( ! $is_terminal ) {
+				// Check top-level assignedReviewers.
+				foreach ( $sub['assignedReviewers'] ?? array() as $r ) {
+					$email = strtolower( trim( (string) ( $r['email'] ?? '' ) ) );
+					if ( $email !== '' && ! in_array( $email, $active_emails, true ) ) {
+						$desired_flag = true;
+						break;
+					}
+				}
+				// Also check per-stage reviewers.
+				if ( ! $desired_flag ) {
+					foreach ( $sub['reviewStages'] ?? array() as $stage ) {
+						foreach ( $stage['reviewers'] ?? array() as $r ) {
+							$email = strtolower( trim( (string) ( $r['email'] ?? '' ) ) );
+							if ( $email !== '' && ! in_array( $email, $active_emails, true ) ) {
+								$desired_flag = true;
+								break 2;
+							}
+						}
+					}
+				}
+			}
+
+			if ( $desired_flag === $current_flag ) {
+				continue; // Nothing to change for this row.
+			}
+
+			$sub['reviewerRemoved'] = $desired_flag;
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery
+			$wpdb->update(
+				$table,
+				array( 'data' => wp_json_encode( $sub, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE ) ),
+				array( 'submission_id' => (string) $row['submission_id'] ),
+				array( '%s' ),
+				array( '%s' )
+			);
+		}
+	}
+
+	/**
+	 * Create the rrp_submissions table if it does not already exist.
+	 * Uses dbDelta() so it is safe to call on every plugin load.
+	 *
+	 * Table design:
+	 *   - submission_id  VARCHAR(50)  — canonical ID (e.g. PROJ-2026-003)
+	 *   - status         VARCHAR(100) — denormalised for fast coordinator queries
+	 *   - submitter_email VARCHAR(191) — denormalised for fast reviewer filtering
+	 *   - submission_type VARCHAR(100) — denormalised for analytics
+	 *   - created_at     DATETIME     — denormalised for date-range ordering
+	 *   - data           LONGTEXT     — full submission JSON (single source of truth)
+	 */
+	public static function create_tables(): void {
+		global $wpdb;
+		$table           = $wpdb->prefix . 'rrp_submissions';
+		$charset_collate = $wpdb->get_charset_collate();
+		$sql             = "CREATE TABLE {$table} (
+  submission_id VARCHAR(50) NOT NULL,
+  status VARCHAR(100) NOT NULL DEFAULT '',
+  submitter_email VARCHAR(191) NOT NULL DEFAULT '',
+  submission_type VARCHAR(100) NOT NULL DEFAULT '',
+  created_at DATETIME NOT NULL DEFAULT '0000-00-00 00:00:00',
+  data LONGTEXT NOT NULL,
+  PRIMARY KEY  (submission_id),
+  KEY idx_status (status),
+  KEY idx_submitter_email (submitter_email),
+  KEY idx_submission_type (submission_type),
+  KEY idx_created_at (created_at)
+) {$charset_collate};";
+		require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+		dbDelta( $sql );
+	}
+
+	/**
+	 * Run the one-time migration from JSON files to the database.
+	 * Safe to call on every plugin load — the rrp_db_version option guards
+	 * against repeated execution.
+	 */
+	public static function maybe_migrate(): void {
+		if ( get_option( 'rrp_db_version' ) === '1.0' ) {
+			return; // Already migrated.
+		}
+		self::create_tables();
+		self::_migrate_json_to_db();
+		update_option( 'rrp_db_version', '1.0', false );
+	}
+
+	/**
+	 * Copy all data from the three legacy JSON files into the database.
+	 * Each JSON file is renamed to *.bak-TIMESTAMP after a successful import
+	 * so the originals are preserved for manual review.
+	 * This method is idempotent: running it again on already-imported data
+	 * simply upserts the same rows/options without duplication.
+	 */
+	private static function _migrate_json_to_db(): void {
+		global $wpdb;
+		$table = $wpdb->prefix . 'rrp_submissions';
+		$ts    = gmdate( 'Ymd-His' );
+
+		// ── submissions.json → rrp_submissions table + rrp_next_ids option ──
+		$sub_path = RRP_DATA_DIR . self::SUBMISSIONS_FILE;
+		if ( file_exists( $sub_path ) ) {
+			$raw = file_get_contents( $sub_path );
+			if ( substr( $raw, 0, 3 ) === "\xEF\xBB\xBF" ) {
+				$raw = substr( $raw, 3 );
+			}
+			$file_data = json_decode( $raw, true );
+			if ( is_array( $file_data ) ) {
+				$submissions = isset( $file_data['submissions'] ) && is_array( $file_data['submissions'] ) ? $file_data['submissions'] : array();
+				$nextIds     = isset( $file_data['nextIds'] )     && is_array( $file_data['nextIds'] )     ? $file_data['nextIds']     : array();
+				foreach ( $submissions as $sub ) {
+					$id = $sub['id'] ?? null;
+					if ( ! $id || ! is_string( $id ) ) {
+						continue;
+					}
+					$created_raw   = $sub['createdAt'] ?? null;
+					$created_ts    = $created_raw ? strtotime( $created_raw ) : false;
+					$created_at_db = ( false !== $created_ts ) ? gmdate( 'Y-m-d H:i:s', $created_ts ) : current_time( 'mysql', true );
+					// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery
+					$wpdb->replace(
+						$table,
+						array(
+							'submission_id'   => (string) $id,
+							'status'          => (string) ( $sub['status'] ?? '' ),
+							'submitter_email' => strtolower( trim( (string) ( $sub['submitterEmail'] ?? '' ) ) ),
+							'submission_type' => (string) ( $sub['submissionType'] ?? $sub['type'] ?? '' ),
+							'created_at'      => $created_at_db,
+							'data'            => (string) wp_json_encode( $sub, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE ),
+						),
+						array( '%s', '%s', '%s', '%s', '%s', '%s' )
+					);
+				}
+				update_option( 'rrp_next_ids', $nextIds, false );
+				// Rename original as read-only backup; new code reads from DB.
+				// phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+				@rename( $sub_path, $sub_path . '.bak-' . $ts );
+			}
+		}
+
+		// ── config.json → rrp_config option ──────────────────────────────────
+		$cfg_path = RRP_DATA_DIR . self::CONFIG_FILE;
+		if ( file_exists( $cfg_path ) ) {
+			$raw = file_get_contents( $cfg_path );
+			if ( substr( $raw, 0, 3 ) === "\xEF\xBB\xBF" ) {
+				$raw = substr( $raw, 3 );
+			}
+			$config = json_decode( $raw, true );
+			if ( is_array( $config ) ) {
+				update_option( 'rrp_config', $config, false );
+				// phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+				@rename( $cfg_path, $cfg_path . '.bak-' . $ts );
+			}
+		}
+
+		// ── webhooks.json → rrp_webhooks option ──────────────────────────────
+		$wh_path = RRP_DATA_DIR . self::WEBHOOKS_FILE;
+		if ( file_exists( $wh_path ) ) {
+			$raw      = file_get_contents( $wh_path );
+			$webhooks = json_decode( $raw, true );
+			if ( is_array( $webhooks ) ) {
+				update_option( 'rrp_webhooks', $webhooks, false );
+				// phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+				@rename( $wh_path, $wh_path . '.bak-' . $ts );
+			}
+		}
 	}
 }

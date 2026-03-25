@@ -428,15 +428,29 @@ body.login .button-primary:hover, body.login .button-primary:focus { background:
 		);
 		wp_enqueue_script(
 			'mammoth-js',
-			'https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.7.0/mammoth.browser.min.js',
+			RRP_PLUGIN_URL . 'assets/mammoth.browser.min.js',
 			array(),
 			'1.7.0',
 			true
 		);
 		wp_enqueue_script(
+			'jszip-js',
+			RRP_PLUGIN_URL . 'assets/jszip.min.js',
+			array(),
+			'3.10.1',
+			true
+		);
+		wp_enqueue_script(
+			'docx-preview-js',
+			RRP_PLUGIN_URL . 'assets/docx-preview.min.js',
+			array( 'jszip-js' ),
+			'0.3.6',
+			true
+		);
+		wp_enqueue_script(
 			'research-review-portal',
 			RRP_PLUGIN_URL . 'assets/portal.js',
-			array( 'mammoth-js' ),
+			array( 'mammoth-js', 'docx-preview-js' ),
 			(string) filemtime( RRP_PLUGIN_DIR . 'assets/portal.js' ),
 			true
 		);
@@ -809,8 +823,10 @@ body.login .button-primary:hover, body.login .button-primary:focus { background:
 		$logo_url    = esc_url( $logo_raw ?: RRP_PLUGIN_URL . 'assets/city-university-logo.svg' );
 
 		wp_enqueue_style( 'research-review-portal', RRP_PLUGIN_URL . 'assets/portal.css', array(), (string) filemtime( RRP_PLUGIN_DIR . 'assets/portal.css' ) );
-		wp_enqueue_script( 'mammoth-js', 'https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.7.0/mammoth.browser.min.js', array(), '1.7.0', true );
-		wp_enqueue_script( 'research-review-portal', RRP_PLUGIN_URL . 'assets/portal.js', array( 'mammoth-js' ), (string) filemtime( RRP_PLUGIN_DIR . 'assets/portal.js' ), true );
+		wp_enqueue_script( 'mammoth-js', RRP_PLUGIN_URL . 'assets/mammoth.browser.min.js', array(), '1.7.0', true );
+		wp_enqueue_script( 'jszip-js', RRP_PLUGIN_URL . 'assets/jszip.min.js', array(), '3.10.1', true );
+		wp_enqueue_script( 'docx-preview-js', RRP_PLUGIN_URL . 'assets/docx-preview.min.js', array( 'jszip-js' ), '0.3.6', true );
+		wp_enqueue_script( 'research-review-portal', RRP_PLUGIN_URL . 'assets/portal.js', array( 'mammoth-js', 'docx-preview-js' ), (string) filemtime( RRP_PLUGIN_DIR . 'assets/portal.js' ), true );
 		// Public submissions config
 		$_pub_cfg2           = Portal_Data::read_config()['publicSubmissions'] ?? array();
 		$_pub_enabled2       = ! empty( $_pub_cfg2['enabled'] );
@@ -914,8 +930,10 @@ body{margin:0;padding:0;background:#f4f6f9}
 		$logo_url     = esc_url( $logo_raw ?: RRP_PLUGIN_URL . 'assets/city-university-logo.svg' );
 
 		wp_enqueue_style( 'research-review-portal', RRP_PLUGIN_URL . 'assets/portal.css', array(), (string) filemtime( RRP_PLUGIN_DIR . 'assets/portal.css' ) );
-		wp_enqueue_script( 'mammoth-js', 'https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.7.0/mammoth.browser.min.js', array(), '1.7.0', true );
-		wp_enqueue_script( 'research-review-portal', RRP_PLUGIN_URL . 'assets/portal.js', array( 'mammoth-js' ), (string) filemtime( RRP_PLUGIN_DIR . 'assets/portal.js' ), true );
+		wp_enqueue_script( 'mammoth-js', RRP_PLUGIN_URL . 'assets/mammoth.browser.min.js', array(), '1.7.0', true );
+		wp_enqueue_script( 'jszip-js', RRP_PLUGIN_URL . 'assets/jszip.min.js', array(), '3.10.1', true );
+		wp_enqueue_script( 'docx-preview-js', RRP_PLUGIN_URL . 'assets/docx-preview.min.js', array( 'jszip-js' ), '0.3.6', true );
+		wp_enqueue_script( 'research-review-portal', RRP_PLUGIN_URL . 'assets/portal.js', array( 'mammoth-js', 'docx-preview-js' ), (string) filemtime( RRP_PLUGIN_DIR . 'assets/portal.js' ), true );
 
 		// F12: PII fields omitted — unauthenticated page has no user PII to expose.
 		wp_add_inline_script( 'research-review-portal', sprintf(
@@ -1314,6 +1332,11 @@ a{text-decoration:none;color:inherit}
 	add_action( 'init', array( 'Research_Review_Portal', 'init' ) );
 	add_action( 'rest_api_init', array( 'Portal_REST', 'register_routes' ) );
 
+	// Run the one-time JSON-to-DB migration on every load; the method is
+	// guarded by the rrp_db_version option so it is a fast no-op after the
+	// first successful migration.
+	add_action( 'plugins_loaded', array( 'Portal_Data', 'maybe_migrate' ) );
+
 	// ── Dynamic-analysis security hardening hooks ─────────────────────────────
 
 	// D-Headers: Add security headers to every WordPress response.
@@ -1323,8 +1346,8 @@ a{text-decoration:none;color:inherit}
 		header( 'Strict-Transport-Security: max-age=31536000; includeSubDomains' );
 		header( 'Referrer-Policy: strict-origin-when-cross-origin' );
 		header( 'Permissions-Policy: geolocation=(), camera=(), microphone=(), payment=()' );
-		// Content-Security-Policy: allow our own origin + the Mammoth CDN script only.
-		header( "Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://secure.gravatar.com; connect-src 'self'; frame-ancestors 'none';" );
+		// Content-Security-Policy: self-hosted only (mammoth.js now served locally).
+		header( "Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://secure.gravatar.com; connect-src 'self'; frame-ancestors 'none';" );
 		// Remove PHP version exposure.
 		header( 'X-Powered-By:' );
 	}, 1 );

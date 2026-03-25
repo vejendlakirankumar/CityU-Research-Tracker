@@ -73,6 +73,9 @@ class RRP_Portal_Settings {
 		'smtp_password'   => '',      // encrypted at rest (already in ENCRYPTED_FIELDS)
 		'smtp_from_name'  => '',
 		'smtp_from_email' => '',
+		// WARNING: Only enable in dev environments — disables TLS cert verification.
+		// Must NEVER be true in production (MITM risk).
+		'smtp_tls_skip_verify' => false,
 		// ── Azure Communication Services Email ────────────────────────────────────────
 		'acs_email_enabled'    => false,
 		'acs_connection_string' => '',  // encrypted at rest; format: endpoint=https://…;accesskey=…
@@ -183,6 +186,7 @@ class RRP_Portal_Settings {
 						break;
 					case 'smtp_enabled':
 					case 'smtp_auth':
+					case 'smtp_tls_skip_verify':
 						$current[ $key ] = (bool) $value;
 						break;
 					case 'smtp_port':
