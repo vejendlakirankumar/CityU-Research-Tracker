@@ -10,8 +10,6 @@
 #    WP_URL=http://your-server.com WP_PORT=80 docker compose up -d
 #    docker compose exec wordpress bash /usr/local/bin/docker-init.sh
 # ------------------------------------------------------------------ #
-version: "3.9"
-
 services:
 
   # ── MySQL 8.0 ───────────────────────────────────────────────────── #
@@ -54,7 +52,7 @@ services:
       WP_URL:            ${WP_URL:-http://localhost:8080}
       WP_ADMIN_USER:     ${WP_ADMIN_USER:-admin}
       WP_ADMIN_PASSWORD: ${WP_ADMIN_PASSWORD:-Admin1234!}
-      WP_ADMIN_EMAIL:    ${WP_ADMIN_EMAIL:-admin@cityu-test.local}
+      WP_ADMIN_EMAIL:    ${WP_ADMIN_EMAIL:-admin@test.com}
 
       # ── Written verbatim into wp-config.php by the WP entrypoint ── #
       # Docker Compose substitutes ${WP_URL} from .env at startup so  #
