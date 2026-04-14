@@ -1907,6 +1907,43 @@
 }
 .rrp-type-row:hover { border-color: #003d66; background: #f8faff; }
 .rrp-type-info { flex: 1; min-width: 0; }
+
+/* ── Gated Review UI ──────────────────────────────────────────────────────── */
+.rrp-portal .rrp-gated-banner {
+  background: #f5f3ff; border: 1px solid #8b5cf6; border-radius: .4rem;
+  padding: .6rem 1rem; margin-bottom: .75rem;
+  font-size: .88rem; color: #4c1d95;
+}
+.rrp-portal .rrp-gatekeeper-badge {
+  display: inline-flex; align-items: center; gap: .25rem;
+  background: #f5f3ff; color: #5b21b6; border: 1px solid #c4b5fd;
+  border-radius: 1rem; padding: .1rem .55rem; font-size: .75rem; font-weight: 700;
+  margin-right: .35rem; vertical-align: middle; white-space: nowrap;
+}
+.rrp-portal #rrp-gated-controls { border-top: 3px solid #7c3aed; }
+.rrp-portal #rrp-gated-controls h3 { color: #5b21b6; }
+.rrp-portal #rrp-gated-controls details { border: 1px solid #ede9fe; border-radius: .5rem; padding: .5rem .75rem; background: #faf5ff; }
+.rrp-portal #rrp-gated-controls details + details { margin-top: .5rem; }
+.rrp-portal #rrp-gated-controls details summary::-webkit-details-marker { display: none; }
+.rrp-portal #rrp-gated-log { border-top: 3px solid #7c3aed; }
+.rrp-portal #rrp-gated-log h3 { color: #5b21b6; }
+.rrp-portal .rrp-gated-msg-thread { display: flex; flex-direction: column; gap: .5rem; margin-bottom: .5rem; max-height: 22rem; overflow-y: auto; }
+.rrp-portal .rrp-gated-msg-item {
+  background: #f9fafb; border: 1px solid #e5e7eb; border-radius: .4rem;
+  padding: .45rem .65rem; font-size: .88rem;
+}
+.rrp-portal .rrp-gated-msg-item.rrp-gated-msg-mine { background: #eff6ff; border-color: #bfdbfe; }
+.rrp-portal .rrp-gated-msg-meta { font-size: .8rem; color: #6b7280; margin-bottom: .2rem; }
+.rrp-portal .rrp-gated-msg-text { color: #111827; word-break: break-word; }
+.rrp-portal .rrp-gated-mr-list { display: flex; flex-direction: column; gap: .5rem; margin-bottom: .5rem; }
+.rrp-portal .rrp-gated-mr-item {
+  background: #f9fafb; border: 1px solid #e5e7eb; border-radius: .4rem;
+  padding: .5rem .7rem; font-size: .88rem;
+}
+.rrp-portal .rrp-gated-log-item {
+  background: #faf5ff; border: 1px solid #ede9fe; border-radius: .4rem;
+  padding: .45rem .65rem; margin-bottom: .4rem; font-size: .875rem;
+}
 .rrp-type-title { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; margin-bottom: .25rem; }
 .rrp-type-title strong { font-size: .95rem; color: #1a202c; }
 code.rrp-type-id { font-size: .78rem; background: #f1f5f9; color: #475569; padding: .1rem .45rem; border-radius: 4px; font-family: monospace; }

@@ -545,6 +545,57 @@ class Portal_REST {
 			'callback'            => array( __CLASS__, 'announcements_send' ),
 			'permission_callback' => array( __CLASS__, 'can_manage_workflow' ),
 		) );
+
+		// ── Gated Review: primary-reviewer-as-conduit workflows ───────────────────
+		// Release a consolidated decision to the student
+		register_rest_route( self::NAMESPACE, '/submissions/(?P<id>[a-zA-Z0-9\-]+)/gated/release', array(
+			'methods'             => 'POST',
+			'callback'            => array( __CLASS__, 'gated_release' ),
+			'permission_callback' => 'is_user_logged_in',
+			'args'                => array( 'id' => array( 'required' => true ) ),
+		) );
+		// Request a re-check from a higher-stage reviewer
+		register_rest_route( self::NAMESPACE, '/submissions/(?P<id>[a-zA-Z0-9\-]+)/gated/request-recheck', array(
+			'methods'             => 'POST',
+			'callback'            => array( __CLASS__, 'gated_request_recheck' ),
+			'permission_callback' => 'is_user_logged_in',
+			'args'                => array( 'id' => array( 'required' => true ) ),
+		) );
+		// Coordination messages between Stage 1 and higher-stage reviewers
+		register_rest_route( self::NAMESPACE, '/submissions/(?P<id>[a-zA-Z0-9\-]+)/gated/messages', array(
+			'methods'             => 'GET',
+			'callback'            => array( __CLASS__, 'gated_messages_get' ),
+			'permission_callback' => 'is_user_logged_in',
+			'args'                => array( 'id' => array( 'required' => true ) ),
+		) );
+		register_rest_route( self::NAMESPACE, '/submissions/(?P<id>[a-zA-Z0-9\-]+)/gated/messages', array(
+			'methods'             => 'POST',
+			'callback'            => array( __CLASS__, 'gated_messages_post' ),
+			'permission_callback' => 'is_user_logged_in',
+			'args'                => array( 'id' => array( 'required' => true ) ),
+		) );
+		// Meeting requests between Stage 1 and higher-stage reviewers
+		register_rest_route( self::NAMESPACE, '/submissions/(?P<id>[a-zA-Z0-9\-]+)/gated/meeting-requests', array(
+			'methods'             => 'GET',
+			'callback'            => array( __CLASS__, 'gated_meetings_get' ),
+			'permission_callback' => 'is_user_logged_in',
+			'args'                => array( 'id' => array( 'required' => true ) ),
+		) );
+		register_rest_route( self::NAMESPACE, '/submissions/(?P<id>[a-zA-Z0-9\-]+)/gated/meeting-requests', array(
+			'methods'             => 'POST',
+			'callback'            => array( __CLASS__, 'gated_meetings_post' ),
+			'permission_callback' => 'is_user_logged_in',
+			'args'                => array( 'id' => array( 'required' => true ) ),
+		) );
+		register_rest_route( self::NAMESPACE, '/submissions/(?P<id>[a-zA-Z0-9\-]+)/gated/meeting-requests/(?P<reqId>[a-zA-Z0-9\-]+)', array(
+			'methods'             => 'PATCH',
+			'callback'            => array( __CLASS__, 'gated_meetings_patch' ),
+			'permission_callback' => 'is_user_logged_in',
+			'args'                => array(
+				'id'    => array( 'required' => true ),
+				'reqId' => array( 'required' => true ),
+			),
+		) );
 	}
 
 	public static function health( WP_REST_Request $request ) {
@@ -1625,8 +1676,126 @@ class Portal_REST {
 				break;
 			}
 		}
+		// ── Enrich reviewer display names from WordPress user records ────────────
+		// Names stored in reviewStages/assignedReviewers may be user_login at assignment
+		// time; replace with the current WP display_name so all roles see real names.
+		if ( ! empty( $sub['reviewStages'] ) && is_array( $sub['reviewStages'] ) ) {
+			foreach ( $sub['reviewStages'] as &$_estage ) {
+				if ( empty( $_estage['reviewers'] ) || ! is_array( $_estage['reviewers'] ) ) {
+					continue;
+				}
+				foreach ( $_estage['reviewers'] as &$_erev ) {
+					if ( ! empty( $_erev['email'] ) ) {
+						$_ewp = get_user_by( 'email', strtolower( trim( (string) $_erev['email'] ) ) );
+						if ( $_ewp && ! empty( $_ewp->display_name ) ) {
+							$_erev['name'] = $_ewp->display_name;
+						}
+					}
+				}
+				unset( $_erev );
+			}
+			unset( $_estage );
+		}
+		if ( ! empty( $sub['assignedReviewers'] ) && is_array( $sub['assignedReviewers'] ) ) {
+			foreach ( $sub['assignedReviewers'] as &$_erev ) {
+				if ( ! empty( $_erev['email'] ) ) {
+					$_ewp = get_user_by( 'email', strtolower( trim( (string) $_erev['email'] ) ) );
+					if ( $_ewp && ! empty( $_ewp->display_name ) ) {
+						$_erev['name'] = $_ewp->display_name;
+					}
+				}
+			}
+			unset( $_erev );
+		}
+
 		// Double-blind redaction
 		$sub = self::apply_blind_review_redaction( $sub );
+
+		// ── Gated Review visibility filtering ────────────────────────────────────
+		// When gatedReview is enabled for the submission type:
+		//  - Admin/Coordinator: see everything, plus a flag noting this is a gated review
+		//  - Stage 0 reviewer (gatekeeper): sees all stages and the full coordination log
+		//  - Higher-stage reviewers: see only their own stage; targeted coordination messages only
+		//  - Student/submitter: sees only what Stage 1 has released; raw stage data is hidden
+		$_gr_type = $sub['submissionType'] ?? $sub['type'] ?? '';
+		$_gr_config = Portal_Data::read_config();
+		$_gr_is_gated = false;
+		foreach ( $_gr_config['submissionTypes'] ?? array() as $_gst ) {
+			if ( ( $_gst['id'] ?? '' ) === $_gr_type && ! empty( $_gst['gatedReview'] ) ) {
+				$_gr_is_gated = true;
+				break;
+			}
+		}
+		if ( $_gr_is_gated ) {
+			$sub['gatedReview'] = true;
+			$_gr_user        = wp_get_current_user();
+			$_gr_email       = strtolower( trim( (string) $_gr_user->user_email ) );
+			$_gr_roles       = (array) $_gr_user->roles;
+			$_gr_is_admin    = (bool) array_intersect( $_gr_roles, array( 'rrp_admin', 'rrp_coordinator', 'administrator', 'rrp_faculty' ) );
+			$_gr_is_gk       = self::is_gatekeeper( $sub, $_gr_email );
+			$_gr_is_submitter = strtolower( trim( (string) ( $sub['submitterEmail'] ?? '' ) ) ) === $_gr_email;
+
+			if ( $_gr_is_admin ) {
+				// Admins / coordinators see everything; mark so UI knows to show full log
+				$sub['isGatedReviewAdmin'] = true;
+			} elseif ( $_gr_is_gk ) {
+				// Gatekeeper: sees all stages + coordination log
+				$sub['isGatekeeper'] = true;
+			} elseif ( $_gr_is_submitter ) {
+				// Student: sees stage names, real reviewer names, and overall review progress.
+				// Hidden: per-reviewer decision votes, feedback text, coordination log, raw releases.
+				unset( $sub['coordinationLog'] );
+				$_gr_releases = isset( $sub['gatedReleases'] ) && is_array( $sub['gatedReleases'] ) ? $sub['gatedReleases'] : array();
+				$sub['latestGatedRelease'] = ! empty( $_gr_releases ) ? end( $_gr_releases ) : null;
+				unset( $sub['gatedReleases'] );
+				// Only anonymize if this type is also configured as a blind review
+				$_gr_blind_also = false;
+				foreach ( $_gr_config['submissionTypes'] ?? array() as $_gst2 ) {
+					if ( ( $_gst2['id'] ?? '' ) === $_gr_type ) {
+						$_gr_blind_also = ! empty( $_gst2['blindReview'] );
+						break;
+					}
+				}
+				if ( ! empty( $sub['reviewStages'] ) && is_array( $sub['reviewStages'] ) ) {
+					foreach ( $sub['reviewStages'] as $_gri => &$_grs ) {
+						// Always strip per-reviewer votes and feedback text
+						unset( $_grs['decisions'], $_grs['feedback'] );
+						// Anonymize names only when also double-blind; otherwise keep real names
+						if ( $_gr_blind_also && ! empty( $_grs['reviewers'] ) ) {
+							$_grs['reviewers'] = array_map( function( $r, $ridx ) {
+								return array( 'name' => 'Reviewer ' . ( $ridx + 1 ), 'email' => '' );
+							}, $_grs['reviewers'], array_keys( $_grs['reviewers'] ) );
+						}
+					}
+					unset( $_grs );
+				}
+			} else {
+				// Higher-stage reviewer: sees own stage only; strip others and coordination log
+				unset( $sub['coordinationLog'], $sub['gatedReleases'] );
+				$_gr_my_stages = array();
+				foreach ( $sub['reviewStages'] ?? array() as $_gri => $_grs ) {
+					foreach ( $_grs['reviewers'] ?? array() as $_grr ) {
+						if ( strtolower( trim( (string) ( $_grr['email'] ?? '' ) ) ) === $_gr_email ) {
+							$_gr_my_stages[] = $_gri;
+							break;
+						}
+					}
+				}
+				if ( ! empty( $sub['reviewStages'] ) && is_array( $sub['reviewStages'] ) ) {
+					foreach ( $sub['reviewStages'] as $_gri => &$_grs ) {
+						if ( ! in_array( $_gri, $_gr_my_stages, true ) ) {
+							unset( $_grs['decisions'], $_grs['feedback'] );
+							// Also hide reviewer identities of stages they are not in (inc. stage 0)
+							if ( ! empty( $_grs['reviewers'] ) ) {
+								$_grs['reviewers'] = array();
+							}
+						}
+					}
+					unset( $_grs );
+				}
+			}
+		}
+
 		return new WP_REST_Response( $sub, 200 );
 	}
 
@@ -3239,6 +3408,9 @@ class Portal_REST {
 				if ( array_key_exists( 'allowMeetings', $body ) ) {
 					$t['allowMeetings'] = (bool) $body['allowMeetings'];
 				}
+				if ( array_key_exists( 'gatedReview', $body ) ) {
+					$t['gatedReview'] = (bool) $body['gatedReview'];
+				}
 				break;
 			}
 		}
@@ -3254,6 +3426,7 @@ class Portal_REST {
 				'twoPhase'           => (bool) ( $body['twoPhase'] ?? false ),
 				'abstractOnlyStages' => (int) max( 1, (int) ( $body['abstractOnlyStages'] ?? 1 ) ),
 				'allowMeetings'      => (bool) ( $body['allowMeetings'] ?? false ),
+				'gatedReview'        => (bool) ( $body['gatedReview'] ?? false ),
 			);
 		}
 		$config['submissionTypes'] = $types;
@@ -3487,6 +3660,7 @@ class Portal_REST {
 				'deadline'       => $in_active_stage ? $deadline : null,
 				'myDecision'     => $my_decision,
 				'pendingAction'  => $in_active_stage && null === $my_decision,
+				'isGatekeeper'   => self::is_gatekeeper( $s, $email ) && self::is_gated_review_type( $s['submissionType'] ?? $s['type'] ?? '' ),
 			);
 		}
 		return new WP_REST_Response( array( 'submissions' => $list ), 200 );
@@ -6664,6 +6838,455 @@ class Portal_REST {
 			}
 		}
 		return new WP_REST_Response( array( 'sent' => $sent, 'total' => count( $recipients ) ), 200 );
+	}
+
+	// ════════════════════════════════════════════════════════════════════════════
+	// ── Gated Review helpers & handlers ─────────────────────────────────────────
+	// ════════════════════════════════════════════════════════════════════════════
+
+	/**
+	 * Return true if $email is the Stage 0 (primary) reviewer for $sub.
+	 * Stage 0 is the "gatekeeper" in gated-review mode.
+	 */
+	private static function is_gatekeeper( array $sub, string $email ): bool {
+		$email = strtolower( trim( $email ) );
+		foreach ( $sub['reviewStages'][0]['reviewers'] ?? array() as $r ) {
+			if ( strtolower( trim( (string) ( $r['email'] ?? '' ) ) ) === $email ) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Return true if the given submission type slug has gatedReview enabled.
+	 */
+	private static function is_gated_review_type( string $type ): bool {
+		$config = Portal_Data::read_config();
+		foreach ( $config['submissionTypes'] ?? array() as $t ) {
+			if ( ( $t['id'] ?? '' ) === $type ) {
+				return (bool) ( $t['gatedReview'] ?? false );
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Gated Review: Stage 1 (gatekeeper) releases a consolidated decision to the student.
+	 * POST /submissions/{id}/gated/release
+	 */
+	public static function gated_release( WP_REST_Request $request ) {
+		$id   = $request['id'];
+		$body = $request->get_json_params() ?: array();
+		$user = wp_get_current_user();
+		$user_email = strtolower( trim( (string) $user->user_email ) );
+
+		$data = Portal_Data::read_submissions();
+		$idx  = null;
+		foreach ( $data['submissions'] as $i => $s ) {
+			if ( ( $s['id'] ?? '' ) === $id ) { $idx = $i; break; }
+		}
+		if ( $idx === null ) {
+			return new WP_REST_Response( array( 'error' => 'Submission not found.' ), 404 );
+		}
+		$sub      = $data['submissions'][ $idx ];
+		$sub_type = $sub['submissionType'] ?? $sub['type'] ?? '';
+
+		if ( ! self::is_gated_review_type( $sub_type ) ) {
+			return new WP_REST_Response( array( 'error' => 'This submission type does not use gated review.' ), 400 );
+		}
+		$is_admin = current_user_can( 'rrp_manage_workflow' ) || current_user_can( 'rrp_full_admin_access' );
+		if ( ! $is_admin && ! self::is_gatekeeper( $sub, $user_email ) ) {
+			return new WP_REST_Response( array( 'error' => 'Only the primary reviewer (Stage 1) or an administrator may release a decision.' ), 403 );
+		}
+
+		$decision = isset( $body['decision'] ) ? sanitize_text_field( trim( (string) $body['decision'] ) ) : '';
+		$feedback = isset( $body['feedback'] ) ? wp_kses_post( trim( (string) $body['feedback'] ) ) : '';
+		$valid    = array( 'Approved', 'Rejected', 'Revision Required', 'Conditionally Approved' );
+		if ( ! in_array( $decision, $valid, true ) ) {
+			return new WP_REST_Response( array( 'error' => 'Decision must be one of: ' . implode( ', ', $valid ) . '.' ), 400 );
+		}
+
+		$release = array(
+			'id'             => 'gr-' . time() . '-' . wp_rand( 1000, 9999 ),
+			'decision'       => $decision,
+			'feedback'       => $feedback,
+			'releasedAt'     => gmdate( 'c' ),
+			'releasedBy'     => $user_email,
+			'releasedByName' => $user->display_name ?: $user->user_login,
+		);
+		$releases  = isset( $sub['gatedReleases'] ) && is_array( $sub['gatedReleases'] ) ? $sub['gatedReleases'] : array();
+		$releases[] = $release;
+
+		$coord_log   = isset( $sub['coordinationLog'] ) && is_array( $sub['coordinationLog'] ) ? $sub['coordinationLog'] : array();
+		$coord_log[] = array(
+			'id'       => 'cl-' . time() . '-' . wp_rand( 1000, 9999 ),
+			'type'     => 'gated_release',
+			'from'     => $user_email,
+			'fromName' => $user->display_name ?: $user->user_login,
+			'text'     => 'Released decision to student: ' . $decision . ( $feedback ? ' — Feedback provided.' : '' ),
+			'at'       => gmdate( 'c' ),
+		);
+
+		$data['submissions'][ $idx ] = array_merge( $sub, array(
+			'gatedReleases'  => $releases,
+			'coordinationLog' => $coord_log,
+		) );
+		self::append_audit_log( $data, $idx, 'gated_release', 'Primary reviewer released decision: ' . $decision );
+		Portal_Data::write_submissions( $data );
+
+		// Notify submitter
+		$to = $sub['submitterEmail'] ?? '';
+		if ( $to && is_email( $to ) && self::user_wants_notif( $to, 'submission_status_changed' ) ) {
+			$msg_map = array(
+				'Approved'               => 'Your submission has been approved.',
+				'Rejected'               => 'Your submission has been rejected.',
+				'Revision Required'      => 'Revisions have been requested for your submission.',
+				'Conditionally Approved' => 'Your submission has been conditionally approved.',
+			);
+			$body_text = ( $msg_map[ $decision ] ?? 'A decision has been issued for your submission.' ) .
+				( $feedback ? "\n\nFeedback from your primary reviewer:\n\n" . wp_strip_all_tags( $feedback ) . "\n" : '' ) .
+				"\nPlease log in to the portal to view your submission.";
+			wp_mail(
+				$to,
+				'Research Review Portal: Decision on Submission ' . ( $sub['id'] ?? '' ),
+				'Hello ' . ( $sub['submitterName'] ?? '' ) . ",\n\n" . $body_text
+			);
+		}
+		return new WP_REST_Response( array( 'success' => true, 'release' => $release ), 201 );
+	}
+
+	/**
+	 * Gated Review: Stage 1 requests a specific stage to re-review.
+	 * Resets that stage's decisions and feedback, then notifies its reviewers.
+	 * POST /submissions/{id}/gated/request-recheck
+	 */
+	public static function gated_request_recheck( WP_REST_Request $request ) {
+		$id   = $request['id'];
+		$body = $request->get_json_params() ?: array();
+		$user = wp_get_current_user();
+		$user_email = strtolower( trim( (string) $user->user_email ) );
+
+		$data = Portal_Data::read_submissions();
+		$idx  = null;
+		foreach ( $data['submissions'] as $i => $s ) {
+			if ( ( $s['id'] ?? '' ) === $id ) { $idx = $i; break; }
+		}
+		if ( $idx === null ) {
+			return new WP_REST_Response( array( 'error' => 'Submission not found.' ), 404 );
+		}
+		$sub      = $data['submissions'][ $idx ];
+		$sub_type = $sub['submissionType'] ?? $sub['type'] ?? '';
+
+		if ( ! self::is_gated_review_type( $sub_type ) ) {
+			return new WP_REST_Response( array( 'error' => 'This submission type does not use gated review.' ), 400 );
+		}
+		$is_admin = current_user_can( 'rrp_manage_workflow' ) || current_user_can( 'rrp_full_admin_access' );
+		if ( ! $is_admin && ! self::is_gatekeeper( $sub, $user_email ) ) {
+			return new WP_REST_Response( array( 'error' => 'Only the primary reviewer or an administrator may request a re-check.' ), 403 );
+		}
+
+		$stage_idx = isset( $body['stageIndex'] ) ? (int) $body['stageIndex'] : -1;
+		$reason    = isset( $body['reason'] ) ? sanitize_text_field( trim( (string) $body['reason'] ) ) : '';
+		$stages    = $sub['reviewStages'] ?? array();
+
+		if ( $stage_idx < 1 || $stage_idx >= count( $stages ) ) {
+			return new WP_REST_Response( array( 'error' => 'Invalid stage index. Must be ≥ 1 (cannot re-check the gatekeeper stage itself).' ), 400 );
+		}
+		if ( ! $reason ) {
+			return new WP_REST_Response( array( 'error' => 'A reason for the re-check request is required.' ), 400 );
+		}
+
+		$stage_name = $stages[ $stage_idx ]['stageName'] ?? ( 'Stage ' . ( $stage_idx + 1 ) );
+		$stages[ $stage_idx ]['decisions']    = array();
+		$stages[ $stage_idx ]['feedback']     = array();
+		$stages[ $stage_idx ]['recheckCount'] = ( (int) ( $stages[ $stage_idx ]['recheckCount'] ?? 0 ) ) + 1;
+		$stages[ $stage_idx ]['recheckAt']    = gmdate( 'c' );
+
+		$coord_log   = isset( $sub['coordinationLog'] ) && is_array( $sub['coordinationLog'] ) ? $sub['coordinationLog'] : array();
+		$coord_log[] = array(
+			'id'          => 'cl-' . time() . '-' . wp_rand( 1000, 9999 ),
+			'type'        => 'recheck_request',
+			'from'        => $user_email,
+			'fromName'    => $user->display_name ?: $user->user_login,
+			'toStageIdx'  => $stage_idx,
+			'toStageName' => $stage_name,
+			'text'        => $reason,
+			'at'          => gmdate( 'c' ),
+		);
+
+		$data['submissions'][ $idx ] = array_merge( $sub, array(
+			'reviewStages'   => $stages,
+			'coordinationLog' => $coord_log,
+		) );
+		self::append_audit_log( $data, $idx, 'gated_recheck', 'Primary reviewer requested re-check of stage "' . $stage_name . '". Reason: ' . $reason );
+		Portal_Data::write_submissions( $data );
+		self::notify_stage_reviewers( $data['submissions'][ $idx ], $stages[ $stage_idx ], $stage_idx );
+		return new WP_REST_Response( array( 'success' => true ), 200 );
+	}
+
+	/**
+	 * Gated Review: fetch the coordination log.
+	 * GET /submissions/{id}/gated/messages
+	 */
+	public static function gated_messages_get( WP_REST_Request $request ) {
+		$id   = $request['id'];
+		$data = Portal_Data::read_submissions();
+		$sub  = null;
+		foreach ( $data['submissions'] as $s ) {
+			if ( ( $s['id'] ?? '' ) === $id ) { $sub = $s; break; }
+		}
+		if ( ! $sub ) {
+			return new WP_REST_Response( array( 'error' => 'Submission not found.' ), 404 );
+		}
+		$user       = wp_get_current_user();
+		$user_email = strtolower( trim( (string) $user->user_email ) );
+		$is_admin   = current_user_can( 'rrp_manage_workflow' ) || current_user_can( 'rrp_full_admin_access' );
+		$is_gk      = self::is_gatekeeper( $sub, $user_email );
+
+		// Determine if user is any stage reviewer and which stage
+		$user_stage_idx = null;
+		foreach ( $sub['reviewStages'] ?? array() as $si => $stage ) {
+			foreach ( $stage['reviewers'] ?? array() as $r ) {
+				if ( strtolower( trim( (string) ( $r['email'] ?? '' ) ) ) === $user_email ) {
+					$user_stage_idx = $si;
+					break 2;
+				}
+			}
+		}
+		if ( ! $is_admin && ! $is_gk && $user_stage_idx === null ) {
+			return new WP_REST_Response( array( 'error' => 'Access denied.' ), 403 );
+		}
+
+		$coord_log = $sub['coordinationLog'] ?? array();
+		// Non-admin, non-gatekeeper reviewers only receive messages targeting their stage or sent by them
+		if ( ! $is_admin && ! $is_gk && $user_stage_idx !== null ) {
+			$coord_log = array_values( array_filter( $coord_log, function( $entry ) use ( $user_stage_idx, $user_email ) {
+				$to   = isset( $entry['toStageIdx'] ) ? (int) $entry['toStageIdx'] : null;
+				$from = strtolower( trim( (string) ( $entry['from'] ?? '' ) ) );
+				return ( $to === null || $to === $user_stage_idx || $from === $user_email );
+			} ) );
+		}
+		return new WP_REST_Response( array( 'coordinationLog' => $coord_log ), 200 );
+	}
+
+	/**
+	 * Gated Review: post a coordination message.
+	 * POST /submissions/{id}/gated/messages
+	 */
+	public static function gated_messages_post( WP_REST_Request $request ) {
+		$id   = $request['id'];
+		$body = $request->get_json_params() ?: array();
+		$user = wp_get_current_user();
+		$user_email = strtolower( trim( (string) $user->user_email ) );
+
+		$data = Portal_Data::read_submissions();
+		$idx  = null;
+		foreach ( $data['submissions'] as $i => $s ) {
+			if ( ( $s['id'] ?? '' ) === $id ) { $idx = $i; break; }
+		}
+		if ( $idx === null ) {
+			return new WP_REST_Response( array( 'error' => 'Submission not found.' ), 404 );
+		}
+		$sub      = $data['submissions'][ $idx ];
+		$sub_type = $sub['submissionType'] ?? $sub['type'] ?? '';
+
+		if ( ! self::is_gated_review_type( $sub_type ) ) {
+			return new WP_REST_Response( array( 'error' => 'This submission does not use gated review.' ), 400 );
+		}
+		$is_admin = current_user_can( 'rrp_manage_workflow' ) || current_user_can( 'rrp_full_admin_access' );
+		$is_gk    = self::is_gatekeeper( $sub, $user_email );
+		$is_rev   = false;
+		foreach ( $sub['reviewStages'] ?? array() as $stage ) {
+			foreach ( $stage['reviewers'] ?? array() as $r ) {
+				if ( strtolower( trim( (string) ( $r['email'] ?? '' ) ) ) === $user_email ) { $is_rev = true; break 2; }
+			}
+		}
+		if ( ! $is_admin && ! $is_gk && ! $is_rev ) {
+			return new WP_REST_Response( array( 'error' => 'Only reviewers and administrators may send coordination messages.' ), 403 );
+		}
+
+		$text         = isset( $body['text'] ) ? sanitize_text_field( trim( (string) $body['text'] ) ) : '';
+		$to_stage_idx = ( isset( $body['toStageIdx'] ) && $body['toStageIdx'] !== null ) ? (int) $body['toStageIdx'] : null;
+		if ( ! $text ) {
+			return new WP_REST_Response( array( 'error' => 'Message text is required.' ), 400 );
+		}
+
+		$entry = array(
+			'id'         => 'cl-' . time() . '-' . wp_rand( 1000, 9999 ),
+			'type'       => 'message',
+			'from'       => $user_email,
+			'fromName'   => $user->display_name ?: $user->user_login,
+			'toStageIdx' => $to_stage_idx,
+			'text'       => $text,
+			'at'         => gmdate( 'c' ),
+		);
+		if ( $to_stage_idx !== null && isset( $sub['reviewStages'][ $to_stage_idx ] ) ) {
+			$entry['toStageName'] = $sub['reviewStages'][ $to_stage_idx ]['stageName'] ?? ( 'Stage ' . ( $to_stage_idx + 1 ) );
+		}
+
+		$coord_log   = isset( $sub['coordinationLog'] ) && is_array( $sub['coordinationLog'] ) ? $sub['coordinationLog'] : array();
+		$coord_log[] = $entry;
+		$data['submissions'][ $idx ] = array_merge( $sub, array( 'coordinationLog' => $coord_log ) );
+		Portal_Data::write_submissions( $data );
+		return new WP_REST_Response( array( 'entry' => $entry, 'coordinationLog' => $coord_log ), 201 );
+	}
+
+	/**
+	 * Gated Review: fetch meeting requests from the coordination log.
+	 * GET /submissions/{id}/gated/meeting-requests
+	 */
+	public static function gated_meetings_get( WP_REST_Request $request ) {
+		$id   = $request['id'];
+		$data = Portal_Data::read_submissions();
+		$sub  = null;
+		foreach ( $data['submissions'] as $s ) {
+			if ( ( $s['id'] ?? '' ) === $id ) { $sub = $s; break; }
+		}
+		if ( ! $sub ) {
+			return new WP_REST_Response( array( 'error' => 'Submission not found.' ), 404 );
+		}
+		$user       = wp_get_current_user();
+		$user_email = strtolower( trim( (string) $user->user_email ) );
+		$is_admin   = current_user_can( 'rrp_manage_workflow' ) || current_user_can( 'rrp_full_admin_access' );
+		$is_gk      = self::is_gatekeeper( $sub, $user_email );
+
+		$user_stage_idx = null;
+		foreach ( $sub['reviewStages'] ?? array() as $si => $stage ) {
+			foreach ( $stage['reviewers'] ?? array() as $r ) {
+				if ( strtolower( trim( (string) ( $r['email'] ?? '' ) ) ) === $user_email ) { $user_stage_idx = $si; break 2; }
+			}
+		}
+		if ( ! $is_admin && ! $is_gk && $user_stage_idx === null ) {
+			return new WP_REST_Response( array( 'error' => 'Access denied.' ), 403 );
+		}
+
+		$meeting_reqs = array_values( array_filter( $sub['coordinationLog'] ?? array(), function( $e ) {
+			return ( $e['type'] ?? '' ) === 'meeting_request';
+		} ) );
+		if ( ! $is_admin && ! $is_gk && $user_stage_idx !== null ) {
+			$meeting_reqs = array_values( array_filter( $meeting_reqs, function( $m ) use ( $user_stage_idx, $user_email ) {
+				$to   = isset( $m['toStageIdx'] ) ? (int) $m['toStageIdx'] : null;
+				$from = strtolower( trim( (string) ( $m['from'] ?? '' ) ) );
+				return ( $to === null || $to === $user_stage_idx || $from === $user_email );
+			} ) );
+		}
+		return new WP_REST_Response( array( 'meetingRequests' => $meeting_reqs ), 200 );
+	}
+
+	/**
+	 * Gated Review: create a meeting request.
+	 * POST /submissions/{id}/gated/meeting-requests
+	 */
+	public static function gated_meetings_post( WP_REST_Request $request ) {
+		$id   = $request['id'];
+		$body = $request->get_json_params() ?: array();
+		$user = wp_get_current_user();
+		$user_email = strtolower( trim( (string) $user->user_email ) );
+
+		$data = Portal_Data::read_submissions();
+		$idx  = null;
+		foreach ( $data['submissions'] as $i => $s ) {
+			if ( ( $s['id'] ?? '' ) === $id ) { $idx = $i; break; }
+		}
+		if ( $idx === null ) {
+			return new WP_REST_Response( array( 'error' => 'Submission not found.' ), 404 );
+		}
+		$sub      = $data['submissions'][ $idx ];
+		$sub_type = $sub['submissionType'] ?? $sub['type'] ?? '';
+
+		if ( ! self::is_gated_review_type( $sub_type ) ) {
+			return new WP_REST_Response( array( 'error' => 'This submission does not use gated review.' ), 400 );
+		}
+		$is_admin = current_user_can( 'rrp_manage_workflow' ) || current_user_can( 'rrp_full_admin_access' );
+		$is_gk    = self::is_gatekeeper( $sub, $user_email );
+		$is_rev   = false;
+		foreach ( $sub['reviewStages'] ?? array() as $stage ) {
+			foreach ( $stage['reviewers'] ?? array() as $r ) {
+				if ( strtolower( trim( (string) ( $r['email'] ?? '' ) ) ) === $user_email ) { $is_rev = true; break 2; }
+			}
+		}
+		if ( ! $is_admin && ! $is_gk && ! $is_rev ) {
+			return new WP_REST_Response( array( 'error' => 'Only reviewers and administrators may request meetings.' ), 403 );
+		}
+
+		$proposed_time = isset( $body['proposedTime'] ) ? sanitize_text_field( trim( (string) $body['proposedTime'] ) ) : '';
+		$platform      = isset( $body['platform'] ) ? sanitize_text_field( trim( (string) $body['platform'] ) ) : '';
+		$note          = isset( $body['note'] ) ? sanitize_text_field( trim( (string) $body['note'] ) ) : '';
+		$to_stage_idx  = ( isset( $body['toStageIdx'] ) && $body['toStageIdx'] !== null ) ? (int) $body['toStageIdx'] : null;
+
+		if ( ! $proposed_time ) {
+			return new WP_REST_Response( array( 'error' => 'A proposed time is required.' ), 400 );
+		}
+
+		$entry = array(
+			'id'           => 'mr-' . time() . '-' . wp_rand( 1000, 9999 ),
+			'type'         => 'meeting_request',
+			'from'         => $user_email,
+			'fromName'     => $user->display_name ?: $user->user_login,
+			'toStageIdx'   => $to_stage_idx,
+			'proposedTime' => $proposed_time,
+			'platform'     => $platform,
+			'note'         => $note,
+			'status'       => 'pending',
+			'at'           => gmdate( 'c' ),
+		);
+		if ( $to_stage_idx !== null && isset( $sub['reviewStages'][ $to_stage_idx ] ) ) {
+			$entry['toStageName'] = $sub['reviewStages'][ $to_stage_idx ]['stageName'] ?? ( 'Stage ' . ( $to_stage_idx + 1 ) );
+		}
+
+		$coord_log   = isset( $sub['coordinationLog'] ) && is_array( $sub['coordinationLog'] ) ? $sub['coordinationLog'] : array();
+		$coord_log[] = $entry;
+		$data['submissions'][ $idx ] = array_merge( $sub, array( 'coordinationLog' => $coord_log ) );
+		Portal_Data::write_submissions( $data );
+		return new WP_REST_Response( array( 'entry' => $entry ), 201 );
+	}
+
+	/**
+	 * Gated Review: accept or decline a meeting request.
+	 * PATCH /submissions/{id}/gated/meeting-requests/{reqId}
+	 */
+	public static function gated_meetings_patch( WP_REST_Request $request ) {
+		$id     = $request['id'];
+		$req_id = $request['reqId'];
+		$body   = $request->get_json_params() ?: array();
+		$user   = wp_get_current_user();
+		$user_email = strtolower( trim( (string) $user->user_email ) );
+
+		$data = Portal_Data::read_submissions();
+		$idx  = null;
+		foreach ( $data['submissions'] as $i => $s ) {
+			if ( ( $s['id'] ?? '' ) === $id ) { $idx = $i; break; }
+		}
+		if ( $idx === null ) {
+			return new WP_REST_Response( array( 'error' => 'Submission not found.' ), 404 );
+		}
+		$sub = $data['submissions'][ $idx ];
+
+		$status = isset( $body['status'] ) ? sanitize_text_field( trim( (string) $body['status'] ) ) : '';
+		if ( ! in_array( $status, array( 'accepted', 'declined' ), true ) ) {
+			return new WP_REST_Response( array( 'error' => 'Status must be "accepted" or "declined".' ), 400 );
+		}
+
+		$coord_log = $sub['coordinationLog'] ?? array();
+		$found     = false;
+		foreach ( $coord_log as &$entry ) {
+			if ( ( $entry['id'] ?? '' ) === $req_id && ( $entry['type'] ?? '' ) === 'meeting_request' ) {
+				$entry['status']      = $status;
+				$entry['respondedBy'] = $user_email;
+				$entry['respondedAt'] = gmdate( 'c' );
+				$found = true;
+				break;
+			}
+		}
+		unset( $entry );
+		if ( ! $found ) {
+			return new WP_REST_Response( array( 'error' => 'Meeting request not found.' ), 404 );
+		}
+
+		$data['submissions'][ $idx ] = array_merge( $sub, array( 'coordinationLog' => $coord_log ) );
+		Portal_Data::write_submissions( $data );
+		return new WP_REST_Response( array( 'success' => true ), 200 );
 	}
 }
 

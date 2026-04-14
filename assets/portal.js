@@ -3285,6 +3285,8 @@
           var dueNear = item.deadline && (new Date(item.deadline) - Date.now()) < 3 * 86400000;
           // Show reviewer's own recorded decision when available; otherwise show overall submission status.
           var myDec      = item.myDecision || null;
+          var isGKItem   = item.isGatekeeper || false;
+          var gkBadge    = isGKItem ? '<span class="rrp-gatekeeper-badge" title="You are the primary reviewer (gated conduit) for this submission">&#128272; Primary Reviewer</span> ' : '';
           var badgeText  = myDec ? myDec : (item.status || 'Pending');
           var badgeCls   = myDec ? statusBadgeCls(myDec) : statusBadgeCls(item.status);
           // Secondary indicator: "Action Required" when reviewer is in active stage but hasn't voted yet.
@@ -3293,7 +3295,7 @@
             : '';
           return '<li class="rrp-sub-item">' +
             '<div class="rrp-sub-item-header">' +
-              '<strong>' + escapeHtml(item.title || item.id) + '</strong>' +
+              '<span>' + gkBadge + '<strong>' + escapeHtml(item.title || item.id) + '</strong></span>' +
               '<span>' +
                 '<span class="rrp-decision-badge ' + badgeCls + '">' + escapeHtml(badgeText) + '</span>' +
                 actionBadge +
@@ -3537,6 +3539,9 @@
         });
       }
       var isSubmitter = (sub.submitterEmail || '').toLowerCase() === userEmail;
+      var isGatekeeper      = sub.isGatekeeper      || false;
+      var isGatedReviewAdmin = sub.isGatedReviewAdmin || false;
+      var isGatedReview     = !!(sub.gatedReview);
       var needsRevision = sub.status === 'Revision Required' || sub.status === 'Rejected';
       var _withdrawableStatuses = ['Submitted - Awaiting Review', 'Submitted', 'Under Initial Review', 'Administrative Review', 'Revision Required', 'Revision Submitted'];
       var canWithdraw   = isSubmitter && _withdrawableStatuses.indexOf(sub.status) !== -1;
@@ -3636,6 +3641,12 @@
         (isLocked ? '<div class="rrp-locked-banner">&#128683; This submission is <strong>' + escapeHtml(sub.status) + '</strong>. All review and editing actions are disabled.</div>' : '') +
         (sub.reviewerRemoved && isAdmin ? '<div class="rrp-reassign-banner"><strong>&#9888; Reassignment Required</strong> &mdash; A reviewer assigned to this submission was deleted or had their role removed. Please assign a replacement reviewer.</div>' : '') +
         (sub.blindReview ? '<div class="rrp-blind-banner">&#129693; <strong>Double-blind review</strong> is active for this submission type. ' + (isAdmin ? 'All identities are visible to you as an administrator.' : (isSubmitter ? 'Reviewer identities are hidden until the final decision is issued.' : 'Author identity is hidden from reviewers.')) + '</div>' : '') +
+        (isGatedReview ? '<div class="rrp-gated-banner">&#128272; <strong>Gated Review Active</strong> &mdash; ' +
+          (isGatekeeper ? 'You are the primary reviewer. Review your committee\'s decisions and release a consolidated outcome to the submitter.' :
+           (isAdmin || isGatedReviewAdmin) ? 'Full coordination log is visible below. Submitter only sees released decisions.' :
+           isSubmitter ? 'Your submission is undergoing committee review. The primary reviewer will communicate the final outcome to you.' :
+           'Your feedback will be reviewed by the primary reviewer before being communicated to the submitter.') +
+        '</div>' : '') +
         '<div class="rrp-detail-info">' +
           '<h2>' + escapeHtml(sub.title || sub.id) + '</h2>' +
           '<div class="rrp-detail-meta">' +
@@ -3698,7 +3709,51 @@
             html += '</div>';
             return html;
           })() : '') +
-        '<div class="rrp-detail-section"><h3>Review Progress</h3>' + (stagesHtml || '<p>No review stages assigned yet.</p>') + '</div>' +
+        // ── Review Progress (or gated status for submitters) ────────────────────
+        (isGatedReview && isSubmitter && !isAdmin ? (function () {
+          var rel = sub.latestGatedRelease;
+          // Build student-facing stage timeline: show stage names + reviewer names + status.
+          // decisions/feedback are stripped by the server; we derive a simple status indicator.
+          var stages = sub.reviewStages || [];
+          var studentStagesHtml = stages.map(function (stage) {
+            var skipped = stage.skipped || false;
+            var reviewers = stage.reviewers || [];
+            var statusClass, statusLabel;
+            if (skipped) {
+              statusClass = 'rrp-stage-skipped'; statusLabel = 'Skipped';
+            } else if (reviewers.length === 0) {
+              statusClass = 'rrp-stage-not-started'; statusLabel = 'Pending';
+            } else {
+              statusClass = 'rrp-stage-pending'; statusLabel = 'Under Review';
+            }
+            var reviewerList = reviewers.map(function (r) {
+              return '<li>' + escapeHtml(r.name || r.email || 'Reviewer') + '</li>';
+            }).join('');
+            return '<div class="rrp-stage-block ' + statusClass + '">' +
+              '<div class="rrp-stage-header"><strong>' + escapeHtml(stage.stageName) + '</strong>' +
+                '<span class="rrp-stage-status">' + statusLabel + '</span>' +
+              '</div>' +
+              (reviewerList ? '<ul class="rrp-reviewer-decisions">' + reviewerList + '</ul>' : '') +
+            '</div>';
+          }).join('');
+          var html = '<div class="rrp-detail-section"><h3>&#128272; Review Status</h3>';
+          if (!studentStagesHtml) {
+            html += '<p style="color:var(--rrp-text-muted);">Your submission is currently under committee review. The primary reviewer will share the outcome with you once it is available.</p>';
+          } else {
+            html += studentStagesHtml;
+          }
+          if (rel) {
+            var cls = rel.decision === 'Approved' ? 'rrp-dec-approved' : (rel.decision === 'Rejected' ? 'rrp-dec-rejected' : 'rrp-dec-revision');
+            html += '<h3 style="margin-top:1rem;">Decision from Primary Reviewer</h3>' +
+              '<p><strong>Decision:</strong> <span class="rrp-decision-badge ' + cls + '">' + escapeHtml(rel.decision) + '</span></p>' +
+              (rel.feedback ? '<div class="rrp-fh-item"><div class="rrp-fh-meta">' +
+                '<span class="rrp-fh-author">' + escapeHtml(rel.releasedByName || 'Primary Reviewer') + '</span>' +
+                (rel.releasedAt ? '<span class="rrp-fh-date">' + new Date(rel.releasedAt).toLocaleString() + '</span>' : '') +
+                '</div><div class="rrp-fh-body">' + safeHtml(rel.feedback) + '</div></div>' : '');
+          }
+          html += '</div>';
+          return html;
+        })() : '<div class="rrp-detail-section"><h3>Review Progress</h3>' + (stagesHtml || '<p>No review stages assigned yet.</p>') + '</div>') +
         // ── Feedback History panel ──────────────────────────────────────────────
         (function () {
           // Collect feedback entries from two sources and merge, oldest-first.
@@ -3793,6 +3848,139 @@
             '</div>' : '') +
         '</div>' +
         (isReviewer && !isLocked ? '<div id="rrp-reviewer-action" class="rrp-detail-section"><h3>Record Your Decision</h3>' + buildReviewerDecisionForm(sub) + '</div>' : '') +
+        // ── Gated Review Controls (gatekeeper only) ─────────────────────────────
+        (isGatedReview && isGatekeeper && !isLocked ? (function () {
+          var stageOpts = (sub.reviewStages || []).slice(1).map(function (s, si) {
+            return '<option value="' + (si + 1) + '">' + escapeHtml(s.stageName) + '</option>';
+          }).join('');
+          var coordLog  = sub.coordinationLog || [];
+          var messages  = coordLog.filter(function (e) { return e.type === 'message'; });
+          var meetingReqs = coordLog.filter(function (e) { return e.type === 'meeting_request'; });
+
+          var msgsHtml = messages.length
+            ? '<div class="rrp-gated-msg-thread">' +
+                messages.map(function (m) {
+                  var isMe = (m.from || '').toLowerCase() === userEmail;
+                  return '<div class="rrp-gated-msg-item' + (isMe ? ' rrp-gated-msg-mine' : '') + '">' +
+                    '<div class="rrp-gated-msg-meta">' +
+                      '<strong>' + escapeHtml(m.fromName || m.from || '') + '</strong>' +
+                      (m.toStageName ? ' &#8594; <em>' + escapeHtml(m.toStageName) + '</em>' : '') +
+                      (m.at ? ' <span style="color:var(--rrp-text-muted);font-size:.8rem;">' + new Date(m.at).toLocaleString() + '</span>' : '') +
+                    '</div>' +
+                    '<div class="rrp-gated-msg-text">' + escapeHtml(m.text || '') + '</div>' +
+                  '</div>';
+                }).join('') +
+              '</div>'
+            : '<p style="color:var(--rrp-text-muted);font-size:.88rem;">No coordination messages yet.</p>';
+
+          var mrHtml = meetingReqs.length
+            ? '<div class="rrp-gated-mr-list">' +
+                meetingReqs.map(function (m) {
+                  var statusCls = m.status === 'accepted' ? 'rrp-dec-approved' : (m.status === 'declined' ? 'rrp-dec-rejected' : 'rrp-dec-pending');
+                  return '<div class="rrp-gated-mr-item">' +
+                    '<div style="display:flex;align-items:center;gap:.4rem;flex-wrap:wrap;">' +
+                      '<strong>' + escapeHtml(m.fromName || m.from || '') + '</strong> requested a meeting' +
+                      (m.toStageName ? ' with <em>' + escapeHtml(m.toStageName) + '</em>' : '') +
+                      ' <span class="rrp-decision-badge ' + statusCls + '">' + escapeHtml(m.status || 'pending') + '</span>' +
+                    '</div>' +
+                    (m.proposedTime ? '<div style="font-size:.85rem;"><span class="rrp-meta-lbl">Time:</span> ' + escapeHtml(m.proposedTime) + '</div>' : '') +
+                    (m.platform ? '<div style="font-size:.85rem;"><span class="rrp-meta-lbl">Platform:</span> ' + escapeHtml(m.platform) + '</div>' : '') +
+                    (m.note ? '<div style="font-size:.85rem;"><span class="rrp-meta-lbl">Agenda:</span> ' + escapeHtml(m.note) + '</div>' : '') +
+                    (m.status === 'pending' ? '<div style="display:flex;gap:.4rem;margin-top:.3rem;">' +
+                      '<button type="button" class="rrp-btn secondary rrp-mr-respond-btn" data-mr-id="' + escapeHtml(m.id) + '" data-status="accepted">&#10003; Accept</button>' +
+                      '<button type="button" class="rrp-btn danger rrp-mr-respond-btn" data-mr-id="' + escapeHtml(m.id) + '" data-status="declined">&#10007; Decline</button>' +
+                    '</div>' : '') +
+                  '</div>';
+                }).join('') +
+              '</div>'
+            : '<p style="color:var(--rrp-text-muted);font-size:.88rem;">No meeting requests yet.</p>';
+
+          return '<div id="rrp-gated-controls" class="rrp-detail-section">' +
+            '<h3>&#128272; Gated Review Controls</h3>' +
+            '<details open style="margin-bottom:1rem;">' +
+              '<summary style="cursor:pointer;font-weight:600;padding:.3rem 0;">&#128228; Release Decision to Submitter</summary>' +
+              '<div style="margin-top:.5rem;">' +
+                '<label class="rrp-label" style="margin-bottom:.4rem;">Decision<br>' +
+                  '<select class="rrp-input" id="rrp-gated-release-decision" style="max-width:22rem;">' +
+                    '<option value="">\u2014 choose outcome \u2014</option>' +
+                    '<option value="Approved">Approved</option>' +
+                    '<option value="Conditionally Approved">Conditionally Approved</option>' +
+                    '<option value="Revision Required">Revision Required</option>' +
+                    '<option value="Rejected">Rejected</option>' +
+                  '</select>' +
+                '</label>' +
+                '<label class="rrp-label" style="margin-top:.5rem;">Feedback to Submitter<br>' +
+                  '<div id="rrp-gated-release-editor" class="rrp-rich-editor" style="max-width:44rem;"></div>' +
+                  '<textarea id="rrp-gated-release-feedback" name="gatedReleaseFeedback" style="display:none;"></textarea>' +
+                '</label>' +
+                '<div style="display:flex;gap:.5rem;margin-top:.6rem;">' +
+                  '<button type="button" class="rrp-btn" id="rrp-gated-release-btn">&#128228; Release Decision</button>' +
+                  '<span id="rrp-gated-release-msg" style="align-self:center;font-size:.86rem;"></span>' +
+                '</div>' +
+              '</div>' +
+            '</details>' +
+            (stageOpts
+              ? '<details style="margin-bottom:1rem;">' +
+                  '<summary style="cursor:pointer;font-weight:600;padding:.3rem 0;">&#128260; Request Re-check from Higher Stage</summary>' +
+                  '<div style="margin-top:.5rem;">' +
+                    '<label class="rrp-label" style="margin-bottom:.4rem;">Stage<br>' +
+                      '<select class="rrp-input" id="rrp-gated-recheck-stage" style="max-width:22rem;">' + stageOpts + '</select>' +
+                    '</label>' +
+                    '<label class="rrp-label" style="margin-top:.5rem;">Reason / Questions<br>' +
+                      '<textarea class="rrp-input" id="rrp-gated-recheck-reason" rows="3" placeholder="Explain what you need the reviewers to reconsider\u2026" style="max-width:44rem;width:100%;box-sizing:border-box;"></textarea>' +
+                    '</label>' +
+                    '<div style="display:flex;gap:.5rem;margin-top:.5rem;">' +
+                      '<button type="button" class="rrp-btn secondary" id="rrp-gated-recheck-btn">&#128260; Send Re-check Request</button>' +
+                      '<span id="rrp-gated-recheck-msg" style="align-self:center;font-size:.86rem;"></span>' +
+                    '</div>' +
+                  '</div>' +
+                '</details>' : '') +
+            '<details style="margin-bottom:1rem;">' +
+              '<summary style="cursor:pointer;font-weight:600;padding:.3rem 0;">&#128172; Coordination Messages (' + messages.length + ')</summary>' +
+              '<div style="margin-top:.5rem;">' +
+                msgsHtml +
+                (stageOpts
+                  ? '<div style="margin-top:.75rem;border-top:1px solid #e5e7eb;padding-top:.75rem;">' +
+                      '<label class="rrp-label" style="margin-bottom:.4rem;">Send to Stage<br>' +
+                        '<select class="rrp-input" id="rrp-gated-msg-stage" style="max-width:22rem;">' + stageOpts + '</select>' +
+                      '</label>' +
+                      '<label class="rrp-label" style="margin-top:.4rem;">Message<br>' +
+                        '<textarea class="rrp-input" id="rrp-gated-msg-text" rows="3" placeholder="Message to the stage reviewers\u2026" style="max-width:44rem;width:100%;box-sizing:border-box;"></textarea>' +
+                      '</label>' +
+                      '<div style="display:flex;gap:.5rem;margin-top:.5rem;">' +
+                        '<button type="button" class="rrp-btn secondary" id="rrp-gated-msg-send-btn">&#128172; Send</button>' +
+                        '<span id="rrp-gated-msg-send-msg" style="align-self:center;font-size:.86rem;"></span>' +
+                      '</div>' +
+                    '</div>' : '') +
+              '</div>' +
+            '</details>' +
+            (stageOpts
+              ? '<details>' +
+                  '<summary style="cursor:pointer;font-weight:600;padding:.3rem 0;">&#128197; Meeting Requests (' + meetingReqs.length + ')</summary>' +
+                  '<div style="margin-top:.5rem;">' +
+                    mrHtml +
+                    '<div style="margin-top:.75rem;border-top:1px solid #e5e7eb;padding-top:.75rem;">' +
+                      '<label class="rrp-label" style="margin-bottom:.4rem;">Request Meeting with Stage<br>' +
+                        '<select class="rrp-input" id="rrp-gated-mr-stage" style="max-width:22rem;">' + stageOpts + '</select>' +
+                      '</label>' +
+                      '<label class="rrp-label" style="margin-top:.4rem;">Proposed Date/Time<br>' +
+                        '<input type="datetime-local" class="rrp-input" id="rrp-gated-mr-time" style="max-width:18rem;" />' +
+                      '</label>' +
+                      '<label class="rrp-label" style="margin-top:.4rem;">Platform (optional)<br>' +
+                        '<input type="text" class="rrp-input" id="rrp-gated-mr-platform" placeholder="e.g. Zoom, Teams, Room B204" style="max-width:22rem;" />' +
+                      '</label>' +
+                      '<label class="rrp-label" style="margin-top:.4rem;">Agenda / Notes (optional)<br>' +
+                        '<textarea class="rrp-input" id="rrp-gated-mr-note" rows="2" placeholder="Agenda items\u2026" style="max-width:44rem;width:100%;box-sizing:border-box;"></textarea>' +
+                      '</label>' +
+                      '<div style="display:flex;gap:.5rem;margin-top:.5rem;">' +
+                        '<button type="button" class="rrp-btn secondary" id="rrp-gated-mr-send-btn">&#128197; Request Meeting</button>' +
+                        '<span id="rrp-gated-mr-msg" style="align-self:center;font-size:.86rem;"></span>' +
+                      '</div>' +
+                    '</div>' +
+                  '</div>' +
+                '</details>' : '') +
+          '</div>';
+        })() : '') +
         (isSubmitter && needsRevision && !isLocked ? '<div id="rrp-submitter-revision" class="rrp-detail-section"><h3>Submit Revision</h3>' + buildRevisionForm(sub) + '</div>' : '') +
         (canWithdraw && !isLocked ? '<div id="rrp-submitter-withdraw" class="rrp-detail-section"><h3>&#128683; Withdraw Submission</h3>' +
           '<p style="color:var(--rrp-text-muted);font-size:.9rem;margin-top:0;">Withdrawing will permanently remove this submission from the review process.</p>' +
@@ -3939,6 +4127,39 @@
             })() : '<span style="font-size:.85rem;color:var(--rrp-text-muted);">No similarity check has been run yet.</span>') +
           '</div>' +
         '</div>' +
+        // ── Gated Review: Admin/Coordinator Coordination Log ────────────────────
+        (isGatedReview && (isAdmin || isGatedReviewAdmin) ? (function () {
+          var coordLog = sub.coordinationLog || [];
+          if (!coordLog.length) return '<div class="rrp-detail-section" id="rrp-gated-log"><h3>&#128272; Coordination Log</h3><p style="color:var(--rrp-text-muted);font-size:.88rem;">No coordination activity yet.</p></div>';
+          var logHtml = coordLog.map(function (e) {
+            var isMR = e.type === 'meeting_request';
+            var typeLbl = e.type === 'gated_release' ? 'released decision' : e.type === 'recheck_request' ? 're-check request' : e.type === 'meeting_request' ? 'meeting request' : 'message';
+            var typeBadgeCls = e.type === 'gated_release' ? 'rrp-dec-approved' : (e.type === 'recheck_request' ? 'rrp-dec-revision' : 'rrp-dec-pending');
+            var statusCls = isMR ? (e.status === 'accepted' ? 'rrp-dec-approved' : (e.status === 'declined' ? 'rrp-dec-rejected' : 'rrp-dec-pending')) : '';
+            return '<div class="rrp-gated-log-item">' +
+              '<div class="rrp-gated-msg-meta">' +
+                '<span class="rrp-decision-badge ' + typeBadgeCls + '" style="font-size:.75rem;">' + escapeHtml(typeLbl) + '</span> ' +
+                '<strong>' + escapeHtml(e.fromName || e.from || '') + '</strong>' +
+                (e.toStageName ? ' &#8594; <em>' + escapeHtml(e.toStageName) + '</em>' : '') +
+                (e.at ? ' <span style="color:var(--rrp-text-muted);font-size:.8rem;">' + new Date(e.at).toLocaleString() + '</span>' : '') +
+              '</div>' +
+              (e.text ? '<div class="rrp-gated-msg-text">' + escapeHtml(e.text) + '</div>' : '') +
+              (isMR ? '<div style="font-size:.85rem;margin-top:.2rem;display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;">' +
+                (e.proposedTime ? '<span><span class="rrp-meta-lbl">Time:</span> ' + escapeHtml(e.proposedTime) + '</span>' : '') +
+                (e.platform ? '<span><span class="rrp-meta-lbl">Platform:</span> ' + escapeHtml(e.platform) + '</span>' : '') +
+                '<span class="rrp-decision-badge ' + statusCls + '" style="font-size:.75rem;">' + escapeHtml(e.status || 'pending') + '</span>' +
+                (e.status === 'pending'
+                  ? '<button type="button" class="rrp-btn secondary rrp-mr-respond-btn" data-mr-id="' + escapeHtml(e.id) + '" data-status="accepted" style="padding:.15rem .4rem;font-size:.78rem;">&#10003; Accept</button>' +
+                    '<button type="button" class="rrp-btn danger rrp-mr-respond-btn" data-mr-id="' + escapeHtml(e.id) + '" data-status="declined" style="padding:.15rem .4rem;font-size:.78rem;">&#10007; Decline</button>'
+                  : '') +
+              '</div>' : '') +
+            '</div>';
+          }).join('');
+          return '<div class="rrp-detail-section" id="rrp-gated-log">' +
+            '<h3>&#128272; Coordination Log <span style="font-size:.8rem;font-weight:400;color:var(--rrp-text-muted);">(' + coordLog.length + ' entr' + (coordLog.length === 1 ? 'y' : 'ies') + ' \u2014 not visible to submitter)</span></h3>' +
+            logHtml +
+          '</div>';
+        })() : '') +
         // ── Administrative Controls — admin/coordinator only ─────────────────
         (isAdmin && !isLocked ? '<div id="rrp-admin-controls" class="rrp-detail-section"><h3>Administrative Controls</h3>' +
           '<div style="display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;">' +
@@ -4194,6 +4415,139 @@
             });
         });
       }
+
+      // ── Gated Review event handlers ────────────────────────────────────────
+      // Release Decision
+      var gatedReleaseBtn = document.getElementById('rrp-gated-release-btn');
+      if (gatedReleaseBtn) {
+        var _grEditorEl = document.getElementById('rrp-gated-release-editor');
+        var _grHiddenEl = document.getElementById('rrp-gated-release-feedback');
+        if (_grEditorEl && _grHiddenEl) {
+          _buildRichEditor(_grEditorEl, _grHiddenEl, 'Consolidated feedback to the submitter\u2026');
+        }
+        gatedReleaseBtn.addEventListener('click', function () {
+          var decEl  = document.getElementById('rrp-gated-release-decision');
+          var fbEl   = document.getElementById('rrp-gated-release-feedback');
+          var msgEl  = document.getElementById('rrp-gated-release-msg');
+          var dec    = decEl ? decEl.value : '';
+          if (!dec) { msgEl.innerHTML = '<span class="rrp-error">Please select a decision.</span>'; return; }
+          gatedReleaseBtn.disabled = true;
+          msgEl.innerHTML = '<span class="rrp-loading">Releasing\u2026</span>';
+          api('POST', '/submissions/' + encodeURIComponent(submissionId) + '/gated/release', {
+            decision: dec,
+            feedback: (fbEl ? fbEl.value : '') || ''
+          }).then(function () {
+            msgEl.innerHTML = '<span class="rrp-success">Decision released to submitter.</span>';
+            setTimeout(function () { renderSubmissionDetail(submissionId, container, backFn); }, 1300);
+          }).catch(function (err) {
+            gatedReleaseBtn.disabled = false;
+            msgEl.innerHTML = '<span class="rrp-error">' + escapeHtml((err && err.error) || 'Failed to release.') + '</span>';
+          });
+        });
+      }
+
+      // Re-check Request
+      var gatedRecheckBtn = document.getElementById('rrp-gated-recheck-btn');
+      if (gatedRecheckBtn) {
+        gatedRecheckBtn.addEventListener('click', function () {
+          var stageSel = document.getElementById('rrp-gated-recheck-stage');
+          var reasonEl = document.getElementById('rrp-gated-recheck-reason');
+          var msgEl    = document.getElementById('rrp-gated-recheck-msg');
+          var stageIdx = stageSel ? parseInt(stageSel.value, 10) : NaN;
+          var reason   = reasonEl ? reasonEl.value.trim() : '';
+          if (isNaN(stageIdx) || !reason) {
+            msgEl.innerHTML = '<span class="rrp-error">Stage and reason are required.</span>'; return;
+          }
+          gatedRecheckBtn.disabled = true;
+          msgEl.innerHTML = '<span class="rrp-loading">Sending\u2026</span>';
+          api('POST', '/submissions/' + encodeURIComponent(submissionId) + '/gated/request-recheck', {
+            stageIndex: stageIdx, reason: reason
+          }).then(function () {
+            msgEl.innerHTML = '<span class="rrp-success">Re-check request sent.</span>';
+            setTimeout(function () { renderSubmissionDetail(submissionId, container, backFn); }, 1100);
+          }).catch(function (err) {
+            gatedRecheckBtn.disabled = false;
+            msgEl.innerHTML = '<span class="rrp-error">' + escapeHtml((err && err.error) || 'Failed.') + '</span>';
+          });
+        });
+      }
+
+      // Send Coordination Message
+      var gatedMsgSendBtn = document.getElementById('rrp-gated-msg-send-btn');
+      if (gatedMsgSendBtn) {
+        gatedMsgSendBtn.addEventListener('click', function () {
+          var stageSel = document.getElementById('rrp-gated-msg-stage');
+          var textEl   = document.getElementById('rrp-gated-msg-text');
+          var msgEl    = document.getElementById('rrp-gated-msg-send-msg');
+          var stageIdx = stageSel ? parseInt(stageSel.value, 10) : null;
+          var text     = textEl ? textEl.value.trim() : '';
+          if (!text) { msgEl.innerHTML = '<span class="rrp-error">Message text is required.</span>'; return; }
+          gatedMsgSendBtn.disabled = true;
+          msgEl.innerHTML = '<span class="rrp-loading">Sending\u2026</span>';
+          api('POST', '/submissions/' + encodeURIComponent(submissionId) + '/gated/messages', {
+            text: text, toStageIdx: isNaN(stageIdx) ? null : stageIdx
+          }).then(function () {
+            msgEl.innerHTML = '<span class="rrp-success">Message sent.</span>';
+            setTimeout(function () { renderSubmissionDetail(submissionId, container, backFn); }, 900);
+          }).catch(function (err) {
+            gatedMsgSendBtn.disabled = false;
+            msgEl.innerHTML = '<span class="rrp-error">' + escapeHtml((err && err.error) || 'Failed.') + '</span>';
+          });
+        });
+      }
+
+      // Request Meeting
+      var gatedMrSendBtn = document.getElementById('rrp-gated-mr-send-btn');
+      if (gatedMrSendBtn) {
+        gatedMrSendBtn.addEventListener('click', function () {
+          var stageSel  = document.getElementById('rrp-gated-mr-stage');
+          var timeEl    = document.getElementById('rrp-gated-mr-time');
+          var platEl    = document.getElementById('rrp-gated-mr-platform');
+          var noteEl    = document.getElementById('rrp-gated-mr-note');
+          var msgEl     = document.getElementById('rrp-gated-mr-msg');
+          var stageIdx  = stageSel ? parseInt(stageSel.value, 10) : null;
+          var propTime  = timeEl ? timeEl.value : '';
+          if (!propTime) { msgEl.innerHTML = '<span class="rrp-error">Proposed time is required.</span>'; return; }
+          gatedMrSendBtn.disabled = true;
+          msgEl.innerHTML = '<span class="rrp-loading">Sending\u2026</span>';
+          api('POST', '/submissions/' + encodeURIComponent(submissionId) + '/gated/meeting-requests', {
+            proposedTime: propTime,
+            toStageIdx:   isNaN(stageIdx) ? null : stageIdx,
+            platform:     platEl ? platEl.value.trim() : '',
+            note:         noteEl ? noteEl.value.trim() : ''
+          }).then(function () {
+            msgEl.innerHTML = '<span class="rrp-success">Meeting request sent.</span>';
+            setTimeout(function () { renderSubmissionDetail(submissionId, container, backFn); }, 900);
+          }).catch(function (err) {
+            gatedMrSendBtn.disabled = false;
+            msgEl.innerHTML = '<span class="rrp-error">' + escapeHtml((err && err.error) || 'Failed.') + '</span>';
+          });
+        });
+      }
+
+      // Meeting Request responses (accept / decline) — gatekeeper panel + admin log
+      el.querySelectorAll('.rrp-mr-respond-btn').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          var mrId   = btn.getAttribute('data-mr-id');
+          var status = btn.getAttribute('data-status');
+          btn.disabled = true;
+          api('PATCH', '/submissions/' + encodeURIComponent(submissionId) + '/gated/meeting-requests/' + encodeURIComponent(mrId), { status: status })
+            .then(function () {
+              setTimeout(function () { renderSubmissionDetail(submissionId, container, backFn); }, 700);
+            })
+            .catch(function (err) {
+              btn.disabled = false;
+              var errMsg = (err && err.error) || 'Failed to respond.';
+              /* Use a small inline message near the button instead of alert */
+              var span = document.createElement('span');
+              span.className = 'rrp-error';
+              span.style.fontSize = '.82rem';
+              span.style.marginLeft = '.4rem';
+              span.textContent = errMsg;
+              btn.parentNode.appendChild(span);
+            });
+        });
+      });
 
       // Start collaborative notes session if reviewer
       if (isReviewer) {
@@ -5578,6 +5932,10 @@
                 '<input type="checkbox" id="rrp-st-allow-meetings"' + (isEdit && typeObj.allowMeetings ? ' checked' : '') + '>' +
                 '<span>&#128197; <strong>Enable meeting scheduling</strong> <small style="font-weight:400;color:#6b7280;">&mdash; allows submitters and reviewers to schedule meetings from the submission detail page (automatically disabled for double-blind review)</small></span>' +
               '</label>' +
+              '<label class="rrp-label" style="flex-direction:row;align-items:center;gap:.6rem;margin-top:.75rem;">' +
+                '<input type="checkbox" id="rrp-st-gated-review"' + (isEdit && typeObj.gatedReview ? ' checked' : '') + '>' +
+                '<span>&#128272; <strong>Gated Review Mode</strong> <small style="font-weight:400;color:#6b7280;">&mdash; Stage 1 reviewer acts as the primary conduit. Higher-stage feedback is hidden from the submitter until Stage 1 releases a consolidated decision. Enables internal coordination messages and meeting requests between reviewers.</small></span>' +
+              '</label>' +
               '<label class="rrp-label" style="margin-top:.5rem;display:flex;align-items:center;gap:.6rem;">' +
                 '<span style="white-space:nowrap;font-size:.88rem;color:#4b5563;">Abstract-only stages:</span>' +
                 '<input type="number" class="rrp-input" id="rrp-st-abstract-stages" min="1" max="10" value="' + (isEdit ? (typeObj.abstractOnlyStages || 1) : 1) + '" style="width:5rem;" />' +
@@ -5632,6 +5990,7 @@
         payload.twoPhase = document.getElementById('rrp-st-two-phase').checked;
         payload.abstractOnlyStages = parseInt(document.getElementById('rrp-st-abstract-stages').value, 10) || 1;
         payload.allowMeetings = document.getElementById('rrp-st-allow-meetings').checked;
+        payload.gatedReview = document.getElementById('rrp-st-gated-review').checked;
 
         api('PATCH', '/submission-types/' + encodeURIComponent(idVal), payload)
           .then(function () {
