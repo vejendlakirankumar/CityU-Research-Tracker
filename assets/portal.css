@@ -1556,6 +1556,26 @@
 .rrp-collab-block summary { user-select: none; }
 .rrp-co-badge { display:inline-block; background:#e0f2fe; color:#0369a1; border-radius:20px; padding:.1rem .55rem; font-size:.73rem; font-weight:600; border:1px solid #bae6fd; }
 
+/* Stage discussion note list */
+.rrp-collab-list { display:flex; flex-direction:column; gap:.55rem; margin:.4rem 0; }
+.rrp-collab-note { background:#f8fafc; border:1px solid var(--rrp-border,#ddd); border-radius:.45rem; padding:.55rem .75rem; }
+.rrp-collab-note-meta { font-size:.82rem; margin-bottom:.25rem; display:flex; align-items:center; flex-wrap:wrap; gap:.3rem; }
+.rrp-collab-note-meta strong { color:var(--rrp-primary,#003d66); }
+.rrp-collab-you { font-size:.73rem; color:var(--rrp-text-muted); }
+.rrp-collab-time { font-size:.75rem; color:var(--rrp-text-muted); }
+.rrp-collab-note-text { font-size:.88rem; white-space:pre-wrap; word-break:break-word; }
+.rrp-collab-note-reactions { display:flex; gap:.45rem; margin-top:.4rem; flex-wrap:wrap; }
+.rrp-collab-react-btn { background:none; border:1px solid var(--rrp-border,#ddd); border-radius:20px; padding:.15rem .6rem; font-size:.78rem; cursor:pointer; transition:background .15s, border-color .15s; display:inline-flex; align-items:center; gap:.25rem; }
+.rrp-collab-react-btn:hover { background:#f1f5f9; }
+.rrp-react-active.rrp-react-agree { background:#dcfce7; border-color:#86efac; color:#166534; font-weight:600; }
+.rrp-react-active.rrp-react-disagree { background:#fee2e2; border-color:#fca5a5; color:#991b1b; font-weight:600; }
+.rrp-react-count { font-weight:700; font-size:.8rem; }
+.rrp-collab-readonly { font-size:.78rem; color:var(--rrp-text-muted); display:flex; gap:.75rem; }
+
+/* Admin stage-notes view */
+.rrp-collab-stage-group { margin-bottom:.9rem; }
+.rrp-collab-stage-name { font-size:.85rem; font-weight:700; color:var(--rrp-primary,#003d66); border-bottom:1px solid var(--rrp-border,#ddd); padding-bottom:.2rem; margin-bottom:.4rem; }
+
 /* ── Onboarding Wizard ────────────────────────────────────────────────────── */
 .rrp-onboard-wrap { max-width: 780px; margin: 0 auto; }
 .rrp-onboard-header {

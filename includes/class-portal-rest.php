@@ -1758,6 +1758,21 @@ class Portal_REST {
 				}
 				if ( ! empty( $sub['reviewStages'] ) && is_array( $sub['reviewStages'] ) ) {
 					foreach ( $sub['reviewStages'] as $_gri => &$_grs ) {
+						$_grs_reviewers = $_grs['reviewers'] ?? array();
+						$_grs_decisions = is_array( $_grs['decisions'] ?? null ) ? $_grs['decisions'] : array();
+						// Stage 0: mark as completed/forwarded if gatekeeper approved
+						if ( $_gri === 0 && Portal_Data::is_stage_approved( $_grs ) ) {
+							$_grs['stageCompleted'] = true;
+						}
+						// Higher stages: set gatekeeperNotifiedAt dynamically if all reviewers decided but flag not stored
+						if ( $_gri > 0 && empty( $_grs['gatekeeperNotifiedAt'] ) && ! empty( $_grs_reviewers ) ) {
+							$_all_dec = true;
+							foreach ( $_grs_reviewers as $_grs_rv ) {
+								$_grs_ek = strtolower( trim( (string) ( $_grs_rv['email'] ?? '' ) ) );
+								if ( empty( $_grs_decisions[ $_grs_ek ] ) ) { $_all_dec = false; break; }
+							}
+							if ( $_all_dec ) { $_grs['gatekeeperNotifiedAt'] = 'derived'; }
+						}
 						// Always strip per-reviewer votes and feedback text
 						unset( $_grs['decisions'], $_grs['feedback'] );
 						// Anonymize names only when also double-blind; otherwise keep real names
@@ -1769,9 +1784,15 @@ class Portal_REST {
 					}
 					unset( $_grs );
 				}
+				// Strip reviewer feedback audit entries — student only sees gatekeeper-released decisions
+				if ( ! empty( $sub['auditLog'] ) && is_array( $sub['auditLog'] ) ) {
+					$sub['auditLog'] = array_values( array_filter( $sub['auditLog'], function( $e ) {
+						return ( $e['action'] ?? '' ) !== 'feedback_added';
+					} ) );
+				}
 			} else {
-				// Higher-stage reviewer: sees own stage only; strip others and coordination log
-				unset( $sub['coordinationLog'], $sub['gatedReleases'] );
+				// Higher-stage reviewer: sees own stage only; strip others, coordination log, and primary communication
+				unset( $sub['coordinationLog'], $sub['gatedReleases'], $sub['internalComments'] );
 				$_gr_my_stages = array();
 				foreach ( $sub['reviewStages'] ?? array() as $_gri => $_grs ) {
 					foreach ( $_grs['reviewers'] ?? array() as $_grr ) {
@@ -2274,14 +2295,29 @@ class Portal_REST {
 			$stage['decisions'] = $decisions;
 			if ( ! isset( $stage['feedback'] ) || ! is_array( $stage['feedback'] ) ) $stage['feedback'] = array();
 			if ( ! array_key_exists( 'revisionSubmittedAt', $stage ) ) $stage['revisionSubmittedAt'] = null;
-			$new_status = $sub['status'];
-			if ( $decision === 'Rejected' ) {
-				$new_status = 'Rejected';
-			} elseif ( $decision === 'Needs Revision' ) {
-				$new_status = 'Revision Required';
+			// For gated reviews: higher-stage (stage index > 0) decisions must NOT directly
+			// change the submission status — only the gatekeeper (stage 0) releases decisions.
+			$_gated_sub_type = $sub['submissionType'] ?? $sub['type'] ?? '';
+			$_is_gated_review = false;
+			foreach ( Portal_Data::read_config()['submissionTypes'] ?? array() as $_gst_chk ) {
+				if ( ( $_gst_chk['id'] ?? '' ) === $_gated_sub_type && ! empty( $_gst_chk['gatedReview'] ) ) {
+					$_is_gated_review = true; break;
+				}
 			}
+			$new_status = $sub['status'];
+			if ( ! $_is_gated_review || $stage_index === 0 ) {
+				// Non-gated OR gatekeeper stage: apply decision to submission status normally
+				if ( $decision === 'Rejected' ) {
+					$new_status = 'Rejected';
+				} elseif ( $decision === 'Needs Revision' ) {
+					$new_status = 'Revision Required';
+				}
+			}
+			// else: higher-stage gated reviewer — status stays as-is until gatekeeper acts
 			$data['submissions'][ $idx ] = array_merge( $sub, array( 'reviewStages' => $review_stages, 'status' => $new_status ) );
-			$data['submissions'][ $idx ]['status'] = Portal_Data::derive_submission_status( $data['submissions'][ $idx ] );
+			if ( ! $_is_gated_review || $stage_index === 0 ) {
+				$data['submissions'][ $idx ]['status'] = Portal_Data::derive_submission_status( $data['submissions'][ $idx ] );
+			}
 			self::append_audit_log( $data, $idx, 'decision_recorded', 'Decision "' . $decision . '" recorded for stage "' . $stage_name . '" by ' . $reviewer_email . '.' );
 			Portal_Data::write_submissions( $data );
 			$updated = $data['submissions'][ $idx ];
@@ -2295,20 +2331,54 @@ class Portal_REST {
 				'decision'     => $decision,
 			) );
 			if ( $decision === 'Rejected' ) {
-				self::fire_webhooks( 'submission.rejected', array(
-					'submissionId' => $updated['id'] ?? '',
-					'title'        => $updated['title'] ?? '',
-					'stage'        => $stage_name,
-				) );
-			} elseif ( in_array( $_wh_status, array( 'approved', 'confirmed for presentation', 'published', 'approved for submission', 'accepted' ), true ) ) {
+				// For gated higher-stage reviewers, don't fire submitter-facing rejection webhook
+				if ( ! $_is_gated_review || $stage_index === 0 ) {
+					self::fire_webhooks( 'submission.rejected', array(
+						'submissionId' => $updated['id'] ?? '',
+						'title'        => $updated['title'] ?? '',
+						'stage'        => $stage_name,
+					) );
+				}
+			} elseif ( ( ! $_is_gated_review || $stage_index === 0 ) && in_array( $_wh_status, array( 'approved', 'confirmed for presentation', 'published', 'approved for submission', 'accepted' ), true ) ) {
 				self::fire_webhooks( 'submission.approved', array(
 					'submissionId' => $updated['id'] ?? '',
 					'title'        => $updated['title'] ?? '',
 					'status'       => $updated['status'] ?? '',
 				) );
 			}
-			// Auto-advance: notify next-stage reviewers when this stage is now fully approved
-			if ( Portal_Data::is_stage_approved( $review_stages[ $stage_index ] ) ) {
+			// Auto-advance: notify next-stage reviewers when this stage is now fully approved.
+			// For gated reviews: when a higher stage (index > 0) is complete (all decided),
+			// notify the gatekeeper instead of advancing to the next stage automatically.
+			$_stage_all_decided = ! empty( $review_stages[ $stage_index ]['reviewers'] );
+			if ( $_stage_all_decided ) {
+				foreach ( $review_stages[ $stage_index ]['reviewers'] as $_rv ) {
+					$_rek = strtolower( trim( (string) ( $_rv['email'] ?? '' ) ) );
+					if ( empty( $review_stages[ $stage_index ]['decisions'][ $_rek ] ) ) {
+						$_stage_all_decided = false; break;
+					}
+				}
+			}
+			if ( $_is_gated_review && $stage_index > 0 && $_stage_all_decided ) {
+				// Notify gatekeeper that this higher stage has completed its review
+				$_gk_stage = $review_stages[0] ?? array();
+				foreach ( $_gk_stage['reviewers'] ?? array() as $_gkr ) {
+					$_gk_to = $_gkr['email'] ?? '';
+					if ( $_gk_to && is_email( $_gk_to ) && self::user_wants_notif( $_gk_to, 'submission_status_changed' ) ) {
+						wp_mail(
+							$_gk_to,
+							'Research Review Portal: Stage Review Complete — Action Required (' . ( $updated['id'] ?? '' ) . ')',
+							'Hello ' . ( $_gkr['name'] ?? '' ) . ",\n\nAll reviewers in stage \"" . $stage_name . '" have completed their review for submission "' . ( $updated['title'] ?? '' ) . '" (' . ( $updated['id'] ?? '' ) . ").\n\nPlease log in to the portal to review their decisions and release a final outcome to the submitter."
+						);
+					}
+				}
+				// Mark this stage as having notified the gatekeeper, so the UI can reflect it
+				$data['submissions'][ $idx ]['reviewStages'][ $stage_index ]['gatekeeperNotifiedAt'] = gmdate( 'c' );
+				// Re-derive and store the submission status now that a higher stage is complete
+				$data['submissions'][ $idx ]['status'] = Portal_Data::derive_submission_status( $data['submissions'][ $idx ] );
+				Portal_Data::write_submissions( $data );
+				$updated = $data['submissions'][ $idx ];
+			} elseif ( Portal_Data::is_stage_approved( $review_stages[ $stage_index ] ) ) {
+				// Non-gated OR gatekeeper approving: notify next stage reviewers
 				$next_index = $stage_index + 1;
 				if ( isset( $review_stages[ $next_index ] ) ) {
 					self::notify_stage_reviewers( $updated, $review_stages[ $next_index ], $next_index );
@@ -3650,17 +3720,45 @@ class Portal_REST {
 				$deadline = Portal_Data::get_effective_deadline( $s, $stage_idx );
 			}
 
+			$_is_gk = self::is_gatekeeper( $s, $email ) && self::is_gated_review_type( $s['submissionType'] ?? $s['type'] ?? '' );
+			// For gatekeeper: use the released decision (if any) as myDecision so the dashboard badge
+			// reflects the decision communicated to the student, not the internal stage vote.
+			$_gk_released_dec = null;
+			if ( $_is_gk && ! empty( $s['gatedReleases'] ) && is_array( $s['gatedReleases'] ) ) {
+				$_last_gr         = end( $s['gatedReleases'] );
+				$_gk_released_dec = isset( $_last_gr['decision'] ) && '' !== (string) $_last_gr['decision']
+					? (string) $_last_gr['decision'] : null;
+			}
+			// Detect whether the gatekeeper has a pending action: higher stage completed but no release yet.
+			$_gk_action_required = false;
+			if ( $_is_gk && empty( $s['gatedReleases'] ) ) {
+				foreach ( array_slice( $s['reviewStages'] ?? array(), 1, null, true ) as $_hsi => $_hs ) {
+					if ( $_hs['skipped'] ?? false ) continue;
+					if ( ! empty( $_hs['gatekeeperNotifiedAt'] ) ) { $_gk_action_required = true; break; }
+					$_hs_revs = $_hs['reviewers'] ?? array();
+					$_hs_decs = is_array( $_hs['decisions'] ?? null ) ? $_hs['decisions'] : array();
+					if ( ! empty( $_hs_revs ) ) {
+						$_all_d = true;
+						foreach ( $_hs_revs as $_hr ) {
+							$_hek = strtolower( trim( (string) ( $_hr['email'] ?? '' ) ) );
+							if ( empty( $_hs_decs[ $_hek ] ) ) { $_all_d = false; break; }
+						}
+						if ( $_all_d ) { $_gk_action_required = true; break; }
+					}
+				}
+			}
 			$list[] = array(
-				'id'             => $s['id'] ?? null,
-				'type'           => $s['type'] ?? null,
-				'submissionType' => $s['submissionType'] ?? null,
-				'status'         => $s['status'] ?? null,
-				'title'          => $s['title'] ?? null,
-				'createdAt'      => $s['createdAt'] ?? null,
-				'deadline'       => $in_active_stage ? $deadline : null,
-				'myDecision'     => $my_decision,
-				'pendingAction'  => $in_active_stage && null === $my_decision,
-				'isGatekeeper'   => self::is_gatekeeper( $s, $email ) && self::is_gated_review_type( $s['submissionType'] ?? $s['type'] ?? '' ),
+				'id'                     => $s['id'] ?? null,
+				'type'                   => $s['type'] ?? null,
+				'submissionType'         => $s['submissionType'] ?? null,
+				'status'                 => $s['status'] ?? null,
+				'title'                  => $s['title'] ?? null,
+				'createdAt'              => $s['createdAt'] ?? null,
+				'deadline'               => $in_active_stage ? $deadline : null,
+				'myDecision'             => $_gk_action_required ? null : ( $_gk_released_dec ?? $my_decision ),
+				'pendingAction'          => $in_active_stage && null === $my_decision || $_gk_action_required,
+				'isGatekeeper'           => $_is_gk,
+				'gatekeeperActionRequired' => $_gk_action_required,
 			);
 		}
 		return new WP_REST_Response( array( 'submissions' => $list ), 200 );
@@ -6010,7 +6108,24 @@ class Portal_REST {
 				return new WP_REST_Response( array( 'error' => 'Not authorized.' ), 403 );
 			}
 		}
-		$collab = $sub['collabData'] ?? array( 'stageNotes' => array(), 'presence' => array() );
+		$collab    = $sub['collabData'] ?? array( 'stageNotes' => array(), 'presence' => array() );
+		$email     = strtolower( trim( (string) $user->user_email ) );
+		$is_gk     = self::is_gatekeeper( $sub, $email );
+		// Non-managers who are NOT the gatekeeper only see their own stage's notes
+		if ( ! $is_mgr && ! $is_gk ) {
+			$_my_stage = '';
+			foreach ( $sub['reviewStages'] ?? array() as $stage ) {
+				foreach ( $stage['reviewers'] ?? array() as $r ) {
+					if ( strtolower( trim( (string) ( $r['email'] ?? '' ) ) ) === $email ) {
+						$_my_stage = $stage['stageName'] ?? '';
+						break 2;
+					}
+				}
+			}
+			$collab['stageNotes'] = $_my_stage && isset( $collab['stageNotes'][ $_my_stage ] )
+				? array( $_my_stage => $collab['stageNotes'][ $_my_stage ] )
+				: array();
+		}
 		$active = array();
 		foreach ( (array) ( $collab['presence'] ?? array() ) as $em => $d ) {
 			$ls = strtotime( (string) ( $d['lastSeen'] ?? '' ) );
@@ -6056,14 +6171,70 @@ class Portal_REST {
 		$userEmail = strtolower( trim( (string) $user->user_email ) );
 		$userName  = $user->display_name ?: $user->user_login;
 		$stageName = sanitize_text_field( (string) ( $body['stageName'] ?? '' ) );
-		if ( $stageName && array_key_exists( 'notes', $body ) ) {
+		if ( $stageName && array_key_exists( 'addNote', $body ) ) {
 			if ( ! is_array( $collab['stageNotes'] ) ) { $collab['stageNotes'] = array(); }
-			$collab['stageNotes'][ $stageName ] = array(
-				'text'          => sanitize_textarea_field( (string) ( $body['notes'] ?? '' ) ),
-				'updatedAt'     => gmdate( 'c' ),
-				'updatedBy'     => $userEmail,
-				'updatedByName' => $userName,
-			);
+			// Migrate legacy single-object format { text, updatedAt, updatedBy } to array
+			$_cur = $collab['stageNotes'][ $stageName ] ?? array();
+			if ( is_array( $_cur ) && isset( $_cur['text'] ) ) {
+				$_cur = array( array(
+					'id'          => 'legacy_' . md5( (string) ( $_cur['updatedAt'] ?? '' ) ),
+					'text'        => $_cur['text'],
+					'authorEmail' => $_cur['updatedBy']     ?? '',
+					'authorName'  => $_cur['updatedByName'] ?? '',
+					'createdAt'   => $_cur['updatedAt']     ?? gmdate( 'c' ),
+					'reactions'   => array(),
+				) );
+			} elseif ( ! is_array( $_cur ) ) {
+				$_cur = array();
+			}
+			$_note_text = sanitize_textarea_field( (string) ( $body['addNote'] ?? '' ) );
+			if ( $_note_text !== '' ) {
+				$_cur[] = array(
+					'id'          => uniqid( 'n_', true ),
+					'text'        => $_note_text,
+					'authorEmail' => $userEmail,
+					'authorName'  => $userName,
+					'createdAt'   => gmdate( 'c' ),
+					'reactions'   => array(),
+				);
+			}
+			$collab['stageNotes'][ $stageName ] = $_cur;
+		}
+		if ( $stageName && array_key_exists( 'reaction', $body ) ) {
+			if ( ! is_array( $collab['stageNotes'] ) ) { $collab['stageNotes'] = array(); }
+			$_cur = $collab['stageNotes'][ $stageName ] ?? array();
+			if ( is_array( $_cur ) && isset( $_cur['text'] ) ) {
+				$_cur = array();
+			} elseif ( ! is_array( $_cur ) ) {
+				$_cur = array();
+			}
+			$_note_id  = sanitize_text_field( (string) ( $body['noteId']   ?? '' ) );
+			$_reaction = sanitize_text_field( (string) ( $body['reaction'] ?? '' ) );
+			if ( in_array( $_reaction, array( 'agree', 'disagree' ), true ) && $_note_id !== '' ) {
+				foreach ( $_cur as &$_cn ) {
+					if ( ( $_cn['id'] ?? '' ) === $_note_id ) {
+						if ( ! is_array( $_cn['reactions'] ) ) { $_cn['reactions'] = array(); }
+						$_prev = null;
+						foreach ( $_cn['reactions'] as $_ri => $_r ) {
+							if ( ( $_r['email'] ?? '' ) === $userEmail ) {
+								$_prev = $_r['reaction'] ?? null;
+								array_splice( $_cn['reactions'], $_ri, 1 );
+								break;
+							}
+						}
+						if ( $_prev !== $_reaction ) {
+							$_cn['reactions'][] = array(
+								'email'    => $userEmail,
+								'name'     => $userName,
+								'reaction' => $_reaction,
+							);
+						}
+						break;
+					}
+				}
+				unset( $_cn );
+			}
+			$collab['stageNotes'][ $stageName ] = $_cur;
 		}
 		if ( ! empty( $body['presence'] ) ) {
 			if ( ! is_array( $collab['presence'] ) ) { $collab['presence'] = array(); }

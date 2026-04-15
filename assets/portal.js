@@ -128,7 +128,7 @@
 
   function statusBadgeCls(status) {
     var s = (status || '').toLowerCase().replace(/[\s_]+/g, '-');
-    if (s === 'approved' || s === 'confirmed-for-presentation' || s === 'published' ||
+    if (s === 'approved' || s === 'conditionally-approved' || s === 'confirmed-for-presentation' || s === 'published' ||
         s === 'approved-for-submission' || s === 'accepted' || s === 'conditionally-accepted')
                                                                return 'rrp-dec-approved';
     if (s === 'rejected')                                      return 'rrp-dec-rejected';
@@ -147,7 +147,7 @@
 
   function isApprovedStatus(status) {
     var s = (status || '').toLowerCase().replace(/[\s_]+/g, '-');
-    return s === 'approved' || s === 'confirmed-for-presentation' || s === 'published' ||
+    return s === 'approved' || s === 'conditionally-approved' || s === 'confirmed-for-presentation' || s === 'published' ||
            s === 'approved-for-submission' || s === 'accepted' || s === 'conditionally-accepted';
   }
 
@@ -3242,6 +3242,7 @@
 
     // Classify a reviewer list item using their own recorded decision when available.
     function classifyItem(item) {
+      if (item.gatekeeperActionRequired) return 'pending';  // gatekeeper needs to review higher-stage feedback
       if (item.myDecision) return classifyStatus(item.myDecision);
       if (item.pendingAction) return 'pending';
       return classifyStatus(item.status);
@@ -3286,11 +3287,13 @@
           // Show reviewer's own recorded decision when available; otherwise show overall submission status.
           var myDec      = item.myDecision || null;
           var isGKItem   = item.isGatekeeper || false;
+          var gkAction   = item.gatekeeperActionRequired || false;
           var gkBadge    = isGKItem ? '<span class="rrp-gatekeeper-badge" title="You are the primary reviewer (gated conduit) for this submission">&#128272; Primary Reviewer</span> ' : '';
-          var badgeText  = myDec ? myDec : (item.status || 'Pending');
-          var badgeCls   = myDec ? statusBadgeCls(myDec) : statusBadgeCls(item.status);
-          // Secondary indicator: "Action Required" when reviewer is in active stage but hasn't voted yet.
-          var actionBadge = (item.pendingAction && !myDec)
+          // When gatekeeper has higher-stage feedback to review, show submission status not personal decision
+          var badgeText  = gkAction ? (item.status || 'Action Required') : (myDec ? myDec : (item.status || 'Pending'));
+          var badgeCls   = gkAction ? 'rrp-dec-revision' : (myDec ? statusBadgeCls(myDec) : statusBadgeCls(item.status));
+          // Secondary indicator: "Action Required" when reviewer is in active stage but hasn't voted yet, or gatekeeper needs to act.
+          var actionBadge = (gkAction || (item.pendingAction && !myDec))
             ? '<span class="rrp-decision-badge rrp-dec-pending" style="font-size:.72rem;margin-left:.35rem;">&#9888; Action Required</span>'
             : '';
           return '<li class="rrp-sub-item">' +
@@ -3380,24 +3383,96 @@
   // ── Collaborative stage notes ──────────────────────────────────────────────
   function startCollabSession(subId, pendingStages) {
     var stageSelect = document.querySelector('#rrp-decision-form [name="stageName"]');
-    var ta     = document.getElementById('rrp-collab-notes-ta');
-    var badge  = document.getElementById('rrp-presence-badge');
-    var meta   = document.getElementById('rrp-collab-meta');
-    if (!ta) return;
+    var listEl  = document.getElementById('rrp-collab-notes-list');
+    var inputEl = document.getElementById('rrp-collab-notes-input');
+    var addBtn  = document.getElementById('rrp-collab-add-btn');
+    var msgEl   = document.getElementById('rrp-collab-msg');
+    var badge   = document.getElementById('rrp-presence-badge');
+    if (!listEl) return;
+    var myEmail  = ((window.RRP && window.RRP.userEmail) || '').toLowerCase();
     var pollTimer = null;
-    var saveTimer = null;
     function currentStage() {
       return stageSelect ? stageSelect.value : (pendingStages && pendingStages[0] ? pendingStages[0].stageName : '');
     }
-    function renderCollab(d) {
-      var stage = currentStage();
-      var sn    = (d.stageNotes && stage && d.stageNotes[stage]) || null;
-      if (sn && ta.value !== (sn.text || '')) { ta.value = sn.text || ''; }
-      if (sn && meta) {
-        meta.textContent = 'Last edited by ' + (sn.updatedByName || sn.updatedBy || 'unknown') + ' \u2013 ' + new Date(sn.updatedAt).toLocaleTimeString();
+    function normalizeNotes(raw) {
+      if (!raw) return [];
+      // Migrate old single-object format { text, updatedAt, updatedBy, updatedByName }
+      if (!Array.isArray(raw) && raw.text) {
+        return [{ id: 'legacy', text: raw.text, authorName: raw.updatedByName || raw.updatedBy || 'Reviewer', authorEmail: raw.updatedBy || '', createdAt: raw.updatedAt || null, reactions: [] }];
       }
+      return Array.isArray(raw) ? raw : [];
+    }
+    function renderNoteList(d) {
+      var stage = currentStage();
+      // When multiple stages are available (e.g. gatekeeper), render all stages with headings.
+      if (pendingStages && pendingStages.length > 1 && d.stageNotes) {
+        var allHtml = pendingStages.map(function (ps) {
+          var sName = ps.stageName || '';
+          var notes = normalizeNotes(d.stageNotes[sName]);
+          var notesHtml = notes.length
+            ? notes.map(function (note) {
+                var dateStr = note.createdAt ? new Date(note.createdAt).toLocaleString() : '';
+                return '<div class="rrp-collab-note">' +
+                  '<div class="rrp-collab-note-meta">' +
+                    '<strong>' + escapeHtml(note.authorName || note.authorEmail || 'Reviewer') + '</strong>' +
+                    (dateStr ? ' <span class="rrp-collab-time">' + dateStr + '</span>' : '') +
+                  '</div>' +
+                  '<div class="rrp-collab-note-text">' + escapeHtml(note.text || '') + '</div>' +
+                '</div>';
+              }).join('')
+            : '<p style="color:var(--rrp-text-muted);font-size:.85rem;margin:.3rem 0;">No notes for this stage.</p>';
+          return '<div style="margin-bottom:.75rem;"><strong style="font-size:.88rem;">' + escapeHtml(sName) + '</strong><div style="margin-top:.3rem;">' + notesHtml + '</div></div>';
+        }).join('');
+        listEl.innerHTML = allHtml;
+        if (badge) badge.innerHTML = '';
+        return;
+      }
+      var notes = normalizeNotes(d.stageNotes && stage ? d.stageNotes[stage] : null);
+      if (!notes.length) {
+        listEl.innerHTML = '<p style="color:var(--rrp-text-muted);font-size:.85rem;margin:.3rem 0;">No notes yet — add the first one below.</p>';
+      } else {
+        listEl.innerHTML = notes.map(function (note) {
+          var agreeCount = 0, disagreeCount = 0, agreeNames = [], disagreeNames = [], myReaction = '';
+          (note.reactions || []).forEach(function (r) {
+            if (r.reaction === 'agree') { agreeCount++; agreeNames.push(r.name || r.email); }
+            else { disagreeCount++; disagreeNames.push(r.name || r.email); }
+            if ((r.email || '').toLowerCase() === myEmail) myReaction = r.reaction;
+          });
+          var isMe = (note.authorEmail || '').toLowerCase() === myEmail;
+          var dateStr = note.createdAt ? new Date(note.createdAt).toLocaleString() : '';
+          return '<div class="rrp-collab-note" data-note-id="' + escapeHtml(note.id || '') + '">' +
+            '<div class="rrp-collab-note-meta">' +
+              '<strong>' + escapeHtml(note.authorName || note.authorEmail || 'Reviewer') + '</strong>' +
+              (isMe ? ' <span class="rrp-collab-you">(you)</span>' : '') +
+              (dateStr ? ' <span class="rrp-collab-time">' + dateStr + '</span>' : '') +
+            '</div>' +
+            '<div class="rrp-collab-note-text">' + escapeHtml(note.text || '') + '</div>' +
+            '<div class="rrp-collab-note-reactions">' +
+              '<button type="button" class="rrp-collab-react-btn' + (myReaction === 'agree' ? ' rrp-react-active rrp-react-agree' : '') + '" data-reaction="agree"' +
+                (agreeNames.length ? ' title="' + escapeHtml(agreeNames.join(', ')) + '"' : '') + '>' +
+                '&#10003; Agree' + (agreeCount ? ' <span class="rrp-react-count">' + agreeCount + '</span>' : '') +
+              '</button>' +
+              '<button type="button" class="rrp-collab-react-btn' + (myReaction === 'disagree' ? ' rrp-react-active rrp-react-disagree' : '') + '" data-reaction="disagree"' +
+                (disagreeNames.length ? ' title="' + escapeHtml(disagreeNames.join(', ')) + '"' : '') + '>' +
+                '&#10007; Disagree' + (disagreeCount ? ' <span class="rrp-react-count">' + disagreeCount + '</span>' : '') +
+              '</button>' +
+            '</div>' +
+          '</div>';
+        }).join('');
+        listEl.querySelectorAll('.rrp-collab-react-btn').forEach(function (btn) {
+          btn.addEventListener('click', function () {
+            var noteEl  = btn.closest('[data-note-id]');
+            var noteId  = noteEl ? noteEl.getAttribute('data-note-id') : '';
+            var reaction = btn.getAttribute('data-reaction');
+            var stage = currentStage();
+            if (!stage || !noteId) return;
+            api('PUT', '/submissions/' + encodeURIComponent(subId) + '/collab', { stageName: stage, noteId: noteId, reaction: reaction })
+              .then(renderNoteList).catch(function () {});
+          });
+        });
+      }
+      // Presence badge
       var presence = Array.isArray(d.presence) ? d.presence : [];
-      var myEmail  = ((window.RRP && window.RRP.userEmail) || '').toLowerCase();
       var co = presence.filter(function (p) { return (p.email || '').toLowerCase() !== myEmail; });
       if (badge) {
         badge.innerHTML = co.length
@@ -3406,33 +3481,43 @@
       }
     }
     function doPoll() {
-      api('GET', '/submissions/' + encodeURIComponent(subId) + '/collab').then(renderCollab).catch(function () {});
+      api('GET', '/submissions/' + encodeURIComponent(subId) + '/collab').then(renderNoteList).catch(function () {});
     }
     function doHeartbeat() {
       var stage = currentStage();
       if (!stage) return;
-      api('PUT', '/submissions/' + encodeURIComponent(subId) + '/collab', { stageName: stage, presence: true }).then(renderCollab).catch(function () {});
-    }
-    function doSave(text) {
-      var stage = currentStage();
-      if (!stage) return;
-      api('PUT', '/submissions/' + encodeURIComponent(subId) + '/collab', { stageName: stage, notes: text, presence: true })
-        .then(function (d) { renderCollab(d); if (meta) meta.textContent = 'Saved just now'; })
-        .catch(function () {});
+      api('PUT', '/submissions/' + encodeURIComponent(subId) + '/collab', { stageName: stage, presence: true }).then(renderNoteList).catch(function () {});
     }
     doPoll(); doHeartbeat();
     pollTimer = setInterval(function () { doPoll(); doHeartbeat(); }, 20000);
-    ta.addEventListener('input', function () {
-      clearTimeout(saveTimer);
-      saveTimer = setTimeout(function () { doSave(ta.value); }, 1000);
-    });
+    if (addBtn) {
+      addBtn.addEventListener('click', function () {
+        var text = inputEl ? inputEl.value.trim() : '';
+        var stage = currentStage();
+        if (!text) { if (msgEl) msgEl.textContent = 'Please enter a note.'; return; }
+        if (!stage) return;
+        if (msgEl) msgEl.textContent = '';
+        addBtn.disabled = true;
+        api('PUT', '/submissions/' + encodeURIComponent(subId) + '/collab', { stageName: stage, addNote: text, presence: true })
+          .then(function (d) {
+            if (inputEl) inputEl.value = '';
+            addBtn.disabled = false;
+            renderNoteList(d);
+          })
+          .catch(function () {
+            addBtn.disabled = false;
+            if (msgEl) msgEl.textContent = 'Failed to save note.';
+          });
+      });
+    }
     if (stageSelect) {
       stageSelect.addEventListener('change', function () { doPoll(); doHeartbeat(); });
     }
     window.addEventListener('beforeunload', function () {
-      clearInterval(pollTimer); clearTimeout(saveTimer);
+      clearInterval(pollTimer);
     }, { once: true });
   }
+
 
   function buildReviewerDecisionForm(sub) {
     var userEmail = ((window.RRP && window.RRP.userEmail) || '').toLowerCase();
@@ -3444,10 +3529,16 @@
     });
     var collabBlock =
       '<details class="rrp-collab-block" open style="margin-top:1.25rem;border:1px solid var(--rrp-border,#ddd);border-radius:.5rem;padding:.75rem 1rem;">' +
-        '<summary style="cursor:pointer;font-weight:600;">&#128101; Shared Stage Notes <span id="rrp-presence-badge" style="font-size:.75rem;font-weight:400;margin-left:.35rem;"></span></summary>' +
-        '<p style="font-size:.85rem;color:var(--rrp-text-muted);margin:.35rem 0 .5rem;">Visible to all reviewers on the same stage. Auto-saved when you stop typing.</p>' +
-        '<textarea id="rrp-collab-notes-ta" class="rrp-input" rows="4" style="width:100%;box-sizing:border-box;" placeholder="Jot down observations or discussion points for co-reviewers\u2026"></textarea>' +
-        '<div id="rrp-collab-meta" style="font-size:.78rem;color:var(--rrp-text-muted);margin-top:.3rem;min-height:1.2em;"></div>' +
+        '<summary style="cursor:pointer;font-weight:600;">&#128203; Stage Discussion Notes <span id="rrp-presence-badge" style="font-size:.75rem;font-weight:400;margin-left:.35rem;"></span></summary>' +
+        '<p style="font-size:.85rem;color:var(--rrp-text-muted);margin:.35rem 0 .5rem;">Visible only to reviewers assigned to the same stage. Admins and coordinators can view all stages.</p>' +
+        '<div id="rrp-collab-notes-list" class="rrp-collab-list"></div>' +
+        '<div style="margin-top:.6rem;">' +
+          '<textarea id="rrp-collab-notes-input" class="rrp-input" rows="2" style="width:100%;box-sizing:border-box;" placeholder="Add a discussion note\u2026"></textarea>' +
+          '<div style="display:flex;gap:.5rem;margin-top:.4rem;align-items:center;">' +
+            '<button type="button" class="rrp-btn secondary" id="rrp-collab-add-btn">+ Add Note</button>' +
+            '<span id="rrp-collab-msg" style="font-size:.82rem;"></span>' +
+          '</div>' +
+        '</div>' +
       '</details>';
     if (!pending.length) return '<p style="color:var(--rrp-text-muted);">You have no pending stages requiring a decision.</p>' + collabBlock;
     return '<form id="rrp-decision-form">' +
@@ -3560,6 +3651,7 @@
       for (var _asi = 0; _asi < _allStages.length; _asi++) {
         if (_allStages[_asi].skipped) continue;
         var _asDecs = _allStages[_asi].decisions || {};
+        if ((deadlines[_asi] || {}).approved) continue; // server-confirmed approved; skip
         var _asRevs = _allStages[_asi].reviewers || [];
         if (_asRevs.length === 0) { _activeStageIdx = _asi; break; }
         var _asAllApproved = _asRevs.every(function (r) {
@@ -3579,10 +3671,45 @@
         var isFuture = !skipped && !approved && _activeStageIdx !== -1 && i > _activeStageIdx;
         var statusClass, statusLabel;
         if (skipped)           { statusClass = 'rrp-stage-skipped';     statusLabel = 'Skipped'; }
-        else if (approved)     { statusClass = 'rrp-stage-approved';    statusLabel = '✓ Approved'; }
+        else if (approved)     { statusClass = 'rrp-stage-approved';    statusLabel = '\u2713 Approved'; }
         else if (isFuture)     { statusClass = 'rrp-stage-not-started'; statusLabel = 'Not Started'; }
         else if (hasRevisionDec) { statusClass = 'rrp-stage-revision';  statusLabel = 'Revision Requested'; }
         else                   { statusClass = 'rrp-stage-pending';     statusLabel = 'In Progress'; }
+        // Gated review: committee reviewer sees stage 0 only as "Review Complete" — hide individual votes
+        if (isGatedReview && !isGatekeeper && !isGatedReviewAdmin && !isAdmin && !isSubmitter && i === 0) {
+          if (approved) {
+            statusClass = 'rrp-stage-approved'; statusLabel = '\u2713 Review Complete';
+          }
+          // reviewerRows was already stripped by PHP; enforce empty to be safe
+          reviewerRows = '';
+        }
+        // Gated review: override stage 0 label for the gatekeeper to show gated-aware state
+        if (isGatedReview && isGatekeeper && i === 0 && approved) {
+          var _anyHSC = (sub.reviewStages || []).slice(1).some(function (hs) {
+            if (hs.skipped) return false;
+            if (hs.gatekeeperNotifiedAt) return true;
+            var _hsr = hs.reviewers || [];
+            if (!_hsr.length) return false;
+            var _hsd = hs.decisions || {};
+            return _hsr.every(function (r) { var k = (r.email || '').toLowerCase().trim(); return k && !!_hsd[k]; });
+          });
+          var _gkRels   = sub.gatedReleases || [];
+          var _lastGkRel = _gkRels.length ? _gkRels[_gkRels.length - 1] : null;
+          var _gkRelTs   = _lastGkRel ? new Date(_lastGkRel.releasedAt || 0).getTime() : 0;
+          var _gkS0RevAt = (_allStages[0] || {}).revisionSubmittedAt;
+          var _gkS0RevTs = _gkS0RevAt ? new Date(_gkS0RevAt).getTime() : 0;
+          var _relIsCurrent = !!_lastGkRel && (!_gkS0RevTs || _gkRelTs >= _gkS0RevTs);
+          if (_relIsCurrent) {
+            statusLabel = '\u2713 Decision Released';
+            statusClass = 'rrp-stage-approved';
+          } else if (_anyHSC) {
+            statusLabel = '\u23f3 Reviewing Higher Stage Feedback';
+            statusClass = 'rrp-stage-revision';
+          } else {
+            statusLabel = '\u2713 Forwarded to Higher Stage Review';
+            statusClass = 'rrp-stage-approved';
+          }
+        }
         var reviewerRows = (stage.reviewers || []).map(function (r) {
           var em  = (r.email || '').toLowerCase();
           var dec = decisions[em] || 'Pending';
@@ -3715,7 +3842,7 @@
           // Build student-facing stage timeline: show stage names + reviewer names + status.
           // decisions/feedback are stripped by the server; we derive a simple status indicator.
           var stages = sub.reviewStages || [];
-          var studentStagesHtml = stages.map(function (stage) {
+          var studentStagesHtml = stages.map(function (stage, stageIndex) {
             var skipped = stage.skipped || false;
             var reviewers = stage.reviewers || [];
             var statusClass, statusLabel;
@@ -3723,6 +3850,18 @@
               statusClass = 'rrp-stage-skipped'; statusLabel = 'Skipped';
             } else if (reviewers.length === 0) {
               statusClass = 'rrp-stage-not-started'; statusLabel = 'Pending';
+            } else if (sub.status === 'Revision Required' && (stage.stageCompleted || stage.gatekeeperNotifiedAt)) {
+              // Chair released Revision Required after committee review — all completed stages reflect this
+              statusClass = 'rrp-stage-revision'; statusLabel = 'Revision Requested';
+            } else if (stageIndex === 0 && stage.stageCompleted) {
+              // Gatekeeper/primary reviewer approved — forwarded to higher stage
+              statusClass = 'rrp-stage-approved'; statusLabel = 'Forwarded to Higher Stage Review';
+            } else if (stage.gatekeeperNotifiedAt) {
+              // Higher stage complete, awaiting gatekeeper release
+              statusClass = 'rrp-stage-approved'; statusLabel = 'Review Complete — Awaiting Primary Reviewer';
+            } else if (stageIndex === 0 && sub.status === 'Revision Required') {
+              // Chair voted Needs Revision at stage 0 without forwarding to committee
+              statusClass = 'rrp-stage-revision'; statusLabel = 'Revision Requested';
             } else {
               statusClass = 'rrp-stage-pending'; statusLabel = 'Under Review';
             }
@@ -3824,7 +3963,8 @@
           '</div>';
         })() +
         '<div class="rrp-detail-section rrp-annotations-section" id="rrp-annotations">' +
-          '<h3>&#128221; Annotations &amp; Comments</h3>' +
+          '<h3>' + (isGatedReview ? '&#128228; Primary Communication' : '&#128172; Correspondence') + '</h3>' +
+          (isGatedReview ? '<p style="font-size:.85rem;color:var(--rrp-text-muted);margin:0 0 .6rem;">Communication channel between the submitter and the primary reviewer (Stage 1).</p>' : '') +
           ((sub.internalComments && sub.internalComments.length) ?
             '<ul class="rrp-comment-list">' +
             sub.internalComments.map(function (c) {
@@ -3838,16 +3978,19 @@
               '</li>';
             }).join('') +
             '</ul>' : '<p style="color:var(--rrp-text-muted);font-size:.88rem;">No comments yet.</p>') +
-          ((isReviewer || isAdmin) && !isLocked ?
+          ((isReviewer || isAdmin || (isGatedReview && isSubmitter)) && !isLocked ?
             '<div class="rrp-add-comment" id="rrp-add-comment-form">' +
-              '<textarea id="rrp-comment-text" rows="3" placeholder="Add annotation or comment&hellip;" style="width:100%;box-sizing:border-box;"></textarea>' +
+              '<textarea id="rrp-comment-text" rows="3" placeholder="' + (isGatedReview ? 'Message to primary reviewer\u2026' : 'Add annotation or comment\u2026') + '" style="width:100%;box-sizing:border-box;"></textarea>' +
               '<div style="display:flex;gap:.5rem;margin-top:.5rem;">' +
-                '<button type="button" class="rrp-btn" id="rrp-comment-save">&#128203; Save Comment</button>' +
+                '<button type="button" class="rrp-btn" id="rrp-comment-save">&#128203; Save</button>' +
                 '<span id="rrp-comment-msg" style="align-self:center;"></span>' +
               '</div>' +
             '</div>' : '') +
         '</div>' +
         (isReviewer && !isLocked ? '<div id="rrp-reviewer-action" class="rrp-detail-section"><h3>Record Your Decision</h3>' + buildReviewerDecisionForm(sub) + '</div>' : '') +
+        (isAdmin && sub.reviewStages && sub.reviewStages.length ?
+          '<div class="rrp-detail-section" id="rrp-admin-collab-section"><h3>&#128203; Stage Discussion Notes</h3>' +
+          '<div id="rrp-admin-collab-content"><p class="rrp-loading">Loading stage notes\u2026</p></div></div>' : '') +
         // ── Gated Review Controls (gatekeeper only) ─────────────────────────────
         (isGatedReview && isGatekeeper && !isLocked ? (function () {
           var stageOpts = (sub.reviewStages || []).slice(1).map(function (s, si) {
@@ -3895,9 +4038,63 @@
               '</div>'
             : '<p style="color:var(--rrp-text-muted);font-size:.88rem;">No meeting requests yet.</p>';
 
+          var _anyHigherStageComplete = (sub.reviewStages || []).slice(1).some(function (s) {
+            if (s.skipped) return false;
+            if (s.gatekeeperNotifiedAt) return true;
+            // Fallback for legacy data: all reviewers have a non-empty decision recorded
+            var reviewers = s.reviewers || [];
+            if (!reviewers.length) return false;
+            var decisions = s.decisions || {};
+            return reviewers.every(function (r) {
+              var key = (r.email || '').toLowerCase().trim();
+              return key && !!decisions[key];
+            });
+          });
+          function _isHigherStageComplete(s) {
+            if (!s || s.skipped) return false;
+            if (s.gatekeeperNotifiedAt) return true;
+            var reviewers = s.reviewers || [];
+            if (!reviewers.length) return false;
+            var decisions = s.decisions || {};
+            return reviewers.every(function (r) {
+              var key = (r.email || '').toLowerCase().trim();
+              return key && !!decisions[key];
+            });
+          }
+          var _completedHigherStage = _anyHigherStageComplete
+            ? (sub.reviewStages || []).slice(1).find(function (s) { return _isHigherStageComplete(s); })
+            : null;
+          var _alreadyReleased = !!(sub.gatedReleases && sub.gatedReleases.length > 0);
+          var _lastRelease = _alreadyReleased ? sub.gatedReleases[sub.gatedReleases.length - 1] : null;
+          var _lastReleaseTs = _lastRelease ? new Date(_lastRelease.releasedAt || 0).getTime() : 0;
+          var _newReviewAfterRelease = _alreadyReleased && (sub.reviewStages || []).slice(1).some(function (s) {
+            if (s.skipped || !s.gatekeeperNotifiedAt) return false;
+            return new Date(s.gatekeeperNotifiedAt).getTime() > _lastReleaseTs;
+          });
+          var _releaseEnabled = _anyHigherStageComplete && (!_alreadyReleased || _newReviewAfterRelease);
           return '<div id="rrp-gated-controls" class="rrp-detail-section">' +
             '<h3>&#128272; Gated Review Controls</h3>' +
-            '<details open style="margin-bottom:1rem;">' +
+            (_releaseEnabled
+              ? '<div style="background:#fffbeb;border:1px solid #f59e0b;border-radius:.5rem;padding:.6rem .9rem;margin-bottom:.75rem;display:flex;align-items:flex-start;gap:.5rem;">' +
+                  '<span style="font-size:1.1rem;">&#9888;&#65039;</span>' +
+                  '<div><strong>Action required:</strong> ' +
+                    escapeHtml((_completedHigherStage && _completedHigherStage.stageName ? _completedHigherStage.stageName : 'Higher stage') + ' review is complete.') +
+                    ' Please review their comments and release your decision to the submitter.' +
+                  '</div>' +
+                '</div>'
+              : !_anyHigherStageComplete
+              ? '<p style="color:var(--rrp-text-muted);font-size:.88rem;margin-bottom:.75rem;">&#8987; Release will be available once at least one higher-stage review is complete.</p>'
+              : '') +
+            (_alreadyReleased && !_newReviewAfterRelease
+              ? '<div style="background:#f0fdf4;border:1px solid #86efac;border-radius:.5rem;padding:.6rem .9rem;margin-bottom:.75rem;">' +
+                  '<strong style="color:#15803d;">&#10003; Decision already released:</strong> ' +
+                  escapeHtml((_lastRelease && _lastRelease.decision) || '') +
+                  (_lastRelease && _lastRelease.releasedAt
+                    ? ' <span style="color:var(--rrp-text-muted);font-size:.82rem;">on ' + new Date(_lastRelease.releasedAt).toLocaleDateString() + '</span>'
+                    : '') +
+                '</div>'
+              : '') +
+            '<details ' + (_releaseEnabled ? 'open' : '') + ' style="margin-bottom:1rem;' + (!_releaseEnabled ? 'opacity:.55;pointer-events:none;' : '') + '">' +
               '<summary style="cursor:pointer;font-weight:600;padding:.3rem 0;">&#128228; Release Decision to Submitter</summary>' +
               '<div style="margin-top:.5rem;">' +
                 '<label class="rrp-label" style="margin-bottom:.4rem;">Decision<br>' +
@@ -4553,10 +4750,55 @@
       if (isReviewer) {
         // Pass ALL assigned stages (not just pending) so the collab block works
         // even after the reviewer has already submitted their decision.
-        var _assignedCollab = (sub.reviewStages || []).filter(function (s) {
-          return (s.reviewers || []).some(function (r) { return (r.email || '').toLowerCase() === userEmail; });
-        });
+        // Gatekeeper gets ALL stages so they can see higher-stage notes too.
+        var _assignedCollab = sub.isGatekeeper
+          ? (sub.reviewStages || [])
+          : (sub.reviewStages || []).filter(function (s) {
+              return (s.reviewers || []).some(function (r) { return (r.email || '').toLowerCase() === userEmail; });
+            });
         startCollabSession(submissionId, _assignedCollab);
+      }
+
+      // Admin view: load and render all stage discussion notes
+      if (isAdmin && sub.reviewStages && sub.reviewStages.length) {
+        var _adminCollabEl = document.getElementById('rrp-admin-collab-content');
+        if (_adminCollabEl) {
+          api('GET', '/submissions/' + encodeURIComponent(submissionId) + '/collab').then(function (_acd) {
+            var _stageNotes = (_acd && _acd.stageNotes) ? _acd.stageNotes : {};
+            function _normalizeAdminNotes(raw) {
+              if (!raw) return [];
+              if (!Array.isArray(raw) && raw.text) {
+                return [{ id: 'legacy', text: raw.text, authorName: raw.updatedByName || raw.updatedBy || 'Reviewer', authorEmail: raw.updatedBy || '', createdAt: raw.updatedAt, reactions: [] }];
+              }
+              return Array.isArray(raw) ? raw : [];
+            }
+            var _adminHtml = (sub.reviewStages || []).map(function (stage) {
+              var sName = stage.stageName || '';
+              var notes = _normalizeAdminNotes(_stageNotes[sName]);
+              var notesHtml = notes.length ? notes.map(function (note) {
+                var agreeCount = 0, disagreeCount = 0;
+                (note.reactions || []).forEach(function (r) {
+                  if (r.reaction === 'agree') agreeCount++; else disagreeCount++;
+                });
+                return '<div class="rrp-collab-note">' +
+                  '<div class="rrp-collab-note-meta">' +
+                    '<strong>' + escapeHtml(note.authorName || note.authorEmail || 'Reviewer') + '</strong>' +
+                    (note.createdAt ? ' <span class="rrp-collab-time">' + new Date(note.createdAt).toLocaleString() + '</span>' : '') +
+                  '</div>' +
+                  '<div class="rrp-collab-note-text">' + escapeHtml(note.text || '') + '</div>' +
+                  (agreeCount || disagreeCount ? '<div class="rrp-collab-note-reactions rrp-collab-readonly">' +
+                    (agreeCount ? '<span>&#10003; Agree: ' + agreeCount + '</span>' : '') +
+                    (disagreeCount ? '<span>&#10007; Disagree: ' + disagreeCount + '</span>' : '') +
+                  '</div>' : '') +
+                '</div>';
+              }).join('') : '<p style="font-size:.84rem;color:var(--rrp-text-muted);margin:.2rem 0 .5rem;">No notes for this stage.</p>';
+              return '<div class="rrp-collab-stage-group"><div class="rrp-collab-stage-name">' + escapeHtml(sName) + '</div>' + notesHtml + '</div>';
+            }).join('');
+            _adminCollabEl.innerHTML = _adminHtml || '<p style="color:var(--rrp-text-muted);">No stage notes available.</p>';
+          }).catch(function () {
+            if (_adminCollabEl) _adminCollabEl.innerHTML = '<p style="color:var(--rrp-text-muted);">Could not load stage notes.</p>';
+          });
+        }
       }
 
       // Wire revision form

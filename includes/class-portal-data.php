@@ -630,11 +630,27 @@ class Portal_Data {
 			return $status;
 		}
 
+		// For gated review types, only stage 0 (gatekeeper stage) determines terminal status.
+		// Higher stages are internal deliberation; their decisions do not flow to the submitter.
+		$_sub_type = $submission['submissionType'] ?? $submission['type'] ?? '';
+		$_is_gated = false;
+		if ( $_sub_type ) {
+			$_cfg = self::read_config();
+			foreach ( $_cfg['submissionTypes'] ?? array() as $_st ) {
+				if ( ( $_st['id'] ?? '' ) === $_sub_type && ! empty( $_st['gatedReview'] ) ) {
+					$_is_gated = true; break;
+				}
+			}
+		}
+		$_stages_to_scan = $_is_gated
+			? array_slice( array_values( $active_stages ), 0, 1 )  // Only gatekeeper stage
+			: array_values( $active_stages );
+
 		$has_needs_revision = false;
 		$has_rejected = false;
 
-		// Scan all active stages for terminal decisions first.
-		foreach ( $active_stages as $stage ) {
+		// Scan stages for terminal decisions.
+		foreach ( $_stages_to_scan as $stage ) {
 			$decisions = isset( $stage['decisions'] ) && is_array( $stage['decisions'] ) ? $stage['decisions'] : array();
 			foreach ( $decisions as $d ) {
 				$d = strtolower( trim( (string) $d ) );
@@ -655,8 +671,10 @@ class Portal_Data {
 		}
 
 		// Partial progress: find the first active stage that has reviewers but isn't fully approved.
+		// For gated reviews, only the gatekeeper stage (index 0) drives the submission status label.
 		// Stages with NO reviewers are simply unassigned — they don't count as "In Progress".
-		foreach ( array_values( $active_stages ) as $stage ) {
+		$_progress_stages = $_is_gated ? array_slice( array_values( $active_stages ), 0, 1 ) : array_values( $active_stages );
+		foreach ( $_progress_stages as $stage ) {
 			if ( ! empty( $stage['reviewers'] ) && ! self::is_stage_approved( $stage ) ) {
 				$stage_name = trim( (string) ( $stage['stageName'] ?? '' ) );
 				return $stage_name ? $stage_name . ': In Progress' : 'Under Review';
@@ -664,6 +682,81 @@ class Portal_Data {
 		}
 
 		// Reach here when every active stage either has no reviewers or is fully approved → final label.
+		// For gated reviews, stage 0 being approved does NOT mean the submission is done;
+		// the gatekeeper still needs to review higher-stage feedback and release a decision.
+		if ( $_is_gated ) {
+			$_gk_stage      = array_values( $active_stages )[0] ?? array();
+			$_gk_stage_name = trim( (string) ( $_gk_stage['stageName'] ?? 'Primary Review' ) );
+			$_higher_stages = array_slice( array_values( $active_stages ), 1 );
+
+			// If a final gated release exists, use its decision for a terminal status.
+			// Exception: if the student submitted a revision AFTER the release (new round),
+			// the old release is superseded — skip it and derive from the new round's state.
+			$_releases = isset( $submission['gatedReleases'] ) && is_array( $submission['gatedReleases'] )
+				? $submission['gatedReleases'] : array();
+			$_release_superseded = false;
+			if ( ! empty( $_releases ) ) {
+				$_last_rel    = end( $_releases );
+				$_rel_ts      = isset( $_last_rel['releasedAt'] ) ? strtotime( (string) $_last_rel['releasedAt'] ) : 0;
+				// stage 0 revisionSubmittedAt is stamped every time a new revision is submitted
+				$_s0_rev_at   = $_gk_stage['revisionSubmittedAt'] ?? '';
+				$_s0_rev_ts   = $_s0_rev_at ? strtotime( (string) $_s0_rev_at ) : 0;
+				if ( $_s0_rev_ts > 0 && $_rel_ts > 0 && $_s0_rev_ts > $_rel_ts ) {
+					$_release_superseded = true; // new revision submitted after this release
+				}
+			}
+			if ( ! empty( $_releases ) && ! $_release_superseded ) {
+				$_last_rel = end( $_releases );
+				$_rd       = (string) ( $_last_rel['decision'] ?? '' );
+				if ( $_rd === 'Rejected' )               return 'Rejected';
+				if ( $_rd === 'Revision Required' )      return 'Revision Required';
+				if ( $_rd === 'Conditionally Approved' ) return 'Conditionally Approved';
+				// Approved → fall through to type-based final label
+			} else {
+				// No release yet — check higher-stage progress.
+				$_any_gk_notified    = false;
+				$_notified_hs_name   = '';
+				$_any_hs_in_progress = false;
+				$_first_hs_name      = '';
+				foreach ( $_higher_stages as $_hs ) {
+					$_hs_reviewers  = $_hs['reviewers'] ?? array();
+					$_hs_decisions  = is_array( $_hs['decisions'] ?? null ) ? $_hs['decisions'] : array();
+					// "All decided" = every reviewer has submitted any non-empty decision,
+					// regardless of whether gatekeeperNotifiedAt was written (handles legacy data).
+					$_hs_all_decided = false;
+					if ( ! empty( $_hs_reviewers ) ) {
+						$_hs_all_decided = true;
+						foreach ( $_hs_reviewers as $_hr ) {
+							$_hek = strtolower( trim( (string) ( $_hr['email'] ?? '' ) ) );
+							if ( empty( $_hs_decisions[ $_hek ] ) ) { $_hs_all_decided = false; break; }
+						}
+					}
+					if ( ! empty( $_hs['gatekeeperNotifiedAt'] ) || $_hs_all_decided ) {
+						$_any_gk_notified  = true;
+						$_notified_hs_name = trim( (string) ( $_hs['stageName'] ?? '' ) );
+						break;
+					}
+					if ( ! empty( $_hs_reviewers ) ) {
+						$_any_hs_in_progress = true;
+						if ( ! $_first_hs_name ) $_first_hs_name = trim( (string) ( $_hs['stageName'] ?? '' ) );
+					}
+				}
+				if ( $_any_gk_notified ) {
+					$_suffix = $_notified_hs_name ? ': Reviewing ' . $_notified_hs_name . ' Feedback' : ': Reviewing Higher Stage Feedback';
+					return $_gk_stage_name . $_suffix;
+				}
+				if ( $_any_hs_in_progress ) {
+					$_label = $_first_hs_name ?: 'Higher Stage';
+					return $_label . ': Under Review';
+				}
+				if ( ! empty( $_gk_stage['reviewers'] ) && self::is_stage_approved( $_gk_stage ) ) {
+					return $_gk_stage_name . ': Awaiting Higher Stage Review';
+				}
+				// Stage 0 has no reviewers yet or is in early state — preserve current status.
+				return $status;
+			}
+		}
+
 		$type = strtolower( $submission['type'] ?? '' );
 		switch ( $type ) {
 			case 'conference':
