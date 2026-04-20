@@ -1,18 +1,176 @@
 # CityU Research Review Portal
 
-**Version:** 2.0 · **Platform:** WordPress Plugin · **Language:** PHP 8.1 + Vanilla JavaScript  
+**Version:** 2.0 (Laravel 11 API + React 18 SPA) · **Language:** PHP 8.4 + TypeScript  
 **Institution:** City University of Seattle — School of Technology and Computing (STC)  
-**Authors:** Kiran Kumar Vejendla · Jemell Garris  
-**Live URL:** `https://portal.your-institution.edu`  
-**Health check:** `GET /wp-json/research-portal/v1/health` → `{"ok":true}`
 
 ---
 
 ## What is this?
 
-The **CityU Research Review Portal** is a full-featured academic research submission and peer-review management system built as a WordPress plugin. It replaces the default WordPress front end with a single-page application (SPA) that provides structured, multi-stage review workflows for all major research output types at City University of Seattle.
+The **CityU Research Review Portal** is a full-featured academic research submission and peer-review management system. Researchers submit work through an online portal, coordinators assign reviewers, reviewers give structured feedback, and the system automatically moves submissions through configurable workflow stages — with email notifications and a complete audit trail at every step.
 
-Researchers submit their work, coordinators assign reviewers, reviewers give structured feedback — and the portal automatically moves submissions through each stage, sends email notifications, and keeps a complete audit trail.
+### Key Features
+
+| Category | Features |
+|---|---|
+| **Submission** | Draft → submit → revision cycle; multi-version file uploads (PDF, Word, ZIP); supporting documents; DOI / publication metadata |
+| **Workflow** | Fully configurable multi-stage pipeline; automatic stage advancement; per-stage reviewer quorum settings |
+| **Review** | Structured scoring rubrics; inline feedback; accept / revise / reject decisions; gated release with conditions |
+| **Meetings** | Schedule review meetings per submission; notes and outcomes recorded |
+| **Notifications** | Real-time bell notifications; email notifications via SMTP or SES |
+| **SSO** | OIDC / OAuth2 / SAML2 provider support; auto-provision users on first login |
+| **User management** | Role-based access (admin / coordinator / reviewer / student); coordinator group scoping; password policies; account lockout |
+| **Settings** | Dynamic branding (logo, primary colour); backup & archive; feature flags; audit log |
+| **Dark mode** | System-wide dark/light toggle persisted per user |
+| **Print / PDF** | One-click print view for any submission detail page |
+
+---
+
+## Repository Layout
+
+```
+CityU-Research-Tracker/
+├── v1/          Original WordPress-plugin portal (archived — read-only reference)
+├── v2/          Current Laravel 11 + React 18 portal
+│   ├── backend/     Laravel API
+│   ├── frontend/    React SPA
+│   ├── deploy/      Production infrastructure scripts
+│   ├── docker/      Container entrypoint + nginx config
+│   ├── spec/        Design specifications
+│   ├── docker-compose.yml
+│   └── Dockerfile
+├── .github/     CI/CD workflows
+└── README.md    ← you are here
+```
+
+---
+
+## Quick Start
+
+```bash
+cd v2
+cp backend/.env.example backend/.env   # fill in secrets
+docker compose up -d
+docker exec rrp_app php artisan key:generate --force
+docker exec rrp_app php artisan migrate --seed
+# Open http://localhost/app
+```
+
+Default seeded accounts:
+
+| Role | Email | Password |
+|------|-------|---------|
+| Admin | `admin@cityu.edu` | `admin12345` |
+| Coordinator | `coordinator@cityu.edu` | `admin12345` |
+| Reviewer | `reviewer@cityu.edu` | `admin12345` |
+| Student | `student@cityu.edu` | `admin12345` |
+
+See **[v2/DEPLOYMENT.md](v2/DEPLOYMENT.md)** for full deployment options (Docker, bare-metal Linux, Azure VM with SSL).
+
+---
+
+## Documentation
+
+| Document | Description |
+|---|---|
+| [v2/DEPLOYMENT.md](v2/DEPLOYMENT.md) | Docker, bare-metal, Azure VM, SSL, CI/CD, environment variables |
+| [v2/OPERATIONS-MANUAL.md](v2/OPERATIONS-MANUAL.md) | Day-to-day admin tasks, monitoring, backups, troubleshooting |
+| [v2/USER-MANUAL.md](v2/USER-MANUAL.md) | End-user guide for all four roles |
+
+---
+
+## Tech Stack
+
+| Layer | Technology |
+|---|---|
+| API | Laravel 11, PHP 8.4, Laravel Sanctum (token auth) |
+| Frontend | React 18, TypeScript, Vite, Tailwind CSS, TanStack Query, Zustand |
+| Database | PostgreSQL 16 |
+| Queue / Cache | Redis 7 |
+| Container | Docker + Docker Compose |
+| CI/CD | GitHub Actions |
+| Deployment | Azure VM (Ubuntu 22.04) with host Nginx + SSL (Let's Encrypt) |
+
+
+---
+
+## What is this?
+
+The **CityU Research Review Portal v2** is a full-featured academic research submission and peer-review management system. It replaces the original WordPress plugin with a Laravel 11 REST API backend and a React 18 + TypeScript SPA frontend.
+
+Researchers submit their work, coordinators assign reviewers, reviewers give structured feedback — and the portal automatically moves submissions through each configurable stage, sends email notifications, and keeps a complete audit trail.
+
+---
+
+## v2 Quick Start
+
+### Prerequisites
+
+- Docker + Docker Compose
+- Node.js 20+ (for local frontend development)
+- PHP 8.4 + Composer (for local backend development)
+
+### Docker (recommended)
+
+```bash
+cd v2
+
+# 1. Copy and edit environment variables
+cp backend/.env.example backend/.env
+#    Set DB_PASSWORD, APP_KEY (php artisan key:generate), MAIL_* etc.
+
+# 2. Start all services
+docker compose up -d
+
+# 3. Run migrations + seeders (first time)
+docker exec rrp_app php artisan migrate --seed
+
+# 4. Open the app
+#    Frontend: https://portal.your-institution.edu/app
+#    API:      https://portal.your-institution.edu/api
+```
+
+Default seed credentials:
+
+| Role | Email | Password |
+|------|-------|---------|
+| Admin | `admin@cityu.edu` | `admin12345` |
+| Coordinator | `coordinator@cityu.edu` | `admin12345` |
+| Reviewer | `reviewer@cityu.edu` | `admin12345` |
+| Student | `student@cityu.edu` | `admin12345` |
+
+> If no admin account exists, the emergency admin `emergency.admin@system.local` / `admin12345` activates automatically.
+
+### Local development
+
+```bash
+# Backend
+cd v2/backend
+composer install
+cp .env.example .env && php artisan key:generate
+php artisan migrate --seed
+php artisan serve          # http://localhost:8000
+
+# Frontend (separate terminal)
+cd v2/frontend
+npm install
+npm run dev                # http://localhost:5173
+```
+
+### Run tests
+
+```bash
+cd v2/backend
+php artisan test           # PHPUnit — SQLite in-memory, no DB required
+```
+
+### v1 → v2 data migration
+
+```bash
+cd v2/backend
+php scripts/migrate_v1_data.php --dry-run --v1-data=../../data
+# Remove --dry-run to write to DB
+```
 
 ---
 

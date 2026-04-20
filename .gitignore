@@ -1,0 +1,35 @@
+*.py
+*.sh
+
+# Dependencies
+node_modules/
+vendor/
+
+# Build outputs
+frontend/dist/
+frontend/build/
+public/hot
+public/storage
+
+# Environment files
+.env
+.env.local
+.env.production
+.env.*.local
+
+# Laravel
+storage/framework/cache/
+storage/framework/sessions/
+storage/framework/views/
+storage/logs/
+bootstrap/cache/
+
+# IDE / OS
+.idea/
+.vscode/
+*.DS_Store
+Thumbs.db
+
+# Composer
+composer.phar
+

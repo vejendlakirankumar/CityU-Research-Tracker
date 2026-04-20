@@ -1,0 +1,157 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  # ── Backend: PHP / Laravel ─────────────────────────────────────────────────
+  backend:
+    name: Backend (PHP ${{ matrix.php }})
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        php: ['8.4']
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: rrp_test
+          POSTGRES_USER: rrp
+          POSTGRES_PASSWORD: secret
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+    defaults:
+      run:
+        working-directory: v2/backend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up PHP ${{ matrix.php }}
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: pdo, pdo_pgsql, pdo_sqlite, sqlite3, bcmath, mbstring, exif, gd, intl
+          coverage: none
+
+      - name: Cache Composer packages
+        uses: actions/cache@v4
+        with:
+          path: v2/backend/vendor
+          key: ${{ runner.os }}-php-${{ hashFiles('v2/backend/composer.lock') }}
+          restore-keys: ${{ runner.os }}-php-
+
+      - name: Install dependencies
+        run: composer install --no-interaction --prefer-dist --optimize-autoloader
+
+      - name: Copy .env
+        run: cp .env.example .env
+
+      - name: Generate app key
+        run: php artisan key:generate
+
+      - name: Run PHPUnit tests (SQLite in-memory)
+        run: php artisan test --env=testing
+        env:
+          APP_ENV: testing
+          APP_KEY: base64:verySecretTestKeyThatIs32BytesLong=
+          DB_CONNECTION: sqlite
+          DB_DATABASE: ":memory:"
+          CACHE_STORE: array
+          QUEUE_CONNECTION: sync
+          SESSION_DRIVER: array
+          MAIL_MAILER: log
+
+  # ── Frontend: TypeScript + Vite ────────────────────────────────────────────
+  frontend:
+    name: Frontend (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        node: ['20']
+
+    defaults:
+      run:
+        working-directory: v2/frontend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js ${{ matrix.node }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+          cache-dependency-path: v2/frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: TypeScript check + Vite build
+        run: npm run build
+        env:
+          VITE_API_BASE_URL: http://localhost/api
+
+  # ── Deploy (main branch only) ──────────────────────────────────────────────
+  deploy:
+    name: Deploy to production VM
+    runs-on: ubuntu-latest
+    needs: [backend, frontend]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    environment: production
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install sshpass
+        run: sudo apt-get install -y sshpass
+
+      - name: Deploy backend + rebuild frontend
+        env:
+          VM_HOST: ${{ secrets.VM_HOST }}
+          VM_USER: ${{ secrets.VM_USER }}
+          VM_PASS: ${{ secrets.VM_PASS }}
+        run: |
+          # SCP key backend files
+          BACKEND=v2/backend
+          sshpass -p "$VM_PASS" scp -o StrictHostKeyChecking=no \
+            "$BACKEND/routes/api.php" \
+            "$BACKEND/app/Http/Controllers/AnalyticsController.php" \
+            "$BACKEND/app/Http/Controllers/AuditLogController.php" \
+            "$BACKEND/app/Http/Controllers/WebhookController.php" \
+            "$BACKEND/app/Models/WebhookSubscription.php" \
+            "$BACKEND/app/Models/WebhookDelivery.php" \
+            "$VM_USER@$VM_HOST:/tmp/"
+
+          sshpass -p "$VM_PASS" ssh -o StrictHostKeyChecking=no "$VM_USER@$VM_HOST" '
+            docker cp /tmp/api.php rrp_app:/var/www/html/routes/api.php
+            docker cp /tmp/AnalyticsController.php rrp_app:/var/www/html/app/Http/Controllers/AnalyticsController.php
+            docker cp /tmp/AuditLogController.php rrp_app:/var/www/html/app/Http/Controllers/AuditLogController.php
+            docker cp /tmp/WebhookController.php rrp_app:/var/www/html/app/Http/Controllers/WebhookController.php
+            docker cp /tmp/WebhookSubscription.php rrp_app:/var/www/html/app/Models/WebhookSubscription.php
+            docker cp /tmp/WebhookDelivery.php rrp_app:/var/www/html/app/Models/WebhookDelivery.php
+            docker exec -w /var/www/html rrp_app php artisan migrate --force
+            docker exec -w /var/www/html rrp_app php artisan route:cache
+            docker exec -w /var/www/html rrp_app php artisan config:clear
+          '
+
+          # Sync frontend src and rebuild
+          sshpass -p "$VM_PASS" rsync -avz --delete \
+            -e "ssh -o StrictHostKeyChecking=no" \
+            "v2/frontend/src/" \
+            "$VM_USER@$VM_HOST:/opt/rrp-v2/frontend-src/src/"
+
+          sshpass -p "$VM_PASS" ssh -o StrictHostKeyChecking=no "$VM_USER@$VM_HOST" \
+            'bash /opt/rrp-v2/build_frontend.sh'
