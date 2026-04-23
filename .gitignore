@@ -1,6 +1,3 @@
-*.py
-*.sh
-
 # Dependencies
 node_modules/
 vendor/

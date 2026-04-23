@@ -52,6 +52,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     php${PHP_VERSION}-bcmath \
     php${PHP_VERSION}-intl \
     php${PHP_VERSION}-gd \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # PHP-FPM config: run as www-data, listen on TCP

@@ -29,6 +29,12 @@ services:
     volumes:
       - app_storage:/var/www/html/storage
       - app_cache:/var/www/html/bootstrap/cache
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/api/system/public"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 60s
     depends_on:
       postgres:
         condition: service_healthy
