@@ -23,7 +23,7 @@ services:
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       QUEUE_CONNECTION: redis
       SESSION_DOMAIN: ${SESSION_DOMAIN:-localhost}
-      SANCTUM_STATEFUL_DOMAINS: ${SANCTUM_STATEFUL_DOMAINS:-localhost:8080}
+      SANCTUM_STATEFUL_DOMAINS: ${SANCTUM_STATEFUL_DOMAINS:-localhost}
       FILESYSTEM_DISK: local
       RUN_MIGRATIONS: "true"
     volumes:
@@ -50,7 +50,7 @@ services:
     environment:
       APP_ENV: production
       APP_DEBUG: "false"
-      APP_URL: ${APP_URL:-http://localhost:8080}
+      APP_URL: ${APP_URL:-http://localhost}
       APP_KEY: ${APP_KEY}
       DB_HOST: postgres
       DB_DATABASE: ${DB_DATABASE:-rrp_production}

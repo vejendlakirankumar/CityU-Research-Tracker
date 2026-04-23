@@ -18,7 +18,7 @@ FROM composer:2 AS composer-builder
 
 WORKDIR /build
 
-COPY backend/composer.json ./
+COPY backend/composer.json backend/composer.lock* ./
 RUN composer install \
     --no-dev \
     --optimize-autoloader \
