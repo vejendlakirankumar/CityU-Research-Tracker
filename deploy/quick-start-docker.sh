@@ -206,12 +206,12 @@ info "Application container is healthy."
 # ---------- database migrations -----------------------------------------------
 step "Running database migrations"
 
-docker exec rrp_app php artisan migrate --force
-docker exec rrp_app php artisan storage:link 2>/dev/null || true
+docker exec -w /var/www/html rrp_app php artisan migrate --force
+docker exec -w /var/www/html rrp_app php artisan storage:link 2>/dev/null || true
 
 if [[ "$SEED" == true ]]; then
   info "Seeding default accounts..."
-  docker exec rrp_app php artisan db:seed --force
+  docker exec -w /var/www/html rrp_app php artisan db:seed --force
   echo ""
   warn "Demo accounts created — CHANGE THESE PASSWORDS before production use."
 fi
@@ -259,11 +259,11 @@ fi
 echo "  Useful commands:"
 printf "    %-34s %s\n" "View live logs:"        "docker compose logs -f app"
 printf "    %-34s %s\n" "Open app shell:"        "docker exec -it rrp_app bash"
-printf "    %-34s %s\n" "Run Artisan command:"   "docker exec rrp_app php artisan <cmd>"
+printf "    %-34s %s\n" "Run Artisan command:"   "docker exec -w /var/www/html rrp_app php artisan <cmd>"
 printf "    %-34s %s\n" "Stop (keep data):"      "docker compose down"
 printf "    %-34s %s\n" "Stop + wipe ALL data:"  "docker compose down -v  # DESTRUCTIVE"
 echo ""
 echo "  Configure email, SSO and other settings:"
 printf "    %-34s %s\n" "Edit:"    "$ENV_FILE"
-printf "    %-34s %s\n" "Reload:"  "docker exec rrp_app php artisan config:cache"
+printf "    %-34s %s\n" "Reload:"  "docker exec -w /var/www/html rrp_app php artisan config:cache"
 echo ""

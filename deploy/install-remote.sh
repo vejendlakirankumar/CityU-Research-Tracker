@@ -166,10 +166,10 @@ until docker inspect --format='{{.State.Health.Status}}' rrp_app 2>/dev/null | g
 done
 echo " Ready!"
 
-docker exec rrp_app php artisan migrate --force --seed
-docker exec rrp_app php artisan storage:link
-docker exec rrp_app php artisan config:cache
-docker exec rrp_app php artisan route:cache
+docker exec -w /var/www/html rrp_app php artisan migrate --force --seed
+docker exec -w /var/www/html rrp_app php artisan storage:link
+docker exec -w /var/www/html rrp_app php artisan config:cache
+docker exec -w /var/www/html rrp_app php artisan route:cache
 
 echo "--- Docker Compose running ---"
 docker compose ps

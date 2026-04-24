@@ -42,7 +42,7 @@ Internet
     ▼
 [Docker: rrp_app]   PHP 8.4-FPM + Nginx 1.25 (Ubuntu 24.04)
     │               ├── /api/*        → Laravel 10 (PHP-FPM)
-    │               └── /app/*        → React SPA (static files in /var/www/frontend)
+    │               └── /*            → React SPA (static files in /var/www/frontend)
     │
     ├── [Docker: rrp_worker]   php artisan queue:work (same image, no HTTP)
     ├── [Docker: rrp_postgres] PostgreSQL 16-alpine  (volume: pgdata)
@@ -1080,7 +1080,7 @@ docker ps --format "table {{.Names}}\t{{.Status}}"
 | 1.1 | HTTPS loads without certificate warning | |
 | 1.2 | `http://` redirects to `https://` | |
 | 1.3 | `GET /api/system/public` returns `200` with JSON | |
-| 1.4 | `GET /app/` returns the React SPA HTML | |
+| 1.4 | `GET /` returns the React SPA HTML | |
 | 1.5 | All four containers are **Up** and healthy | |
 
 ### Authentication
@@ -1091,7 +1091,7 @@ docker ps --format "table {{.Names}}\t{{.Status}}"
 | 2.2 | Reviewer login succeeds and shows the Assignments page | |
 | 2.3 | Student login succeeds and shows the Submissions page | |
 | 2.4 | Invalid credentials show an error message | |
-| 2.5 | Logout clears session and redirects to `/app/login` | |
+| 2.5 | Logout clears session and redirects to `/login` | |
 
 ### Submission lifecycle
 

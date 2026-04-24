@@ -69,6 +69,9 @@ COPY --from=composer-builder --chown=www-data:www-data /build /var/www/html
 # Copy built React SPA
 COPY --from=frontend-builder --chown=www-data:www-data /build/dist /var/www/frontend
 
+# Set working directory so `docker exec rrp_app php artisan ...` works without a full path
+WORKDIR /var/www/html
+
 # Entrypoint
 COPY docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh

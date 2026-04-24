@@ -58,14 +58,44 @@ if [ ! -f "$VHOST_SOURCE" ]; then
 fi
 
 echo "==> Installing Nginx vhost …"
-sed -e "s/PORTAL_DOMAIN/$DOMAIN/g" -e "s/PROXY_PORT/$PROXY_PORT/g" "$VHOST_SOURCE" > "$VHOST_DEST"
+
+# ── Step 1: Deploy HTTP-only vhost so certbot can complete the ACME challenge ─
+# The full vhost (with SSL block) cannot load until the cert files exist,
+# so we use a minimal HTTP-only config first.
+cat > "$VHOST_DEST" <<HTTPONLY
+server {
+    listen 80;
+    listen [::]:80;
+    server_name $DOMAIN;
+
+    # Let's Encrypt ACME challenge
+    location /.well-known/acme-challenge/ {
+        root $WEBROOT;
+    }
+
+    # Proxy everything else to the Docker container while cert is being issued
+    location / {
+        proxy_pass http://127.0.0.1:$PROXY_PORT;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto http;
+    }
+}
+HTTPONLY
+
 ln -sf "$VHOST_DEST" "$VHOST_LINK"
 
 # Remove default site if it conflicts on port 80
 [ -L /etc/nginx/sites-enabled/default ] && rm /etc/nginx/sites-enabled/default
 
 nginx -t
-systemctl reload nginx
+# Use systemctl if available (standard Ubuntu), fall back to service command (WSL)
+if command -v systemctl &>/dev/null && systemctl is-active --quiet nginx 2>/dev/null; then
+    systemctl reload nginx
+else
+    service nginx reload 2>/dev/null || nginx -s reload
+fi
 
 # ── Obtain certificate ────────────────────────────────────────────────────────
 echo ""
@@ -78,10 +108,22 @@ certbot certonly \
     --email "$EMAIL" \
     -d "$DOMAIN"
 
+# ── Step 2: Deploy full SSL vhost now that the cert files exist ───────────────
+echo "==> Deploying SSL vhost …"
+if [ ! -f "$VHOST_SOURCE" ]; then
+    echo "ERROR: nginx-vhost.conf not found at $VHOST_SOURCE"
+    exit 1
+fi
+sed -e "s/PORTAL_DOMAIN/$DOMAIN/g" -e "s/PROXY_PORT/$PROXY_PORT/g" "$VHOST_SOURCE" > "$VHOST_DEST"
+
 # ── Reload Nginx with SSL config ──────────────────────────────────────────────
 echo "==> Reloading Nginx with TLS …"
 nginx -t
-systemctl reload nginx
+if command -v systemctl &>/dev/null && systemctl is-active --quiet nginx 2>/dev/null; then
+    systemctl reload nginx
+else
+    service nginx reload 2>/dev/null || nginx -s reload
+fi
 
 # ── Cron auto-renewal ─────────────────────────────────────────────────────────
 CRON_JOB="0 3 * * * root certbot renew --quiet --post-hook 'systemctl reload nginx'"
@@ -104,6 +146,6 @@ echo " Private key : /etc/letsencrypt/live/$DOMAIN/privkey.pem"
 echo " Auto-renewal: $CRON_FILE (runs at 03:00 daily)"
 echo " Nginx vhost : $VHOST_DEST"
 echo ""
-echo " Verify at  : https://$DOMAIN/app/"
+echo " Verify at  : https://$DOMAIN/"
 echo " ACME test  : certbot renew --dry-run"
 echo "============================================================"

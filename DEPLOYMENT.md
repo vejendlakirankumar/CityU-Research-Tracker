@@ -63,8 +63,8 @@ Browser (HTTPS :443)
     | HTTP -> localhost:${HOST_PORT:-80}
     v
 [Docker: rrp_app]   Ubuntu 24.04 . PHP 8.4-FPM . Nginx
-    |               /app/*  -> React SPA  (/var/www/frontend/)
-    |               /api/*  -> Laravel 10 (PHP-FPM :9000)
+    |               /*     -> React SPA  (/var/www/frontend/)
+    |               /api/* -> Laravel 10 (PHP-FPM :9000)
     |
     +-- [Docker: rrp_worker]   php artisan queue:work
     +-- [Docker: rrp_postgres] PostgreSQL 16  (volume: pgdata)
@@ -706,7 +706,7 @@ cd CityU-Research-Tracker
 bash deploy/quick-start-docker.sh --port 8080
 ```
 
-Open your **Windows browser** and go to `http://localhost:8080/app/` — Docker Desktop bridges the WSL 2 network to Windows automatically.
+Open your **Windows browser** and go to `http://localhost:8080/` — Docker Desktop bridges the WSL 2 network to Windows automatically.
 
 For a custom domain with SSL (production-like setup on Windows is uncommon, but possible with a hosts-file entry):
 
