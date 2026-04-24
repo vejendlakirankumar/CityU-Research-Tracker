@@ -256,6 +256,43 @@ class UserController extends Controller
     }
 
     /**
+     * DELETE /api/users/{user}/purge
+     * Permanently deletes a user record. Admin-only.
+     * The emergency admin and the acting admin's own account cannot be purged.
+     */
+    public function purge(Request $request, User $user): JsonResponse
+    {
+        $this->authorize('purge', $user);
+
+        // Extra guard — should be unreachable due to policy, but belt-and-braces
+        if ($user->is_emergency_admin) {
+            return response()->json(['message' => 'The emergency admin account cannot be deleted.'], 403);
+        }
+        if ($user->id === $request->user()->id) {
+            return response()->json(['message' => 'You cannot delete your own account.'], 403);
+        }
+
+        $snapshot = ['email' => $user->email, 'name' => $user->name, 'roles' => $user->roles];
+
+        $user->delete();
+
+        AuditLog::create([
+            'actor_id'     => $request->user()->id,
+            'action'       => 'USER_DELETED',
+            'target_type'  => 'user',
+            'target_id'    => $snapshot['email'], // user row is gone; store email as ref
+            'before_state' => $snapshot,
+            'ip_address'   => $request->ip(),
+            'user_agent'   => $request->userAgent(),
+            'request_id'   => $request->header('X-Request-Id'),
+        ]);
+
+        User::syncEmergencyAdmin();
+
+        return response()->json(['message' => 'User permanently deleted.']);
+    }
+
+    /**
      * POST /api/users/{user}/activate
      */
     public function activate(Request $request, User $user): JsonResponse

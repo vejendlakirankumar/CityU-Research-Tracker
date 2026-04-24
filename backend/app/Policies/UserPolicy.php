@@ -53,6 +53,14 @@ class UserPolicy
     }
 
     /**
+     * Only admins can permanently delete a user record.
+     */
+    public function purge(User $actor, User $target): bool
+    {
+        return $actor->hasRole('admin') && $actor->id !== $target->id && !$target->is_emergency_admin;
+    }
+
+    /**
      * Only admins can assign/change roles.
      */
     public function assignRoles(User $actor): bool

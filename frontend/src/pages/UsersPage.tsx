@@ -533,6 +533,7 @@ function UsersTab() {
   const [showCreate, setShowCreate] = useState(false)
   const [editUser, setEditUser] = useState<User | null>(null)
   const [resetUser, setResetUser] = useState<User | null>(null)
+  const [deleteUser, setDeleteUser] = useState<User | null>(null)
 
   const { data, isLoading } = useQuery({
     queryKey: ['users', search, roleFilter, page],
@@ -558,6 +559,16 @@ function UsersTab() {
     mutationFn: (user: User) => api.post(`/users/${user.id}/unlock`),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['users'] }); toast.success('Account unlocked.') },
     onError: () => toast.error('Unlock failed.'),
+  })
+
+  const purgeUser = useMutation({
+    mutationFn: (user: User) => api.delete(`/users/${user.id}/purge`),
+    onSuccess: (_r, user) => {
+      qc.invalidateQueries({ queryKey: ['users'] })
+      toast.success(`${user.name} has been permanently deleted.`)
+      setDeleteUser(null)
+    },
+    onError: () => toast.error('Delete failed.'),
   })
 
   const refresh = () => qc.invalidateQueries({ queryKey: ['users'] })
@@ -664,6 +675,12 @@ function UsersTab() {
                               {user.is_active ? <UserX className="w-4 h-4" /> : <UserCheck className="w-4 h-4" />}
                             </button>
                           ) : null}
+                          {actorIsAdmin && !user.is_emergency_admin && user.id !== actorUser?.id && (
+                            <button title="Delete User" onClick={() => setDeleteUser(user)}
+                              className="p-1.5 rounded hover:bg-red-50 text-gray-400 hover:text-red-600">
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -688,6 +705,32 @@ function UsersTab() {
       {showCreate && <UserFormModal onClose={() => setShowCreate(false)} onSaved={refresh} actorIsAdmin={actorIsAdmin} />}
       {editUser   && <UserFormModal initial={editUser} onClose={() => setEditUser(null)} onSaved={refresh} actorIsAdmin={actorIsAdmin} />}
       {resetUser  && <ResetPasswordModal user={resetUser} onClose={() => setResetUser(null)} />}
+      {deleteUser && (
+        <Modal title="Delete User" onClose={() => setDeleteUser(null)} size="md">
+          <div className="space-y-4">
+            <p className="text-sm text-gray-700">
+              Are you sure you want to <span className="font-semibold text-red-600">permanently delete</span> the account for:
+            </p>
+            <div className="bg-gray-50 rounded-lg px-4 py-3 text-sm">
+              <p className="font-medium text-gray-900">{deleteUser.name}</p>
+              <p className="text-gray-500">{deleteUser.email}</p>
+            </div>
+            <p className="text-xs text-red-600 font-medium">
+              This action cannot be undone. All data associated with this user will be removed.
+            </p>
+            <div className="flex justify-end gap-3 pt-2">
+              <button className="px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50" onClick={() => setDeleteUser(null)}>Cancel</button>
+              <button
+                className="px-4 py-2 text-sm bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50"
+                disabled={purgeUser.isPending}
+                onClick={() => purgeUser.mutate(deleteUser)}
+              >
+                {purgeUser.isPending ? 'Deleting…' : 'Delete Permanently'}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
     </div>
   )
 }

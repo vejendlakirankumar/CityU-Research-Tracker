@@ -5,15 +5,22 @@
 # Nginx to use it.
 #
 # Usage (run as root or with sudo):
-#   sudo bash ssl-setup.sh <domain> [email]
+#   sudo bash ssl-setup.sh <domain> [email] [proxy_port]
+#
+# Arguments:
+#   domain      Public domain name (required)
+#   email       Let's Encrypt notification email (default: webmaster@<domain>)
+#   proxy_port  Host port the Docker container is bound to (default: 8080)
+#               Docker MUST be on this port, NOT on 80, before running this script.
 #
 # Examples:
-#   sudo bash ssl-setup.sh portal.cityu.edu admin@cityu.edu
+#   sudo bash ssl-setup.sh portal.myorg.com admin@myorg.com 8080
 #
 # Requirements:
-#   - Nginx installed and running (the HTTP vhost must already be in place)
-#   - Port 80 open in the firewall so Let's Encrypt can reach the ACME challenge
+#   - Docker container running on proxy_port (NOT on port 80)
+#   - Port 80 AND 443 open in firewall/NSG for ACME challenge and HTTPS traffic
 #   - The domain DNS A-record must point to this server's public IP
+#   - Must run as root (sudo)
 # =============================================================================
 set -euo pipefail
 
@@ -143,7 +150,7 @@ else
 fi
 
 # ── Cron auto-renewal ─────────────────────────────────────────────────────────
-CRON_JOB="0 3 * * * root certbot renew --quiet --post-hook 'systemctl reload nginx'"
+CRON_JOB="0 3 * * * root certbot renew --quiet --post-hook 'systemctl reload nginx 2>/dev/null || service nginx reload'"
 CRON_FILE="/etc/cron.d/certbot-renew-rrp"
 if [ ! -f "$CRON_FILE" ]; then
     echo "==> Installing auto-renewal cron job …"

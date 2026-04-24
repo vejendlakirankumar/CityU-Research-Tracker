@@ -2220,7 +2220,7 @@ function DocCompareViewer({
             ) : (
               <div
                 className="text-sm leading-relaxed text-gray-800 whitespace-pre-wrap"
-                dangerouslySetInnerHTML={{ __html: diffHtmlA ?? '' }}
+                dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(diffHtmlA ?? '') }}
               />
             )}
           </div>
@@ -2243,7 +2243,7 @@ function DocCompareViewer({
             ) : (
               <div
                 className="text-sm leading-relaxed text-gray-800 whitespace-pre-wrap"
-                dangerouslySetInnerHTML={{ __html: diffHtmlB ?? '' }}
+                dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(diffHtmlB ?? '') }}
               />
             )}
           </div>

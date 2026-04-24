@@ -59,10 +59,13 @@ Default admin login: `admin@cityu.edu` / `admin12345` — **change immediately**
 Browser (HTTPS :443)
     |
     v
-[Host Nginx]  -- SSL termination, HSTS, reverse proxy
-    | HTTP -> localhost:${HOST_PORT:-80}
+[Host Nginx]  ← installed on the host OS by ssl-setup.sh
+    |           SSL termination, HSTS, reverse proxy
+    |           Ports 80 (redirect) + 443 (HTTPS)
+    | HTTP proxies to → localhost:8080 (when SSL enabled)
+    |                → localhost:80   (HTTP-only mode, no host nginx)
     v
-[Docker: rrp_app]   Ubuntu 24.04 . PHP 8.4-FPM . Nginx
+[Docker: rrp_app]   Ubuntu 24.04 · PHP 8.4-FPM · Nginx (container)
     |               /*     -> React SPA  (/var/www/frontend/)
     |               /api/* -> Laravel 10 (PHP-FPM :9000)
     |
@@ -70,6 +73,8 @@ Browser (HTTPS :443)
     +-- [Docker: rrp_postgres] PostgreSQL 16  (volume: pgdata)
     +-- [Docker: rrp_redis]    Redis 7        (volume: redis_data)
 ```
+
+> **Two-layer nginx (SSL mode):** There are two separate nginx instances. The host nginx (Ubuntu package) owns ports 80/443, terminates TLS, and proxies plain HTTP to the container on port 8080. The container nginx (inside Docker) serves the React SPA and routes `/api/*` to PHP-FPM. In HTTP-only mode (no SSL) there is no host nginx — Docker binds port 80 directly.
 
 **Docker image** is built from the repo's `Dockerfile` using three stages:
 
@@ -162,17 +167,19 @@ bash deploy/quick-start-docker.sh --env-file /path/to/my.env --no-seed
 5. Waits until `rrp_app` is healthy
 6. Runs `php artisan migrate --force`
 7. Optionally seeds demo accounts
-8. Optionally runs `deploy/ssl-setup.sh` to provision a Let's Encrypt certificate
+8. Optionally runs `deploy/ssl-setup.sh` which: installs **nginx on the host** (separate from the container's nginx), obtains a Let's Encrypt certificate, and configures host nginx as an SSL-terminating reverse proxy that forwards traffic to Docker on port 8080
 9. Prints the portal URL and useful commands
+
+> **Two-layer nginx:** When SSL is enabled the portal runs two nginx instances: one inside the Docker container (serves React SPA + PHP-FPM on port 8080) and one on the host OS (handles port 80/443, terminates SSL, proxies to `127.0.0.1:8080`). This is why `ssl-setup.sh` must run on the host, not inside Docker.
 
 ### Script options
 
 | Option | Default | Description |
 |---|---|---|
 | `--domain DOMAIN` | `localhost` | Public hostname or IP used in APP_URL and cookie config |
-| `--port PORT` | `80` | Host port the portal listens on |
-| `--https` | off | Provision Let's Encrypt cert after start (requires root + DNS live) |
-| `--no-seed` | off | Skip demo account seeding |
+| `--port PORT` | `80` | Host port Docker binds on the host (auto-overridden to `8080` when `--https` is used) |
+| `--https` | off | Provision Let's Encrypt cert after start. Requires: `ADMIN_EMAIL` set, real domain with DNS live, ports 80+443 open, root/sudo. Automatically moves Docker to port 8080 so host nginx can own port 80 for the ACME challenge. |
+| `--no-seed` | off | Skip demo account seeding (recommended for production) |
 | `--env-file FILE` | -- | Use an existing `.env` instead of auto-generating one |
 
 ### Manage the running stack
@@ -436,12 +443,37 @@ docker exec rrp_app php artisan config:cache
 
 ### Automatic (Let's Encrypt) -- recommended
 
-#### Prerequisites
+There are two paths depending on whether this is a fresh install or an existing HTTP deployment:
 
-Before running `ssl-setup.sh` the Docker container **must not** be bound to port 80.
-Host nginx needs port 80 to complete the ACME challenge.
+---
 
-**Step 1 — Move Docker off port 80 (skip if already on 8080)**
+#### Path A — Fresh install with HTTPS from the start (recommended)
+
+One command does everything — generates `.env`, builds containers, runs migrations, installs host nginx, obtains certificate:
+
+```bash
+export ADMIN_EMAIL=admin@myorg.com
+sudo bash deploy/quick-start-docker.sh --domain portal.myorg.com --https --no-seed
+```
+
+The `--https` flag automatically:
+- Binds Docker to port **8080** (not 80) so host nginx can own port 80 for the ACME challenge
+- Sets `APP_URL=https://portal.myorg.com` in `.env`
+- Runs `ssl-setup.sh` after the containers are healthy
+
+**Requirements:**
+- Domain A-record must point to this server's public IP **before** running
+- Ports 80 **and** 443 open in firewall/NSG
+- Must run as root (`sudo`)
+- `ADMIN_EMAIL` environment variable must be set
+
+---
+
+#### Path B — Add HTTPS to an existing HTTP deployment
+
+Use this if the portal is already running on HTTP and you want to upgrade it to HTTPS.
+
+**Step 1 — Move Docker off port 80**
 
 ```bash
 # On the server, inside the repo directory:
@@ -450,7 +482,7 @@ cd ~/CityU-Research-Tracker
 # Set HOST_PORT=8080 in .env (adds the line if absent, updates it if present)
 grep -q '^HOST_PORT=' .env && sed -i 's/^HOST_PORT=.*/HOST_PORT=8080/' .env || echo 'HOST_PORT=8080' >> .env
 
-# Update APP_URL to https (replace portal.myorg.com with your actual domain)
+# Update APP_URL and cookie domain to https (replace portal.myorg.com with your actual domain)
 sed -i 's|^APP_URL=.*|APP_URL=https://portal.myorg.com|' .env
 sed -i 's/^SESSION_DOMAIN=.*/SESSION_DOMAIN=portal.myorg.com/' .env
 sed -i 's/^SANCTUM_STATEFUL_DOMAINS=.*/SANCTUM_STATEFUL_DOMAINS=portal.myorg.com/' .env
@@ -459,48 +491,43 @@ sed -i 's/^SANCTUM_STATEFUL_DOMAINS=.*/SANCTUM_STATEFUL_DOMAINS=portal.myorg.com
 docker compose up -d
 ```
 
-**Step 2 — Obtain certificate and configure host nginx**
+**Step 2 — Install host nginx, obtain certificate, configure SSL**
 
 ```bash
 sudo bash deploy/ssl-setup.sh portal.myorg.com admin@myorg.com 8080
 ```
 
-Replace `portal.myorg.com` with your actual domain and `admin@myorg.com` with your email.
-
-Pass `--https` to the quick-start script for a fresh install that does everything in one go:
-
-```bash
-export ADMIN_EMAIL=admin@myorg.com
-sudo bash deploy/quick-start-docker.sh --domain portal.myorg.com --https --no-seed
-```
-
-**Requirements:**
-- Domain A/CNAME record must point to this server's public IP
-- Port 80 **and** 443 open in firewall/NSG for the ACME challenge and HTTPS traffic
-- Docker container on port 8080 (not 80) before running `ssl-setup.sh`
-- Must run as root (sudo)
+This installs nginx on the host OS, obtains a Let's Encrypt certificate, and configures host nginx to terminate SSL and proxy to the Docker container on port 8080.
 
 **Common failure — ACME connection timeout:**
 If certbot reports `Timeout during connect (likely firewall problem)` it means either:
-1. Docker is still on port 80 — complete Step 1 above first
+1. Docker is still on port 80 — complete Step 1 first
 2. Port 80 is blocked in the cloud firewall/NSG — open it for inbound traffic
 
 ### Manual renewal
 
 ```bash
 sudo certbot renew --quiet
-sudo systemctl reload nginx
+sudo systemctl reload nginx 2>/dev/null || sudo service nginx reload
 ```
+
+Auto-renewal is configured by `ssl-setup.sh` via a cron job at `/etc/cron.d/certbot-renew-rrp` (runs daily at 03:00).
 
 ### Existing certificate
 
+If you already have a certificate (e.g. from a corporate CA or another ACME client), place the files where nginx-vhost.conf expects them and apply the vhost:
+
 ```bash
-sudo cp fullchain.pem /etc/ssl/rrp/fullchain.pem
-sudo cp privkey.pem   /etc/ssl/rrp/privkey.pem
-sudo cp deploy/nginx-vhost.conf /etc/nginx/sites-available/rrp
-sudo sed -i 's/PORTAL_DOMAIN/portal.myorg.com/g' /etc/nginx/sites-available/rrp
-sudo nginx -t && sudo systemctl reload nginx
+# Copy your cert files to the Let's Encrypt path (adjust source paths)
+sudo mkdir -p /etc/letsencrypt/live/portal.myorg.com
+sudo cp fullchain.pem /etc/letsencrypt/live/portal.myorg.com/fullchain.pem
+sudo cp privkey.pem   /etc/letsencrypt/live/portal.myorg.com/privkey.pem
+
+# Apply the nginx vhost (replace domain and proxy port as needed)
+sudo bash deploy/apply-ssl-vhost.sh portal.myorg.com 8080
 ```
+
+The `apply-ssl-vhost.sh` script substitutes the domain and port into `deploy/nginx-vhost.conf`, writes it to `/etc/nginx/sites-available/rrp-v2`, and reloads nginx.
 
 ### Upload size limit
 
