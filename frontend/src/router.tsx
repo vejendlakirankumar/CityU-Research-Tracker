@@ -74,6 +74,6 @@ export const router = createBrowserRouter(
     // Catch-all → home
     { path: '*', element: <Navigate to="/" replace /> },
   ],
-  { basename: '/app' },
+  { basename: '/' },
 )
 
