@@ -49,6 +49,7 @@ Default admin login: `admin@cityu.edu` / `admin12345` — **change immediately**
 12. [Rollback](#12-rollback)
 13. [Backups](#13-backups)
 14. [Default Seed Accounts](#14-default-seed-accounts)
+15. [Windows — Docker Desktop + WSL 2](#15-windows--docker-desktop--wsl-2)
 
 ---
 
@@ -637,3 +638,133 @@ Created when `db:seed` runs (automatic unless `--no-seed` is passed to `quick-st
 | Student | `student@cityu.edu` | `admin12345` |
 
 > **Change all default passwords immediately after first login in production.**
+
+---
+
+## 15. Windows — Docker Desktop + WSL 2
+
+Running the portal on a Windows machine is fully supported via **Docker Desktop** with the **WSL 2 backend**. All deployment scripts are standard Bash and run without modification inside a WSL 2 distribution.
+
+### Prerequisites
+
+| Requirement | Notes |
+|---|---|
+| Windows 10 21H2+ or Windows 11 | WSL 2 requires kernel 5.10+ |
+| Docker Desktop for Windows | https://docs.docker.com/desktop/install/windows-install/ |
+| WSL 2 enabled with a Linux distro | Ubuntu 22.04 or 24.04 recommended |
+| Git | Either Windows Git or `git` inside WSL |
+
+### Step 1 — Enable WSL 2 and install Ubuntu
+
+Open PowerShell as Administrator and run:
+
+```powershell
+# Enable WSL and install Ubuntu 24.04 in one command (Windows 10 2004+ / Windows 11)
+wsl --install -d Ubuntu-24.04
+```
+
+Restart your machine when prompted. On first launch Ubuntu will ask you to create a UNIX username and password.
+
+If WSL is already installed but set to v1 for your distro, upgrade it:
+
+```powershell
+wsl --set-version Ubuntu-24.04 2
+wsl --set-default-version 2
+```
+
+### Step 2 — Install and configure Docker Desktop
+
+1. Download and install **Docker Desktop for Windows** from https://docs.docker.com/desktop/install/windows-install/
+2. During installation ensure **"Use WSL 2 instead of Hyper-V"** is checked.
+3. After installation open Docker Desktop → **Settings → Resources → WSL Integration**.
+4. Enable integration for your Ubuntu distro (toggle on).
+5. Click **Apply & Restart**.
+
+Verify from inside WSL:
+
+```bash
+# Open Ubuntu from the Start menu (or: wsl -d Ubuntu-24.04)
+docker --version          # Docker Engine 24+
+docker compose version    # Docker Compose v2.x
+```
+
+### Step 3 — Clone the repository inside WSL
+
+Always work inside the WSL filesystem (`/home/<user>/`) rather than the Windows filesystem (`/mnt/c/...`). Disk I/O for Docker bind-mounts is much faster.
+
+```bash
+# Inside the Ubuntu WSL terminal
+cd ~
+git clone https://github.com/cityuseattle/CityU-Research-Tracker.git
+cd CityU-Research-Tracker
+```
+
+### Step 4 — Run the quick-start script
+
+```bash
+# Local dev on http://localhost:8080
+bash deploy/quick-start-docker.sh --port 8080
+```
+
+Open your **Windows browser** and go to `http://localhost:8080/app/` — Docker Desktop bridges the WSL 2 network to Windows automatically.
+
+For a custom domain with SSL (production-like setup on Windows is uncommon, but possible with a hosts-file entry):
+
+```bash
+bash deploy/quick-start-docker.sh --domain myportal.local --port 8080
+```
+
+Add `127.0.0.1 myportal.local` to `C:\Windows\System32\drivers\etc\hosts` on the Windows side.
+
+### Step 5 — Manage the stack
+
+All `docker` and `docker compose` commands run from the WSL terminal:
+
+```bash
+# View logs
+docker compose logs -f app
+
+# Open a shell in the app container
+docker exec -it rrp_app bash
+
+# Run Artisan commands
+docker exec rrp_app php artisan migrate:status
+docker exec rrp_app php artisan config:cache
+
+# Stop (data preserved)
+docker compose down
+
+# Stop and wipe all data — DESTRUCTIVE
+docker compose down -v
+```
+
+You can also use the **Docker Desktop GUI** on the Windows side to start/stop containers and view logs — it shows all containers running in WSL 2.
+
+### Accessing files from Windows Explorer
+
+Your WSL filesystem is accessible in Windows Explorer at:
+
+```
+\\wsl$\Ubuntu-24.04\home\<your-username>\CityU-Research-Tracker
+```
+
+Or pin it to Quick Access by typing that path in the Explorer address bar.
+
+### Troubleshooting
+
+| Symptom | Fix |
+|---|---|
+| `docker: command not found` inside WSL | Open Docker Desktop → Settings → Resources → WSL Integration → enable your distro → Apply & Restart |
+| Port 80 already in use | Use `--port 8080` (or any free port) |
+| Slow file I/O | Clone the repo inside WSL (`~/`) not on the Windows drive (`/mnt/c/`) |
+| `docker compose` not found | Upgrade to Docker Desktop 4.x+ which bundles Compose v2 as a plugin |
+| Container healthy but browser shows nothing | Check Windows Defender Firewall is not blocking port 8080; try disabling temporarily |
+| `permission denied` on shell scripts | Run `chmod +x deploy/*.sh` once inside WSL |
+
+### Updating WSL kernel (if required)
+
+```powershell
+# In PowerShell (Windows side)
+wsl --update
+wsl --shutdown   # then re-open Ubuntu
+```
