@@ -962,6 +962,7 @@ If you run the stack in WSL and need access from outside the Windows host (for e
 1. Windows port forwarding via `netsh interface portproxy`
 2. Windows inbound firewall rules for the same ports
 
+WSL may run in NAT mode instead of mirroring mode. If WSL is running on NAT mode, below configuration is needed.
 First, get your current WSL IP from inside the WSL distro:
 
 ```bash
@@ -978,12 +979,16 @@ netsh interface portproxy add v4tov4 listenaddress=<windows_ip> listenport=2222 
 # Forward host HTTPS 443 (to local listener on Windows/WSL)
 netsh interface portproxy add v4tov4 listenaddress=<windows_ip> listenport=443 connectaddress=<wsl_ip> connectport=443
 
+# Forward host HTTPS 80 (to local listener on Windows/WSL). Port 80 is temporarily needed until ssl is configured.
+netsh interface portproxy add v4tov4 listenaddress=<windows_ip> listenport=80 connectaddress=<wsl_ip> connectport=80
+
 # Show current forwarding rules
 netsh interface portproxy show all
 
 # Open matching firewall ports
 New-NetFirewallRule -DisplayName "Allow Port 2222" -Direction Inbound -Protocol TCP -LocalPort 2222 -Action Allow
 New-NetFirewallRule -DisplayName "Allow Port 443"  -Direction Inbound -Protocol TCP -LocalPort 443  -Action Allow
+New-NetFirewallRule -DisplayName "Allow Port 80"  -Direction Inbound -Protocol TCP -LocalPort 80  -Action Allow
 ```
 
 Notes:
