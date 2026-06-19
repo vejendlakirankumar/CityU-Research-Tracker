@@ -56,7 +56,7 @@ After deployment the portal is available at the URL printed at the end of the sc
 12. [Rollback](#12-rollback)
 13. [Backups](#13-backups)
 14. [Default Seed Accounts](#14-default-seed-accounts)
-15. [Windows — Docker Desktop + WSL 2](#15-windows--docker-desktop--wsl-2)
+15. [Windows Deployment Workflows](#15-windows-deployment-workflows)
 16. [Post-Deployment Validation (Docker + Direct)](#16-post-deployment-validation-docker--direct)
 
 ---
@@ -379,7 +379,7 @@ bash deploy/install-remote.sh \
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `Windows Subsystem for Linux has no installed distributions` when running `bash deploy/install-remote.sh ...` | You are on native PowerShell without WSL/Git Bash | Run from WSL (`wsl -d Ubuntu-24.04`) or install Git Bash and run the script there |
+| `Windows Subsystem for Linux has no installed distributions` when running `bash deploy/install-remote.sh ...` | You are in native PowerShell without a local Bash runtime | Either run from WSL/Git Bash, or use PowerShell `ssh`/`scp` and execute deployment scripts directly on the Linux VM |
 | `Connection closed by <ip> port 22` | SSH not reachable or password login disabled by VM/NSG/sshd | Verify NSG allows TCP 22, VM is running, and `PasswordAuthentication yes` in `/etc/ssh/sshd_config` (or use SSH key auth) |
 | `permission denied while trying to connect to the Docker daemon socket` during remote deploy | Current SSH session does not yet have updated `docker` group membership | Re-login to VM, or use `sudo docker ...` for the current session |
 | `set: pipefail` or `$'pipefail\r'` on Linux | Shell scripts were copied with Windows CRLF line endings | Keep the repository `.gitattributes` file intact so `*.sh`, `Dockerfile`, `docker-compose.yml`, and `*.conf` stay LF on checkout/copy |
@@ -933,133 +933,138 @@ If seed accounts are created, they are:
 
 ---
 
-## 15. Windows — Docker Desktop + WSL 2
+## 15. Windows Deployment Workflows
 
-Running the portal on a Windows machine is fully supported via **Docker Desktop** with the **WSL 2 backend**. All deployment scripts are standard Bash and run without modification inside a WSL 2 distribution.
+Windows is supported in two ways:
 
-### Prerequisites
+1. **Path A (optional):** local Docker Desktop + local WSL 2 distro.
+2. **Path B (validated in this project):** Windows PowerShell client + Linux VM on Azure (no local WSL required).
+
+---
+
+### Path A — Local Windows + Docker Desktop + WSL 2
+
+Use this when you want to run the full stack locally on your Windows machine.
+
+#### Prerequisites
 
 | Requirement | Notes |
 |---|---|
-| Windows 10 21H2+ or Windows 11 | WSL 2 requires kernel 5.10+ |
+| Windows 10 21H2+ or Windows 11 | WSL 2 requires modern kernel support |
 | Docker Desktop for Windows | https://docs.docker.com/desktop/install/windows-install/ |
-| WSL 2 enabled with a Linux distro | Ubuntu 22.04 or 24.04 recommended |
-| Git | Either Windows Git or `git` inside WSL |
+| WSL 2 enabled with Linux distro | Ubuntu 22.04/24.04 recommended |
+| Windows firewall + port forwarding (if external access needed) | Required only when accessing WSL services from other machines/subnets |
 
-### Step 1 — Enable WSL 2 and install Ubuntu
+#### Network prerequisite for WSL (external access only)
 
-Open PowerShell as Administrator and run:
+If you run the stack in WSL and need access from outside the Windows host (for example from LAN, another VM, or cloud public IP), configure both:
+
+1. Windows port forwarding via `netsh interface portproxy`
+2. Windows inbound firewall rules for the same ports
+
+Example (run in elevated PowerShell; replace IPs/ports for your host):
 
 ```powershell
-# Enable WSL and install Ubuntu 24.04 in one command (Windows 10 2004+ / Windows 11)
+# Forward host SSH port 2222 to WSL SSH service
+netsh interface portproxy add v4tov4 listenaddress=10.0.0.4 listenport=2222 connectaddress=172.24.247.153 connectport=22
+
+# Forward host HTTPS 443 (to local listener on Windows/WSL)
+netsh interface portproxy add v4tov4 listenaddress=10.0.0.4 listenport=443 connectaddress=127.0.0.1 connectport=443
+
+# Show current forwarding rules
+netsh interface portproxy show all
+
+# Open matching firewall ports
+New-NetFirewallRule -DisplayName "Allow Port 2222" -Direction Inbound -Protocol TCP -LocalPort 2222 -Action Allow
+New-NetFirewallRule -DisplayName "Allow Port 443"  -Direction Inbound -Protocol TCP -LocalPort 443  -Action Allow
+```
+
+Notes:
+
+- If your app is exposed on HTTP (`--port 8080`), add a matching `8080` portproxy + firewall rule instead of `443`.
+- WSL IPs are dynamic after reboot; update `connectaddress` when needed.
+- If access is only from local Windows browser (`http://localhost` or `http://localhost:8080`), this step is usually not required.
+
+#### Quick steps
+
+```powershell
 wsl --install -d Ubuntu-24.04
 ```
 
-Restart your machine when prompted. On first launch Ubuntu will ask you to create a UNIX username and password.
-
-If WSL is already installed but set to v1 for your distro, upgrade it:
-
-```powershell
-wsl --set-version Ubuntu-24.04 2
-wsl --set-default-version 2
-```
-
-### Step 2 — Install and configure Docker Desktop
-
-1. Download and install **Docker Desktop for Windows** from https://docs.docker.com/desktop/install/windows-install/
-2. During installation ensure **"Use WSL 2 instead of Hyper-V"** is checked.
-3. After installation open Docker Desktop → **Settings → Resources → WSL Integration**.
-4. Enable integration for your Ubuntu distro (toggle on).
-5. Click **Apply & Restart**.
-
-Verify from inside WSL:
+Inside the Ubuntu shell:
 
 ```bash
-# Open Ubuntu from the Start menu (or: wsl -d Ubuntu-24.04)
-docker --version          # Docker Engine 24+
-docker compose version    # Docker Compose v2.x
-```
-
-### Step 3 — Clone the repository inside WSL
-
-Always work inside the WSL filesystem (`/home/<user>/`) rather than the Windows filesystem (`/mnt/c/...`). Disk I/O for Docker bind-mounts is much faster.
-
-```bash
-# Inside the Ubuntu WSL terminal
-cd ~
 git clone https://github.com/cityuseattle/CityU-Research-Tracker.git
 cd CityU-Research-Tracker
-```
-
-### Step 4 — Run the quick-start script
-
-```bash
-# Local dev on http://localhost:8080
 bash deploy/quick-start-docker.sh --port 8080
 ```
 
-Open your **Windows browser** and go to `http://localhost:8080/` — Docker Desktop bridges the WSL 2 network to Windows automatically.
+Open `http://localhost:8080` in Windows browser.
 
-For a custom domain with SSL (production-like setup on Windows is uncommon, but possible with a hosts-file entry):
+---
+
+### Path B — Windows PowerShell + Azure Linux VM (no local WSL)
+
+This is the validated production workflow used in this project.
+
+#### What this path means
+
+- You run **PowerShell** on Windows as a remote client.
+- The application runs on a **Linux VM** (Docker or direct host install).
+- You use `ssh` and `scp` from Windows to manage and deploy.
+- You do **not** need local WSL to operate production deployments.
+
+#### Prerequisites on Windows client
+
+| Requirement | Notes |
+|---|---|
+| PowerShell 5.1+ or PowerShell 7+ | Default on modern Windows |
+| OpenSSH client (`ssh`, `scp`) | Built into modern Windows |
+| Network access to VM SSH port | Example used in this project: `-p 2222` |
+
+#### Example remote operations from Windows PowerShell
+
+```powershell
+# SSH into VM
+ssh -p 2222 azureadmin@YOUR_VM_HOST
+
+# Copy a file to VM
+scp -P 2222 .\frontend\src\pages\UsersPage.tsx azureadmin@YOUR_VM_HOST:/opt/rrp-v2/frontend/src/pages/UsersPage.tsx
+```
+
+#### Docker-based deployment on VM
+
+Run on the VM:
 
 ```bash
-bash deploy/quick-start-docker.sh --domain myportal.local --port 8080
+cd /opt/rrp-v2
+bash deploy/quick-start-docker.sh --domain portal.myorg.com --https --no-seed
 ```
 
-Add `127.0.0.1 myportal.local` to `C:\Windows\System32\drivers\etc\hosts` on the Windows side.
+#### Direct host-level deployment on VM
 
-### Step 5 — Manage the stack
-
-All `docker` and `docker compose` commands run from the WSL terminal:
+Run on the VM:
 
 ```bash
-# View logs
-docker compose logs -f app
-
-# Open a shell in the app container
-docker exec -it rrp_app bash
-
-# Run Artisan commands
-docker exec rrp_app php artisan migrate:status
-docker exec rrp_app php artisan config:cache
-
-# Stop (data preserved)
-docker compose down
-
-# Stop and wipe all data — DESTRUCTIVE
-docker compose down -v
+cd /opt/rrp-v2
+sudo bash deploy/install.sh --domain portal.myorg.com --email your-email@example.com
 ```
 
-You can also use the **Docker Desktop GUI** on the Windows side to start/stop containers and view logs — it shows all containers running in WSL 2.
+#### Notes for Windows users
 
-### Accessing files from Windows Explorer
+- Scripts in `deploy/*.sh` are Bash scripts. Execute them **on Linux** (VM or WSL/Git Bash), not directly in native PowerShell.
+- Native PowerShell is fully suitable for remote deployment management via `ssh` and `scp`.
 
-Your WSL filesystem is accessible in Windows Explorer at:
+---
 
-```
-\\wsl$\Ubuntu-24.04\home\<your-username>\CityU-Research-Tracker
-```
-
-Or pin it to Quick Access by typing that path in the Explorer address bar.
-
-### Troubleshooting
+### Troubleshooting (Windows client + VM)
 
 | Symptom | Fix |
 |---|---|
-| `docker: command not found` inside WSL | Open Docker Desktop → Settings → Resources → WSL Integration → enable your distro → Apply & Restart |
-| Port 80 already in use | Use `--port 8080` (or any free port) |
-| Slow file I/O | Clone the repo inside WSL (`~/`) not on the Windows drive (`/mnt/c/`) |
-| `docker compose` not found | Upgrade to Docker Desktop 4.x+ which bundles Compose v2 as a plugin |
-| Container healthy but browser shows nothing | Check Windows Defender Firewall is not blocking port 8080; try disabling temporarily |
-| `permission denied` on shell scripts | Run `chmod +x deploy/*.sh` once inside WSL |
-
-### Updating WSL kernel (if required)
-
-```powershell
-# In PowerShell (Windows side)
-wsl --update
-wsl --shutdown   # then re-open Ubuntu
-```
+| `Windows Subsystem for Linux has no installed distributions` | Not required for VM workflow; use PowerShell + `ssh`/`scp` and run Bash scripts on VM |
+| `Permission denied` on SSH | Verify SSH username/key/password and NSG/firewall rules for SSH port |
+| `Connection closed by <ip> port 22/2222` | VM SSH service or network security rule issue; verify inbound rule and sshd status |
+| `sudo: a terminal is required` in automation | Use `echo 'PASSWORD' \| sudo -S <command>` or SSH interactively |
 
 ---
 
