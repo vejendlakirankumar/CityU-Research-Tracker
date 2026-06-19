@@ -25,6 +25,12 @@ mkdir -p /var/www/html/bootstrap/cache
 chown -R www-data:www-data /var/www/html/storage /var/www/html/bootstrap/cache
 chmod -R 755 /var/www/html/storage /var/www/html/bootstrap/cache
 
+# Clear persisted cache artifacts first so bootstrapping never uses stale env-derived config.
+rm -f /var/www/html/bootstrap/cache/config.php \
+    /var/www/html/bootstrap/cache/routes-*.php \
+    /var/www/html/bootstrap/cache/packages.php \
+    /var/www/html/bootstrap/cache/services.php
+
 # Write .env from environment variables (Laravel needs this file or the env vars exposed)
 # In production, env vars are set directly; .env is only written in container context
 if [ ! -f /var/www/html/.env ]; then

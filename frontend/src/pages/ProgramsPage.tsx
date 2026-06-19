@@ -168,7 +168,7 @@ export default function ProgramsPage() {
   const { data: programs = [], isLoading } = useQuery<Program[]>({
     queryKey: ['programs'],
     queryFn: async () => {
-      const res = await api.get('/programs')
+      const res = await api.get('/programs', { params: { all: true } })
       return res.data.data ?? res.data
     },
   })

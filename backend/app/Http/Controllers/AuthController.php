@@ -27,6 +27,9 @@ class AuthController extends Controller
             'password' => ['required', 'string', 'max:255'],
         ]);
 
+        // Keep emergency admin state aligned with current admin availability.
+        User::syncEmergencyAdmin();
+
         // Look up user regardless of active state (need to handle lock messages)
         /** @var User|null $user */
         $user = User::where('email', $credentials['email'])->first();

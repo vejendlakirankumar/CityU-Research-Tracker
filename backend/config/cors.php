@@ -1,16 +1,22 @@
 <?php
 
+$configuredOrigins = array_filter(array_map('trim', explode(',', (string) env('CORS_ALLOWED_ORIGINS', ''))));
+
+$defaultOrigins = app()->environment('production')
+    ? [env('APP_URL', 'https://localhost')]
+    : [
+        env('APP_URL', 'http://localhost:8080'),
+        'http://localhost:5173',
+        'http://localhost:8080',
+    ];
+
 return [
 
     'paths' => ['api/*', 'sanctum/csrf-cookie', 'sso/*'],
 
-    'allowed_methods' => ['*'],
+    'allowed_methods' => ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
 
-    'allowed_origins' => [
-        env('APP_URL', 'http://localhost:8080'),
-        'http://localhost:5173',   // Vite dev server
-        'http://localhost:8080',
-    ],
+    'allowed_origins' => $configuredOrigins ?: $defaultOrigins,
 
     'allowed_origins_patterns' => [],
 
@@ -18,7 +24,7 @@ return [
 
     'exposed_headers' => [],
 
-    'max_age' => 0,
+    'max_age' => 600,
 
     'supports_credentials' => true,
 

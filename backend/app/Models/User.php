@@ -109,6 +109,15 @@ class User extends Model implements AuthenticatableContract
         $emergency = static::where('is_emergency_admin', true)->first();
         if (!$emergency) return;
 
+        // Optional break-glass override for operational recovery scenarios.
+        $forceEnable = filter_var((string) env('ENABLE_EMERGENCY_ADMIN', false), FILTER_VALIDATE_BOOLEAN);
+        if ($forceEnable) {
+            if (!$emergency->is_active) {
+                $emergency->update(['is_active' => true]);
+            }
+            return;
+        }
+
         $otherActiveAdmins = static::where('is_emergency_admin', false)
             ->whereRaw("roles @> ?", [json_encode(['admin'])])
             ->where('is_active', true)

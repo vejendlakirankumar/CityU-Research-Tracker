@@ -43,7 +43,7 @@ Route::prefix('auth')->group(function () {
 });
 
 // Public system info (org name/logo for login screen)
-Route::get('system/public', [SystemController::class, 'publicInfo']);
+Route::get('system/public', [SystemController::class, 'publicInfo'])->middleware('throttle:60,1');
 
 // Turnitin webhook (signed with webhook_secret — no auth required)
 Route::post('system/turnitin/webhook', [SimilarityController::class, 'webhook'])->middleware('throttle:60,1');
@@ -53,8 +53,8 @@ Route::post('auth/sso-exchange', [AuthController::class, 'ssoExchange'])->middle
 
 // ── SSO login flow (public — browser redirect) ────────────────────────────────
 Route::prefix('sso/{provider}')->group(function () {
-    Route::get('redirect', [SsoAuthController::class, 'redirect']);
-    Route::get('callback', [SsoAuthController::class, 'callback']);
+    Route::get('redirect', [SsoAuthController::class, 'redirect'])->middleware('throttle:30,1');
+    Route::get('callback', [SsoAuthController::class, 'callback'])->middleware('throttle:30,1');
 });
 
 // ── Authenticated routes ──────────────────────────────────────────────────────
@@ -79,7 +79,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('dashboard/stats', [DashboardController::class, 'stats']);
 
     // ── User management ───────────────────────────────────────────────────────
-    Route::prefix('users')->group(function () {
+    Route::middleware('role:admin,coordinator')->prefix('users')->group(function () {
         Route::get('/',                          [UserController::class, 'index']);
         Route::post('/',                         [UserController::class, 'store']);
         Route::get('/{user}',                    [UserController::class, 'show']);

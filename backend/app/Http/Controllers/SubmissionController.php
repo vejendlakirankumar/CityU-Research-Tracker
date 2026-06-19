@@ -981,7 +981,11 @@ class SubmissionController extends Controller
             Submission::STATUS_REJECTED,
         ]);
 
-        $stageData = $stages->map(function ($stage) use ($reviewers, $isActive, $isComplete, $showReviewers, $submission) {
+        $orderedStages = $stages->sortBy('order')->values();
+        $stageData = collect();
+        $previousStageDueAt = null;
+
+        foreach ($orderedStages as $stage) {
             $stageReviewers = $reviewers->where('stage_id', $stage->id);
             $total     = $stageReviewers->count();
             $completed = $stageReviewers->filter(fn($r) => $r->decision !== null)->count();
@@ -1011,18 +1015,25 @@ class SubmissionController extends Controller
             }
 
             // Compute effective stage due date:
-            // 1) Use the earliest explicit reviewer due_at if any are set
-            // 2) Fallback: use earliest assigned_at + stage.due_days
+            // 1) Use the earliest explicit reviewer due_at if any are set.
+            // 2) For sequential workflows, compute cumulatively from the prior stage due date.
+            // 3) Fallback for active/legacy records.
             $stageDueAt = $stageReviewers
                 ->filter(fn($r) => $r->due_at !== null)
                 ->min(fn($r) => $r->due_at)
                 ?->toDateString();
 
             if ($stageDueAt === null && $stage->due_days) {
+                if ($previousStageDueAt !== null) {
+                    $stageDueAt = \Carbon\Carbon::parse($previousStageDueAt)
+                        ->addDays((int) $stage->due_days)
+                        ->toDateString();
+                }
+
                 // Prefer the recorded stage-entry timestamp for accuracy.
-                if ($stage->id === $submission->current_stage_id && $submission->current_stage_entered_at) {
+                if ($stageDueAt === null && $stage->id === $submission->current_stage_id && $submission->current_stage_entered_at) {
                     $stageDueAt = $submission->current_stage_entered_at->copy()->addDays($stage->due_days)->toDateString();
-                } elseif ($stageReviewers->isNotEmpty()) {
+                } elseif ($stageDueAt === null && $stageReviewers->isNotEmpty()) {
                     // Legacy fallback for records predating this fix: use earliest assigned_at.
                     $earliest = $stageReviewers->min(fn($r) => $r->assigned_at);
                     if ($earliest) {
@@ -1031,10 +1042,15 @@ class SubmissionController extends Controller
                 }
             }
 
+            if ($stageDueAt !== null) {
+                $previousStageDueAt = $stageDueAt;
+            }
+
             // Per-reviewer effective due date (for display in panel)
             $reviewerList = $showReviewers
-                ? $stageReviewers->map(function ($r) use ($stage) {
+                ? $stageReviewers->map(function ($r) use ($stage, $stageDueAt) {
                     $effectiveDue = $r->due_at?->toDateString()
+                        ?? $stageDueAt
                         ?? ($stage->due_days
                             ? $r->assigned_at->copy()->addDays($stage->due_days)->toDateString()
                             : null);
@@ -1047,7 +1063,7 @@ class SubmissionController extends Controller
                 })->values()
                 : null;
 
-            return [
+            $stageData->push([
                 'id'              => $stage->id,
                 'name'            => $stage->name,
                 'order'           => $stage->order,
@@ -1061,8 +1077,8 @@ class SubmissionController extends Controller
                 'due_days'        => $stage->due_days ?: null,
                 'stage_due_at'    => $stageDueAt,
                 'reviewers'       => $reviewerList,
-            ];
-        });
+            ]);
+        }
 
         // Compute per-user meeting context
         $isSubmitter      = $submission->submitter_id === $requestingUser->id;

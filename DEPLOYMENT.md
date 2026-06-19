@@ -1,7 +1,7 @@
 ﻿# CityU Research Review Portal — Deployment Guide
 
 > **Audience:** Anyone deploying the portal — from a local developer to a cloud sysadmin.  
-> **Last updated:** April 2026
+> **Last updated:** June 2026
 
 ---
 
@@ -11,25 +11,32 @@ Pick the line that matches your target and run it. Details follow below.
 
 ```bash
 # Docker on any Linux / macOS / WSL machine (http://localhost)
+# Creates seed accounts: admin@cityu.edu, coordinator@cityu.edu, etc.
 bash deploy/quick-start-docker.sh
 
 # Docker on a custom port (http://localhost:8080)
 bash deploy/quick-start-docker.sh --port 8080
 
 # Docker with a real domain + automatic SSL (production server, run as root)
-export ADMIN_EMAIL=admin@myorg.com
+# ⚠️  Use --no-seed for production (manually create first admin account instead)
+export ADMIN_EMAIL=your-email@example.com
 sudo bash deploy/quick-start-docker.sh --domain portal.myorg.com --https --no-seed
 
-# Bare-metal Ubuntu 22/24 (no Docker)
-sudo bash deploy/install.sh --domain portal.myorg.com --email admin@myorg.com
+# Bare-metal Ubuntu 22/24/26 (no Docker)
+# ⚠️  Always creates seed accounts (admin@cityu.edu + others)
+sudo bash deploy/install.sh --domain portal.myorg.com --email your-email@example.com
 
 # Remote cloud VM from your local machine (any provider)
+# Creates seed accounts on the remote VM
 export VM_HOST=YOUR_VM_IP  VM_USER=ubuntu  SSH_KEY=~/.ssh/id_rsa
-bash deploy/install-remote.sh --domain portal.myorg.com --email admin@myorg.com
+bash deploy/install-remote.sh --domain portal.myorg.com --email your-email@example.com
 ```
 
-After deployment the portal is available at the URL printed at the end of the script.  
-Default admin login: `admin@cityu.edu` / `admin12345` — **change immediately**.
+After deployment the portal is available at the URL printed at the end of the script.
+
+**First-time login:**
+- **If you did NOT use `--no-seed`:** Default admin login is `admin@cityu.edu` / `admin12345` — change these immediately.
+- **If you used `--no-seed` (recommended for production):** See [Creating the first admin account](#creating-the-first-admin-account-no-seed) below.
 
 ---
 
@@ -50,6 +57,7 @@ Default admin login: `admin@cityu.edu` / `admin12345` — **change immediately**
 13. [Backups](#13-backups)
 14. [Default Seed Accounts](#14-default-seed-accounts)
 15. [Windows — Docker Desktop + WSL 2](#15-windows--docker-desktop--wsl-2)
+16. [Post-Deployment Validation (Docker + Direct)](#16-post-deployment-validation-docker--direct)
 
 ---
 
@@ -66,8 +74,8 @@ Browser (HTTPS :443)
     |                → localhost:80   (HTTP-only mode, no host nginx)
     v
 [Docker: rrp_app]   Ubuntu 24.04 · PHP 8.4-FPM · Nginx (container)
-    |               /*     -> React SPA  (/var/www/frontend/)
-    |               /api/* -> Laravel 10 (PHP-FPM :9000)
+  |               /*     -> React SPA  (/var/www/frontend/)
+  |               /api/* -> Laravel 11 (PHP-FPM :9000)
     |
     +-- [Docker: rrp_worker]   php artisan queue:work
     +-- [Docker: rrp_postgres] PostgreSQL 16  (volume: pgdata)
@@ -103,7 +111,7 @@ Install Docker: https://docs.docker.com/engine/install/
 
 ### Bare-metal deployment (Option B)
 
-- Ubuntu 22.04 LTS or 24.04 LTS (fresh server recommended)
+- Ubuntu 22.04 LTS, 24.04 LTS, or newer Ubuntu releases (e.g., 26.04)
 - Minimum 2 vCPU, 2 GB RAM, 20 GB disk
 - Root / sudo access
 - Ports 80 and 443 open inbound
@@ -139,7 +147,7 @@ bash deploy/quick-start-docker.sh
 **Production server with a custom domain + SSL:**
 
 ```bash
-export ADMIN_EMAIL=admin@myorg.com
+export ADMIN_EMAIL=your-email@example.com
 sudo bash deploy/quick-start-docker.sh \
   --domain portal.myorg.com \
   --https \
@@ -202,11 +210,38 @@ docker compose down
 docker compose down -v
 ```
 
+### Production verification (Docker)
+
+Run these checks after every fresh deployment or update:
+
+```bash
+# 1) Containers and health
+docker compose ps
+
+# 2) API health from inside the host
+# HTTP-only mode:
+curl -fsS http://127.0.0.1:${HOST_PORT:-80}/api/system/public
+# HTTPS mode (when --https is enabled):
+curl -kfsS https://127.0.0.1/api/system/public
+
+# 3) Laravel production environment
+docker exec rrp_app php artisan about --only=environment
+
+# 4) Queue worker running
+docker compose logs --tail=50 worker
+```
+
+Expected result:
+- `rrp_app` status is `healthy`
+- API health endpoint returns JSON
+- `Application Environment` shows `production`
+- No repeating worker crash loop in logs
+
 ---
 
 ## 4. Option B -- Bare-Metal Linux (Ubuntu)
 
-Run the installer directly on the server. No Docker required -- installs PHP 8.4, PostgreSQL 16, Redis, Nginx, Supervisor, and Certbot as native system services.
+Run the installer directly on the server. No Docker required -- installs PHP, PostgreSQL, Redis, Nginx, Supervisor, and Certbot as native system services.
 
 ```bash
 # Clone the repo onto the server
@@ -216,10 +251,10 @@ cd /opt/rrp
 # Run the installer (requires root)
 sudo bash deploy/install.sh \
   --domain portal.myorg.com \
-  --email  admin@myorg.com
+  --email  your-email@example.com
 ```
 
-**Dev mode (no SSL, SQLite):**
+**Dev-like HTTP-only mode (no SSL):**
 
 ```bash
 sudo bash deploy/install.sh --dev
@@ -232,11 +267,11 @@ sudo bash deploy/install.sh --dev
 | `--domain DOMAIN` | Public domain name -- used in APP_URL and Nginx vhost |
 | `--email EMAIL` | Admin email for Let's Encrypt and seed admin account |
 | `--skip-ssl` | Skip TLS certificate provisioning (configure SSL later) |
-| `--dev` | Development mode: no SSL, uses SQLite, binds to localhost only |
+| `--dev` | Convenience HTTP-only install mode (domain can be omitted) |
 
 ### What the installer does
 
-1. Installs PHP 8.4-FPM, Composer, Nginx, PostgreSQL 16, Redis 7, Node 20, Certbot
+1. Installs PHP-FPM, Composer, Nginx, PostgreSQL, Redis, Node 20, Certbot
 2. Creates system user `rrp` and application directory `/var/www/rrp/`
 3. Copies application files; installs Composer and npm dependencies
 4. Creates the PostgreSQL database and user with a random password
@@ -246,13 +281,47 @@ sudo bash deploy/install.sh --dev
 8. Obtains a Let's Encrypt TLS certificate (if `--domain` provided and DNS is live)
 9. Installs a daily cron for `php artisan schedule:run`
 
-After installation the portal is running as a system service and restarts automatically on reboot.
+Compatibility notes:
+- On Ubuntu 22.04/24.04, the script installs PHP 8.4 via `ppa:ondrej/php`.
+- On newer Ubuntu codenames where that PPA (or PGDG/Redis upstream repos) is not published yet, the script automatically falls back to distro packages.
+- If migrating from Docker+SSL on the same host, the installer removes the legacy `rrp-v2` nginx site symlink to avoid `server_name` conflicts on port 80/443.
+- Re-running the installer rotates DB app-user credentials in PostgreSQL and updates `.env` to keep them in sync.
+
+After installation the portal is running as a system service and restarts automatically on reboot. The SPA is served at the site root, not under `/app`.
+
+### Production verification (direct / bare-metal)
+
+```bash
+# 1) Core services
+sudo systemctl status nginx --no-pager
+sudo systemctl status "php$(php -r 'echo PHP_MAJOR_VERSION.".".PHP_MINOR_VERSION;')-fpm" --no-pager
+sudo systemctl status postgresql --no-pager
+sudo systemctl status redis-server --no-pager
+
+# 2) Queue worker
+sudo supervisorctl status
+
+# 3) API health (replace with your real domain)
+# HTTP-only deployments:
+curl -fsS http://portal.myorg.com/api/system/public
+# HTTPS deployments:
+curl -fsS https://portal.myorg.com/api/system/public
+
+# 4) Laravel config
+sudo -u rrp php /var/www/rrp/backend/artisan about --only=environment
+```
+
+Expected result:
+- All services are `active (running)`
+- Supervisor shows worker processes as `RUNNING`
+- API health endpoint returns JSON
+- Laravel environment is `production`
 
 ---
 
 ## 5. Option C -- Remote Cloud VM
 
-Deploy to any cloud provider (Azure, AWS, GCP, DigitalOcean, Hetzner, etc.) from your local machine. The script SSHes into the VM, copies the repo, and runs `deploy/install.sh` remotely.
+Deploy to any cloud provider (Azure, AWS, GCP, DigitalOcean, Hetzner, etc.) from your local machine. The script SSHes into the VM, copies your local repo contents to the VM, and performs a Docker Compose deployment remotely.
 
 ### From your local machine
 
@@ -260,6 +329,9 @@ Deploy to any cloud provider (Azure, AWS, GCP, DigitalOcean, Hetzner, etc.) from
 # Clone the repo locally first
 git clone https://github.com/cityuseattle/CityU-Research-Tracker.git
 cd CityU-Research-Tracker
+
+# IMPORTANT: this script is Bash. On Windows, run it from WSL or Git Bash.
+# (PowerShell without WSL/Git Bash cannot execute deploy/*.sh directly.)
 
 # Set connection details
 export VM_HOST=YOUR_VM_IP        # VM public IP or hostname
@@ -271,7 +343,7 @@ export SSH_KEY=~/.ssh/id_rsa   # Path to your private key
 # Deploy
 bash deploy/install-remote.sh \
   --domain portal.myorg.com \
-  --email  admin@myorg.com
+  --email  your-email@example.com
 ```
 
 ### install-remote.sh options
@@ -289,14 +361,29 @@ bash deploy/install-remote.sh \
 | `VM_HOST` | VM IP address or hostname |
 | `VM_USER` | SSH login username |
 | `SSH_KEY` | Path to SSH private key (recommended) |
-| `VM_PASS` | SSH password (alternative to SSH_KEY; requires `sshpass` installed) |
+| `VM_PASS` | SSH password (alternative to SSH_KEY; if `sshpass` is missing, script falls back to interactive SSH password prompts) |
 
 ### What the script does
 
-1. Verifies SSH connectivity to the VM
+1. Ensures Docker Engine and Docker Compose are installed on the VM
 2. Copies the repository to `/opt/rrp-v2/` on the VM via rsync over SSH
-3. SSHes in and runs `deploy/install.sh --domain ... --email ...`
-4. Reports success and prints the portal URL
+3. Generates `/opt/rrp-v2/.env` (if missing) with fresh secrets and domain settings
+4. Runs `docker compose up -d --build` on the VM and waits for `rrp_app` health
+5. Runs migrations + seed and cache commands inside the app container
+6. Optionally runs `deploy/ssl-setup.sh` on the VM (unless `--skip-ssl`)
+7. Reports success and prints the portal URL and health URL
+
+> **Private repository note:** the tested remote deployment path assumes the VM does not clone the repository from GitHub directly. Instead, `install-remote.sh` copies your already-checked-out local workspace to the VM. This is the correct path for private repositories and avoids requiring GitHub credentials on the server.
+
+### Troubleshooting (Option C)
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `Windows Subsystem for Linux has no installed distributions` when running `bash deploy/install-remote.sh ...` | You are on native PowerShell without WSL/Git Bash | Run from WSL (`wsl -d Ubuntu-24.04`) or install Git Bash and run the script there |
+| `Connection closed by <ip> port 22` | SSH not reachable or password login disabled by VM/NSG/sshd | Verify NSG allows TCP 22, VM is running, and `PasswordAuthentication yes` in `/etc/ssh/sshd_config` (or use SSH key auth) |
+| `permission denied while trying to connect to the Docker daemon socket` during remote deploy | Current SSH session does not yet have updated `docker` group membership | Re-login to VM, or use `sudo docker ...` for the current session |
+| `set: pipefail` or `$'pipefail\r'` on Linux | Shell scripts were copied with Windows CRLF line endings | Keep the repository `.gitattributes` file intact so `*.sh`, `Dockerfile`, `docker-compose.yml`, and `*.conf` stay LF on checkout/copy |
+| Certbot/SSL fails | DNS/ports not ready | Confirm A-record points to VM and inbound ports 80 and 443 are open, then rerun `sudo bash deploy/ssl-setup.sh <domain> <email> 8080` |
 
 ### Provider-specific examples
 
@@ -305,7 +392,7 @@ bash deploy/install-remote.sh \
 export VM_HOST=YOUR_VM_IP          # e.g. the Public IP from the Azure portal
 export VM_USER=azureadmin          # default Azure VM username
 export SSH_KEY=~/.ssh/azure_rsa
-bash deploy/install-remote.sh --domain portal.myorg.com --email admin@myorg.com
+bash deploy/install-remote.sh --domain portal.myorg.com --email your-email@example.com
 ```
 
 **AWS EC2:**
@@ -313,7 +400,7 @@ bash deploy/install-remote.sh --domain portal.myorg.com --email admin@myorg.com
 export VM_HOST=YOUR_EC2_PUBLIC_DNS  # e.g. ec2-xx-xx-xx-xx.compute-1.amazonaws.com
 export VM_USER=ec2-user
 export SSH_KEY=~/.ssh/my-ec2-key.pem
-bash deploy/install-remote.sh --domain portal.myorg.com --email admin@myorg.com
+bash deploy/install-remote.sh --domain portal.myorg.com --email your-email@example.com
 ```
 
 **DigitalOcean / Hetzner / any Ubuntu VPS:**
@@ -321,7 +408,7 @@ bash deploy/install-remote.sh --domain portal.myorg.com --email admin@myorg.com
 export VM_HOST=YOUR_VM_IP
 export VM_USER=root
 export SSH_KEY=~/.ssh/id_rsa
-bash deploy/install-remote.sh --domain portal.myorg.com --email admin@myorg.com
+bash deploy/install-remote.sh --domain portal.myorg.com --email your-email@example.com
 ```
 
 > **DNS first:** Point your domain A record to the VM public IP *before* running the script. Let's Encrypt will fail if DNS is not resolving.
@@ -367,6 +454,26 @@ bash deploy/quick-start-docker.sh --port 8080
 
 The portal will be accessible at `http://localhost:8080` from your Windows browser.
 
+### Windows without WSL (remote VM deployment only)
+
+If you only need to deploy to a remote Linux VM (and not run containers locally on Windows), you can use native PowerShell SSH instead of local Bash scripts:
+
+```powershell
+# PowerShell (Windows)
+ssh azureadmin@your-vm-hostname
+
+# On the VM shell
+git clone https://github.com/cityuseattle/CityU-Research-Tracker.git /opt/rrp-v2
+cd /opt/rrp-v2
+sudo bash deploy/quick-start-docker.sh --domain portal.myorg.com --no-seed
+
+# Optional HTTPS
+export ADMIN_EMAIL=admin@myorg.com
+sudo bash deploy/quick-start-docker.sh --domain portal.myorg.com --https --no-seed
+```
+
+This path avoids the local Bash dependency entirely.
+
 ---
 
 ## 7. Environment Variables
@@ -411,6 +518,7 @@ docker exec rrp_app php artisan config:cache
 |---|---|---|
 | `SANCTUM_STATEFUL_DOMAINS` | Yes | Frontend domain(s) -- must match the browser URL bar exactly |
 | `SESSION_DOMAIN` | Yes | Cookie domain |
+| `ENABLE_EMERGENCY_ADMIN` | No | Break-glass override. Set to `true` to force `emergency.admin@system.local` active even when other admins exist. Default is `false`/unset. |
 
 ### Email
 
@@ -452,7 +560,7 @@ There are two paths depending on whether this is a fresh install or an existing 
 One command does everything — generates `.env`, builds containers, runs migrations, installs host nginx, obtains certificate:
 
 ```bash
-export ADMIN_EMAIL=admin@myorg.com
+export ADMIN_EMAIL=your-email@example.com
 sudo bash deploy/quick-start-docker.sh --domain portal.myorg.com --https --no-seed
 ```
 
@@ -494,7 +602,7 @@ docker compose up -d
 **Step 2 — Install host nginx, obtain certificate, configure SSL**
 
 ```bash
-sudo bash deploy/ssl-setup.sh portal.myorg.com admin@myorg.com 8080
+sudo bash deploy/ssl-setup.sh portal.myorg.com your-email@example.com 8080
 ```
 
 This installs nginx on the host OS, obtains a Let's Encrypt certificate, and configures host nginx to terminate SSL and proxy to the Docker container on port 8080.
@@ -503,6 +611,18 @@ This installs nginx on the host OS, obtains a Let's Encrypt certificate, and con
 If certbot reports `Timeout during connect (likely firewall problem)` it means either:
 1. Docker is still on port 80 — complete Step 1 first
 2. Port 80 is blocked in the cloud firewall/NSG — open it for inbound traffic
+
+If certbot reports `Connection reset by peer` during challenge:
+1. The reset is usually upstream of the VM (cloud edge, LB, WAF, NVA, or firewall path), not in the application container.
+2. Validate external reachability with `letsdebug.net` for your domain.
+3. Retry with standalone mode to isolate host nginx from the challenge path:
+
+```bash
+sudo systemctl stop nginx
+sudo certbot certonly --standalone --preferred-challenges http \
+  -d portal.myorg.com -m your-email@example.com --agree-tos --no-eff-email --non-interactive
+sudo systemctl start nginx
+```
 
 ### Manual renewal
 
@@ -543,25 +663,119 @@ Then: `sudo systemctl reload nginx`
 
 ## 9. First-Time Configuration
 
-Log in as `admin@cityu.edu` and complete these steps before opening the portal to users.
+### Creating the first admin account (--no-seed)
+
+If you deployed with `--no-seed` flag (recommended for production), no default accounts exist. Create the first admin account via SSH:
+
+```bash
+# SSH into the deployment machine
+ssh -p 2222 YOUR_VM_IP
+
+# Create admin user (replace email and password as needed)
+cd /opt/rrp-v2
+echo 'YOUR_SUDO_PASSWORD' | sudo -S docker exec rrp_app php -r '
+require "vendor/autoload.php";
+$app = require_once "bootstrap/app.php";
+$app->make("Illuminate\Contracts\Console\Kernel")->bootstrap();
+\App\Models\User::create([
+    "email" => "your-admin@example.com",
+    "name" => "Admin User",
+    "password_hash" => bcrypt("your-secure-password-here"),
+    "is_active" => 1,
+    "email_verified_at" => now(),
+    "roles" => ["admin"]
+]);
+echo "Admin created successfully\n";
+'
+```
+
+Then open the portal in your browser and log in with the email and password you specified above.
+
+### Manually seeding data after a --no-seed deployment
+
+If you intentionally deployed with `--no-seed` and later want baseline data (users, programs, workflows, submission categories), run:
+
+```bash
+cd /opt/rrp-v2
+echo 'YOUR_SUDO_PASSWORD' | sudo -S docker exec rrp_app php artisan db:seed --force
+```
+
+Seed only one dataset (examples):
+
+```bash
+# Users only
+echo 'YOUR_SUDO_PASSWORD' | sudo -S docker exec rrp_app php artisan db:seed --class=UsersSeeder --force
+
+# Programs only
+echo 'YOUR_SUDO_PASSWORD' | sudo -S docker exec rrp_app php artisan db:seed --class=ProgramsSeeder --force
+
+# Submission categories + workflows
+echo 'YOUR_SUDO_PASSWORD' | sudo -S docker exec rrp_app php artisan db:seed --class=SubmissionTypeSeeder --force
+```
+
+Verify seeded row counts:
+
+```bash
+echo 'YOUR_SUDO_PASSWORD' | sudo -S docker exec rrp_app php artisan db:show --counts
+```
+
+Look for non-zero rows in at least these tables:
+- `users`
+- `programs`
+- `submission_types`
+- `workflow_definitions`
+- `stage_templates`
+
+### Emergency admin break-glass mode
+
+By default, `emergency.admin@system.local` is only active when there are no other active admin users.
+
+If you need temporary emergency access during an outage, you can force-enable it:
+
+```bash
+cd /opt/rrp-v2
+grep -q '^ENABLE_EMERGENCY_ADMIN=' .env \
+  && sed -i 's/^ENABLE_EMERGENCY_ADMIN=.*/ENABLE_EMERGENCY_ADMIN=true/' .env \
+  || echo 'ENABLE_EMERGENCY_ADMIN=true' >> .env
+
+echo 'YOUR_SUDO_PASSWORD' | sudo -S docker exec rrp_app php artisan config:clear
+```
+
+After recovery, disable it again:
+
+```bash
+cd /opt/rrp-v2
+grep -q '^ENABLE_EMERGENCY_ADMIN=' .env \
+  && sed -i 's/^ENABLE_EMERGENCY_ADMIN=.*/ENABLE_EMERGENCY_ADMIN=false/' .env \
+  || echo 'ENABLE_EMERGENCY_ADMIN=false' >> .env
+
+echo 'YOUR_SUDO_PASSWORD' | sudo -S docker exec rrp_app php artisan config:clear
+```
+
+For normal operations, keep `ENABLE_EMERGENCY_ADMIN=false` (or unset).
+
+### Post-login configuration
+
+Once logged in as an admin, complete these required steps before opening the portal to users:
 
 ### Required
 
-1. **Change all default passwords** -- Admin > User Management > edit each seed account
-2. **Set your organisation name** -- Admin > Settings > Organisation > Portal Name
-3. **Configure email** -- Admin > Settings > Email > enter SMTP details > Send Test Email
-4. **Set the correct timezone** -- Admin > Settings > Organisation > Timezone
+1. **Change the admin password** -- Admin > User Management > edit your account
+2. **Create other user accounts as needed** -- Admin > User Management > + New User (if not using seed accounts)
+3. **Set your organisation name** -- Admin > Settings > Organisation > Portal Name
+4. **Configure email** -- Admin > Settings > Email > enter SMTP details > Send Test Email
+5. **Set the correct timezone** -- Admin > Settings > Organisation > Timezone
 
 ### Recommended
 
-5. **Configure password policy** -- Admin > Settings > Password and Security
-6. **Add a Submission Category** -- Admin > Submission Categories > + New Category
-7. **Set up SSO** (if using Azure AD / OIDC) -- Admin > Settings > SSO Providers > + Add Provider
-8. **Enable daily backups** -- add to `/etc/crontab`:
+6. **Configure password policy** -- Admin > Settings > Password and Security
+7. **Add a Submission Category** -- Admin > Submission Categories > + New Category
+8. **Set up SSO** (if using Azure AD / OIDC) -- Admin > Settings > SSO Providers > + Add Provider
+9. **Enable daily backups** -- add to `/etc/crontab`:
    ```
    0 2 * * * root bash /opt/rrp-v2/deploy/backup.sh --keep-days 14 >> /var/log/rrp-backup.log 2>&1
    ```
-9. **Run the smoke test checklist** -- see `deploy/smoke-test-checklist.md`
+10. **Run the smoke test checklist** -- see `deploy/smoke-test-checklist.md`
 
 ---
 
@@ -596,7 +810,7 @@ VM_HOST=YOUR_VM_IP VM_USER=ubuntu SSH_KEY=~/.ssh/id_rsa \
 
 ## 11. Updating the Application
 
-Use `deploy/update.sh` to push code changes without rebuilding the entire image.
+Use `deploy/update.sh` to push code changes and rebuild the remote Docker stack in a consistent, supported way.
 
 ```bash
 # Standard update (backend + frontend + migrations)
@@ -608,19 +822,20 @@ VM_HOST=YOUR_VM_IP VM_USER=ubuntu bash deploy/update.sh --backend-only
 # Frontend only (no migrations)
 VM_HOST=YOUR_VM_IP VM_USER=ubuntu bash deploy/update.sh --frontend-only
 
-# Zero-downtime blue-green swap
-VM_HOST=YOUR_VM_IP VM_USER=ubuntu bash deploy/update.sh --zero-downtime
 ```
 
 ### What the update does
 
-1. Rsyncs changed PHP files to the VM (skips `vendor/`, `.env`, `storage/`)
-2. Runs `composer install --no-dev` inside the container
-3. Builds the React SPA (`npm run build`) and copies it into the container
-4. Runs `php artisan migrate --force`
-5. Clears and rebuilds config, route, and view caches
-6. Issues `php artisan queue:restart` for a graceful worker restart
-7. Reloads Nginx
+1. Rsyncs the repository contents needed for the selected update scope to the VM
+2. Runs `docker compose up -d --build` on the VM
+3. Waits for `rrp_app` health to return `healthy`
+4. Runs `php artisan migrate --force` unless `--no-migrate` or `--frontend-only` is used
+5. Rebuilds config and route caches and restarts the queue worker
+6. Validates and reloads Nginx inside the app container
+
+### Unsupported in the current script
+
+- `--zero-downtime` is reserved for future use and currently returns an error instead of attempting a blue-green swap.
 
 ### Manual cache clear
 
@@ -688,7 +903,9 @@ AZURE_STORAGE_ACCOUNT=myaccount AZURE_STORAGE_KEY=mykey \
 
 ## 14. Default Seed Accounts
 
-Created when `db:seed` runs (automatic unless `--no-seed` is passed to `quick-start-docker.sh`).
+> **Only created if you do NOT pass the `--no-seed` flag to `quick-start-docker.sh`.** Seed accounts are disabled by default for production deployments.
+
+If seed accounts are created, they are:
 
 | Role | Email | Password |
 |---|---|---|
@@ -696,8 +913,23 @@ Created when `db:seed` runs (automatic unless `--no-seed` is passed to `quick-st
 | Coordinator | `coordinator@cityu.edu` | `admin12345` |
 | Reviewer | `reviewer@cityu.edu` | `admin12345` |
 | Student | `student@cityu.edu` | `admin12345` |
+| Committee Reviewer | `committee1@cityu.edu` | `admin12345` |
+| Committee Reviewer | `committee2@cityu.edu` | `admin12345` |
+| Committee Reviewer | `committee3@cityu.edu` | `admin12345` |
+| Reviewer | `reviewer1@cityu.edu` | `admin12345` |
+| Reviewer | `reviewer2@cityu.edu` | `admin12345` |
+| Reviewer | `reviewer3@cityu.edu` | `admin12345` |
+| Director (Reviewer role) | `director1@cityu.edu` | `admin12345` |
+| Director (Reviewer role) | `director2@cityu.edu` | `admin12345` |
+| Director (Reviewer role) | `director3@cityu.edu` | `admin12345` |
+| Coordinator | `coordinator1@cityu.edu` | `admin12345` |
+| Coordinator | `coordinator2@cityu.edu` | `admin12345` |
+| Coordinator | `coordinator3@cityu.edu` | `admin12345` |
+| Student | `student1@cityu.edu` | `admin12345` |
+| Student | `student2@cityu.edu` | `admin12345` |
+| Student | `student3@cityu.edu` | `admin12345` |
 
-> **Change all default passwords immediately after first login in production.**
+> **⚠️ For Production:** Use `--no-seed` flag and manually create your first admin account (see [Creating the first admin account](#creating-the-first-admin-account-no-seed)). This ensures you control all initial credentials and have a clean audit trail.
 
 ---
 
@@ -828,3 +1060,41 @@ Or pin it to Quick Access by typing that path in the Explorer address bar.
 wsl --update
 wsl --shutdown   # then re-open Ubuntu
 ```
+
+---
+
+## 16. Post-Deployment Validation (Docker + Direct)
+
+Use this section as a final go-live checklist regardless of deployment mode.
+
+### A. Required checks
+
+1. Login works from the browser using an admin account.
+2. `GET /api/system/public` returns HTTP 200 and valid JSON.
+3. File upload succeeds for a small test file.
+4. Queue processing works (trigger any queued notification and confirm it is processed).
+5. No repeating errors in app logs for 5 to 10 minutes after first login.
+
+### B. HTTPS checks (when enabled)
+
+```bash
+# Certificate files exist (replace portal.myorg.com with your actual domain)
+sudo ls -la /etc/letsencrypt/live/portal.myorg.com
+
+# Nginx config is valid
+sudo nginx -t
+
+# Public HTTPS response (replace portal.myorg.com with your actual domain)
+curl -I https://portal.myorg.com/
+
+# Renewal dry-run
+sudo certbot renew --dry-run
+```
+
+### C. Security cleanup before go-live
+
+1. Change all default seeded passwords.
+2. Set real SMTP credentials and send a test email.
+3. Confirm `APP_DEBUG=false`.
+4. Restrict SSH and database exposure by IP/network policy.
+5. Ensure backups are scheduled and tested once.

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Plus, Search, Edit2, Trash2, UserCheck, UserX, Key, Users, FolderOpen, X, Check, Lock, Unlock, RefreshCw, Eye, EyeOff, Copy, CheckCheck, Layers, ShieldAlert } from 'lucide-react'
 import { clsx } from 'clsx'
@@ -133,18 +133,124 @@ function UserFormModal({
     is_active:             initial?.is_active ?? true,
   })
   const [errors, setErrors] = useState<Record<string, string>>({})
+  const [programQuery, setProgramQuery] = useState(initial?.program?.name ?? '')
+  const [programMenuOpen, setProgramMenuOpen] = useState(false)
+  const [highlightedProgramIndex, setHighlightedProgramIndex] = useState(0)
+  const programMenuRef = useRef<HTMLDivElement | null>(null)
   const [saving, setSaving] = useState(false)
   const [showPwd, setShowPwd] = useState(false)
   const [copied, setCopied] = useState(false)
 
   // Programs list (for dropdown)
-  const { data: programsData } = useQuery<{ data?: Array<{ id: string; name: string }> } | Array<{ id: string; name: string }>>({
+  const { data: programsData } = useQuery<{ data?: Array<{ id: string; name: string; school: string | null }> } | Array<{ id: string; name: string; school: string | null }>>({
     queryKey: ['programs-picker'],
-    queryFn: () => api.get('/programs').then(r => r.data),
+    queryFn: () => api.get('/programs', { params: { all: true, active_only: false } }).then(r => r.data),
   })
-  const programs: Array<{ id: string; name: string }> = Array.isArray(programsData)
+  const programs: Array<{ id: string; name: string; school: string | null }> = Array.isArray(programsData)
     ? programsData
     : (programsData?.data ?? [])
+
+  const programLabel = (p: { id: string; name: string; school: string | null }) =>
+    p.school ? `${p.school} - ${p.name}` : p.name
+
+  const filteredPrograms = useMemo(() => {
+    const term = programQuery.trim().toLowerCase()
+    const sorted = [...programs].sort((a, b) => {
+      const schoolA = a.school ?? ''
+      const schoolB = b.school ?? ''
+      const schoolCmp = schoolA.localeCompare(schoolB)
+      return schoolCmp !== 0 ? schoolCmp : a.name.localeCompare(b.name)
+    })
+
+    if (!term) return sorted
+
+    return sorted.filter(p =>
+      p.name.toLowerCase().includes(term) ||
+      (p.school ?? '').toLowerCase().includes(term),
+    )
+  }, [programQuery, programs])
+
+  useEffect(() => {
+    setHighlightedProgramIndex(0)
+  }, [programQuery])
+
+  useEffect(() => {
+    const onClickOutside = (event: MouseEvent) => {
+      if (!programMenuRef.current?.contains(event.target as Node)) {
+        setProgramMenuOpen(false)
+      }
+    }
+
+    document.addEventListener('mousedown', onClickOutside)
+    return () => document.removeEventListener('mousedown', onClickOutside)
+  }, [])
+
+  const renderHighlighted = (text: string, term: string) => {
+    const q = term.trim()
+    if (!q) return text
+
+    const lowerText = text.toLowerCase()
+    const lowerTerm = q.toLowerCase()
+    const idx = lowerText.indexOf(lowerTerm)
+
+    if (idx < 0) return text
+
+    const before = text.slice(0, idx)
+    const match = text.slice(idx, idx + q.length)
+    const after = text.slice(idx + q.length)
+
+    return (
+      <>
+        {before}
+        <mark className="bg-yellow-100 rounded px-0.5">{match}</mark>
+        {after}
+      </>
+    )
+  }
+
+  const selectProgram = (p: { id: string; name: string; school: string | null }) => {
+    setForm(f => ({ ...f, program_id: p.id }))
+    setProgramQuery(programLabel(p))
+    setProgramMenuOpen(false)
+  }
+
+  const clearProgram = () => {
+    setForm(f => ({ ...f, program_id: '' }))
+    setProgramQuery('')
+    setProgramMenuOpen(false)
+  }
+
+  const handleProgramKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (!programMenuOpen && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+      setProgramMenuOpen(true)
+      return
+    }
+
+    if (!filteredPrograms.length) return
+
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      setHighlightedProgramIndex(i => (i + 1) % filteredPrograms.length)
+      return
+    }
+
+    if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      setHighlightedProgramIndex(i => (i - 1 + filteredPrograms.length) % filteredPrograms.length)
+      return
+    }
+
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      const choice = filteredPrograms[highlightedProgramIndex]
+      if (choice) selectProgram(choice)
+      return
+    }
+
+    if (e.key === 'Escape') {
+      setProgramMenuOpen(false)
+    }
+  }
 
   // Coordinator group scope state (admin only, edit only)
   const isCoordinator = form.roles.includes('coordinator')
@@ -299,16 +405,62 @@ function UserFormModal({
 
         {/* Program */}
         <FormField label="Program" error={errors.program_id}>
-          <select
-            className={inputCls}
-            value={form.program_id}
-            onChange={e => setForm(f => ({ ...f, program_id: e.target.value }))}
-          >
-            <option value="">— No program —</option>
-            {programs.map(p => (
-              <option key={p.id} value={p.id}>{p.name}</option>
-            ))}
-          </select>
+          <div className="relative" ref={programMenuRef}>
+            <div className="flex gap-2">
+              <input
+                className={inputCls + ' flex-1'}
+                placeholder="Search by school or program name..."
+                value={programQuery}
+                onFocus={() => setProgramMenuOpen(true)}
+                onChange={e => {
+                  setProgramQuery(e.target.value)
+                  setProgramMenuOpen(true)
+                }}
+                onKeyDown={handleProgramKeyDown}
+              />
+              <button
+                type="button"
+                onClick={clearProgram}
+                className={btnSecondary}
+              >
+                Clear
+              </button>
+            </div>
+
+            {programMenuOpen && (
+              <div className="absolute z-20 mt-1 w-full rounded-lg border border-gray-200 bg-white shadow-lg max-h-64 overflow-auto">
+                <button
+                  type="button"
+                  onClick={clearProgram}
+                  className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50 border-b border-gray-100"
+                >
+                  — No program —
+                </button>
+
+                {filteredPrograms.length === 0 ? (
+                  <div className="px-3 py-2 text-sm text-gray-500">No programs found.</div>
+                ) : (
+                  filteredPrograms.map((p, idx) => (
+                    <button
+                      key={p.id}
+                      type="button"
+                      onClick={() => selectProgram(p)}
+                      className={clsx(
+                        'w-full text-left px-3 py-2 text-sm border-b last:border-b-0 border-gray-100',
+                        idx === highlightedProgramIndex ? 'bg-brand-50' : 'hover:bg-gray-50',
+                        form.program_id === p.id && 'bg-green-50',
+                      )}
+                    >
+                      <div className="font-medium text-gray-900">{renderHighlighted(p.name, programQuery)}</div>
+                      <div className="text-xs text-gray-500">{renderHighlighted(p.school ?? 'No School', programQuery)}</div>
+                    </button>
+                  ))
+                )}
+              </div>
+            )}
+          </div>
+
+          <p className="mt-1 text-xs text-gray-500">Showing {filteredPrograms.length} of {programs.length} programs</p>
         </FormField>
 
         {/* Password — only shown in create mode */}

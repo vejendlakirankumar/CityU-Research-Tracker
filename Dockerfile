@@ -21,6 +21,7 @@ WORKDIR /build
 COPY backend/composer.json backend/composer.lock* ./
 RUN composer install \
     --no-dev \
+    --no-blocking \
     --optimize-autoloader \
     --no-interaction \
     --no-scripts

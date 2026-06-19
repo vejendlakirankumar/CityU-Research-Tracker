@@ -1,4 +1,4 @@
-﻿import { useEffect, useState } from 'react'
+﻿import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
@@ -78,16 +78,77 @@ export default function LoginForm() {
 
   const [emailFocused, setEmailFocused] = useState(false)
   const [passFocused, setPassFocused]   = useState(false)
+  const logoRef = useRef<HTMLImageElement | null>(null)
+  const [logoOffsetX, setLogoOffsetX] = useState(0)
+
+  const recenterLogoByVisiblePixels = () => {
+    const img = logoRef.current
+    if (!img || !img.complete || !img.naturalWidth || !img.naturalHeight || !img.clientWidth) return
+
+    try {
+      const srcW = img.naturalWidth
+      const srcH = img.naturalHeight
+      const canvas = document.createElement('canvas')
+      canvas.width = srcW
+      canvas.height = srcH
+      const ctx = canvas.getContext('2d', { willReadFrequently: true })
+      if (!ctx) return
+
+      ctx.drawImage(img, 0, 0, srcW, srcH)
+      const { data } = ctx.getImageData(0, 0, srcW, srcH)
+
+      let minX = srcW
+      let maxX = -1
+      // Scan alpha channel to find visible horizontal bounds.
+      for (let y = 0; y < srcH; y += 1) {
+        for (let x = 0; x < srcW; x += 1) {
+          const a = data[(y * srcW + x) * 4 + 3]
+          if (a > 8) {
+            if (x < minX) minX = x
+            if (x > maxX) maxX = x
+          }
+        }
+      }
+
+      if (maxX < minX) {
+        setLogoOffsetX(0)
+        return
+      }
+
+      const imageCenter = srcW / 2
+      const visibleCenter = (minX + maxX) / 2
+      const sourceDelta = visibleCenter - imageCenter
+      const renderedScale = img.clientWidth / srcW
+      setLogoOffsetX(-sourceDelta * renderedScale)
+    } catch {
+      // If cross-origin or canvas read is blocked, keep normal centering.
+      setLogoOffsetX(0)
+    }
+  }
+
+  useEffect(() => {
+    const onResize = () => recenterLogoByVisiblePixels()
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
 
   return (
     <div style={{ width: '100%', maxWidth: 360, margin: '0 auto', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif' }}>
 
-      {/* â”€â”€ Logo â”€â”€ */}
-      <div style={{ textAlign: 'center', marginBottom: '1.5rem' }}>
+      {/* Center logo by visible pixels so extra transparent margins do not skew alignment. */}
+      <div style={{ width: '100%', display: 'flex', justifyContent: 'center', marginBottom: '1.5rem' }}>
         <img
+          ref={logoRef}
           src={cityuLogo}
           alt="City University of Seattle"
-          style={{ height: 56, width: 'auto', objectFit: 'contain' }}
+          onLoad={recenterLogoByVisiblePixels}
+          style={{
+            width: 260,
+            maxWidth: '78%',
+            height: 'auto',
+            display: 'block',
+            transform: `translateX(${logoOffsetX}px)`,
+          }}
         />
       </div>
 

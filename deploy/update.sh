@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # =============================================================================
-# update.sh — Incremental update to the running production Docker deployment
+# update.sh — Reliable update to the running production Docker deployment
 # =============================================================================
 # Usage:
 #   bash update.sh [OPTIONS]
 #
 # Options:
-#   --zero-downtime    Blue-green container swap (no restart of current container)
+#   --zero-downtime    Reserved for future use; currently not supported
 #   --backend-only     Skip frontend rebuild
 #   --frontend-only    Skip backend rsync and migrate
 #   --no-migrate       Skip database migrations (dangerous — only if no schema changes)
@@ -51,6 +51,9 @@ done
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 V2_DIR="$(dirname "$SCRIPT_DIR")"
 
+command -v ssh &>/dev/null   || error "ssh is required on the local machine"
+command -v rsync &>/dev/null || error "rsync is required on the local machine"
+
 # ---------- SSH helpers -------------------------------------------------------
 SSH_OPTS=(-o StrictHostKeyChecking=no -o ConnectTimeout=15 -o BatchMode=no)
 [[ -n "$SSH_KEY" ]] && SSH_OPTS+=(-i "$SSH_KEY")
@@ -67,96 +70,68 @@ fi
 TARGET="$VM_USER@$VM_HOST"
 RSYNC_OPTS=(-az --progress --delete -e "$RSYNC_SSH")
 
-# ---------- 1. Backend sync --------------------------------------------------
-if [[ "$FRONTEND_ONLY" == false ]]; then
-  info "Syncing backend PHP files to $VM_HOST:$REMOTE_DIR/backend/ ..."
-  rsync "${RSYNC_OPTS[@]}" \
-    --exclude='vendor/' \
-    --exclude='.env' \
-    --exclude='storage/logs/' \
-    --exclude='storage/framework/cache/' \
-    --exclude='storage/framework/sessions/' \
-    --exclude='storage/framework/views/' \
-    "$V2_DIR/backend/" "$TARGET:$REMOTE_DIR/backend/"
-
-  info "Installing Composer dependencies on VM..."
-  "${SSH_CMD[@]}" "$TARGET" \
-    "cd $REMOTE_DIR && docker exec rrp_app composer install --no-dev --optimize-autoloader --no-interaction"
-fi
-
-# ---------- 2. Frontend build ------------------------------------------------
-if [[ "$BACKEND_ONLY" == false ]]; then
-  info "Building frontend locally..."
-  cd "$V2_DIR/frontend"
-  npm ci --silent
-  npm run build
-  cd - >/dev/null
-
-  info "Syncing frontend dist to $VM_HOST:$REMOTE_DIR/frontend/dist/ ..."
-  rsync "${RSYNC_OPTS[@]}" \
-    "$V2_DIR/frontend/dist/" "$TARGET:$REMOTE_DIR/frontend/dist/"
-
-  info "Copying frontend dist into container..."
-  "${SSH_CMD[@]}" "$TARGET" \
-    "docker exec rrp_app rsync -a /host-dist/ /var/www/frontend/ 2>/dev/null || \
-     docker cp $REMOTE_DIR/frontend/dist/. rrp_app:/var/www/frontend/"
-fi
-
-# ---------- 3. Run migrations ------------------------------------------------
-if [[ "$NO_MIGRATE" == false && "$FRONTEND_ONLY" == false ]]; then
-  info "Running database migrations..."
-  "${SSH_CMD[@]}" "$TARGET" \
-    "docker exec rrp_app php artisan migrate --force"
-fi
-
-# ---------- 4. Clear and rebuild caches ---------------------------------------
-if [[ "$FRONTEND_ONLY" == false ]]; then
-  info "Rebuilding Laravel caches..."
-  "${SSH_CMD[@]}" "$TARGET" bash <<'CACHE'
-docker exec rrp_app php artisan config:cache
-docker exec rrp_app php artisan route:cache
-docker exec rrp_app php artisan view:cache
-docker exec rrp_app php artisan queue:restart
-CACHE
-fi
-
-# ---------- 5. Reload Nginx (picks up new frontend assets) -------------------
-info "Reloading Nginx inside container..."
-"${SSH_CMD[@]}" "$TARGET" \
-  "docker exec rrp_app nginx -s reload || docker exec rrp_app nginx -t && echo Nginx OK"
-
-# ---------- 6. Zero-downtime swap (optional) ---------------------------------
 if [[ "$ZERO_DOWNTIME" == true ]]; then
-  info "Running zero-downtime container swap..."
-  "${SSH_CMD[@]}" "$TARGET" bash <<ZDEPLOY
+  error "--zero-downtime is not currently supported by this script. Use a standard update instead."
+fi
+
+REMOTE_DOCKER='docker'
+REMOTE_DOCKER_PROBE='if ! docker info >/dev/null 2>&1; then DOCKER="sudo docker"; else DOCKER="docker"; fi'
+
+# ---------- 1. Sync repository files -----------------------------------------
+info "Syncing application files to $VM_HOST:$REMOTE_DIR ..."
+mkdir -p "$V2_DIR/frontend/dist" >/dev/null 2>&1 || true
+
+RSYNC_EXCLUDES=(
+  --exclude='.git/'
+  --exclude='node_modules/'
+  --exclude='backend/vendor/'
+  --exclude='.env'
+)
+
+if [[ "$BACKEND_ONLY" == true ]]; then
+  RSYNC_EXCLUDES+=(--exclude='frontend/')
+fi
+
+if [[ "$FRONTEND_ONLY" == true ]]; then
+  RSYNC_EXCLUDES+=(--exclude='backend/' --exclude='docker-compose.yml' --exclude='Dockerfile')
+fi
+
+rsync "${RSYNC_OPTS[@]}" "${RSYNC_EXCLUDES[@]}" \
+  "$V2_DIR/" "$TARGET:$REMOTE_DIR/"
+
+# ---------- 2. Rebuild and restart stack -------------------------------------
+info "Rebuilding Docker stack on VM..."
+"${SSH_CMD[@]}" "$TARGET" bash <<REMOTE_UPDATE
+set -euo pipefail
 cd $REMOTE_DIR
+$REMOTE_DOCKER_PROBE
 
-# Build a new image tagged :candidate
-docker compose build --no-cache app
+\$DOCKER compose up -d --build
 
-# Start the candidate on a different port (8081) for health-check
-docker run -d --name rrp_candidate \
-  --env-file backend/.env \
-  -p 127.0.0.1:8081:8080 \
-  rrp_app:candidate
-
-# Wait for health
-for i in \$(seq 1 20); do
-  if curl -sf http://127.0.0.1:8081/api/system/public >/dev/null 2>&1; then
-    echo "Candidate healthy after \$i seconds"
-    break
+ATTEMPTS=0
+until \$DOCKER inspect --format='{{.State.Health.Status}}' rrp_app 2>/dev/null | grep -q 'healthy'; do
+  ATTEMPTS=\$((ATTEMPTS + 1))
+  if [[ \$ATTEMPTS -ge 40 ]]; then
+    echo 'ERROR: Timed out waiting for rrp_app health. Recent logs:'
+    \$DOCKER compose logs --tail=40 app
+    exit 1
   fi
-  sleep 1
+  sleep 5
 done
 
-# Switch Nginx upstream from :8080 to :8081, reload, then swap back container names
-docker compose stop app
-docker rename rrp_app rrp_app_old
-docker rename rrp_candidate rrp_app
-docker compose start app   # re-creates from compose definition but image is already new
-docker rm -f rrp_app_old 2>/dev/null || true
-ZDEPLOY
+if [[ "$NO_MIGRATE" == false && "$FRONTEND_ONLY" == false ]]; then
+  \$DOCKER exec -w /var/www/html rrp_app php artisan migrate --force
 fi
+
+if [[ "$FRONTEND_ONLY" == false ]]; then
+  \$DOCKER exec -w /var/www/html rrp_app php artisan config:cache
+  \$DOCKER exec -w /var/www/html rrp_app php artisan route:cache
+  \$DOCKER exec -w /var/www/html rrp_app php artisan queue:restart || true
+fi
+
+\$DOCKER exec rrp_app nginx -t
+\$DOCKER exec rrp_app nginx -s reload || true
+REMOTE_UPDATE
 
 # ---------- Done --------------------------------------------------------------
 info "============================================================"

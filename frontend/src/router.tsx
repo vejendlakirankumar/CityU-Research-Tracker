@@ -1,5 +1,6 @@
 import { createBrowserRouter, Navigate } from 'react-router-dom'
 import ProtectedRoute from './components/guards/ProtectedRoute'
+import RoleRoute from './components/guards/RoleRoute'
 import AppShell from './components/layout/AppShell'
 import LoginPage from './pages/LoginPage'
 import DashboardPage from './pages/DashboardPage'
@@ -54,7 +55,14 @@ export const router = createBrowserRouter(
         { path: '/reviewer-assignments',    element: <ReviewerAssignmentsPage /> },
         { path: '/researcher-access',       element: <ResearcherAccessPage /> },
         { path: '/workflows',              element: <WorkflowsPage /> },
-        { path: '/users',                  element: <UsersPage /> },
+        {
+          path: '/users',
+          element: (
+            <RoleRoute allowedRoles={['admin', 'coordinator']}>
+              <UsersPage />
+            </RoleRoute>
+          ),
+        },
         { path: '/reports',                element: <ReportsPage /> },
         { path: '/notifications',          element: <NotificationsPage /> },
         { path: '/settings',               element: <SettingsPage /> },
