@@ -181,7 +181,9 @@ chown -R "$APP_USER:$APP_USER" "$APP_DIR"
 find "$APP_DIR" -type d -exec chmod 755 {} \;
 find "$APP_DIR" -type f -name "*.php" -exec chmod 644 {} \;
 find "$APP_DIR" -type f -name "artisan" -exec chmod 755 {} \;
-find "$APP_DIR/deploy" -type f -name "*.sh" -exec chmod 755 {} \;
+if [[ -d "$APP_DIR/deploy" ]]; then
+  find "$APP_DIR/deploy" -type f -name "*.sh" -exec chmod 755 {} \;
+fi
 
 # ---------- 4. Database setup -------------------------------------------------
 info "Setting up PostgreSQL database..."
