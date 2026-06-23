@@ -74,7 +74,7 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update -q
 apt-get install -y -q curl wget gnupg2 ca-certificates lsb-release \
   software-properties-common apt-transport-https unzip git supervisor \
-  certbot python3-certbot-nginx acl cron
+  certbot python3-certbot-nginx acl cron rsync
 
 # PHP 8.4
 if [[ "$UBUNTU_CODENAME" == "jammy" || "$UBUNTU_CODENAME" == "noble" ]]; then
@@ -238,7 +238,7 @@ chmod 640 "$APP_DIR/backend/.env"
 # ---------- 6. Composer dependencies -----------------------------------------
 info "Installing Composer dependencies..."
 sudo -u "$APP_USER" COMPOSER_HOME="$APP_DIR/.composer" composer install --no-dev --optimize-autoloader \
-  --no-blocking --no-interaction --working-dir="$APP_DIR/backend"
+  --no-interaction --working-dir="$APP_DIR/backend"
 
 # ---------- 7. Frontend build -------------------------------------------------
 info "Building React frontend..."

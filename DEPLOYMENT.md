@@ -1010,7 +1010,7 @@ Notes:
 Inside the Ubuntu shell:
 
 ```bash
-git clone https://github.com/cityuseattle/CityU-Research-Tracker.git
+git clone https://github.com/vejendlakirankumar/CityU-Research-Tracker.git
 cd CityU-Research-Tracker
 bash deploy/quick-start-docker.sh --port 8080
 ```
