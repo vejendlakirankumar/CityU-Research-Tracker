@@ -1,8 +1,9 @@
 <?php
 
 $configuredOrigins = array_filter(array_map('trim', explode(',', (string) env('CORS_ALLOWED_ORIGINS', ''))));
+$isProduction = env('APP_ENV', 'production') === 'production';
 
-$defaultOrigins = app()->environment('production')
+$defaultOrigins = $isProduction
     ? [env('APP_URL', 'https://localhost')]
     : [
         env('APP_URL', 'http://localhost:8080'),

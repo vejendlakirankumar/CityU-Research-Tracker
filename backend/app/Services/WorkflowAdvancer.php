@@ -78,11 +78,18 @@ class WorkflowAdvancer
             $outcome = $this->evaluator->evaluate($submission->id, $stage);
 
             if ($outcome === 'PENDING') {
+                // Keep the stage pointer aligned with the first stage that still
+                // has pending reviewer decisions.
+                $this->setCurrentStage($submission, $stage->id);
                 // Stage incomplete — stop and wait for remaining reviewer decisions.
                 return;
             }
 
             if ($outcome === 'PASSED') {
+                // Move the pointer to the next stage in sequence so later-stage
+                // reviewers only see submissions once their stage is active.
+                $nextStage = $evalStages->first(fn($s) => $s->order > $stage->order);
+                $this->setCurrentStage($submission, $nextStage?->id);
                 // Stage approved — advance to next stage.
                 continue;
             }
@@ -128,9 +135,30 @@ class WorkflowAdvancer
         }
 
         // All stages passed → auto-advance to final state.
+        $this->setCurrentStage($submission, null);
         $finalStatus = $submission->submissionType?->workflow?->final_status_on_pass
             ?? Submission::STATUS_ACCEPTED;
         $this->transition($submission, $finalStatus, 'auto_accepted_all_stages');
+    }
+
+    private function setCurrentStage(Submission $submission, ?string $stageId): void
+    {
+        if ($stageId === null) {
+            if ($submission->current_stage_id !== null) {
+                $submission->update([
+                    'current_stage_id' => null,
+                    'current_stage_entered_at' => null,
+                ]);
+            }
+            return;
+        }
+
+        if ($submission->current_stage_id !== $stageId) {
+            $submission->update([
+                'current_stage_id' => $stageId,
+                'current_stage_entered_at' => now(),
+            ]);
+        }
     }
 
     /**

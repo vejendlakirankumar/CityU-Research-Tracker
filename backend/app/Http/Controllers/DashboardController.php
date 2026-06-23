@@ -132,18 +132,27 @@ class DashboardController extends Controller
 
     private function reviewerStats(User $user): JsonResponse
     {
+        $activeStageAssignments = SubmissionReviewer::query()
+            ->join('submissions', 'submissions.id', '=', 'submission_reviewers.submission_id')
+            ->where('submission_reviewers.user_id', $user->id)
+            ->where('submission_reviewers.status', '!=', 'declined')
+            ->whereIn('submissions.status', [
+                Submission::STATUS_IN_REVIEW,
+                Submission::STATUS_AWAITING_REVIEWERS,
+                Submission::STATUS_PENDING_RELEASE,
+            ])
+            ->whereColumn('submission_reviewers.stage_id', 'submissions.current_stage_id');
+
         $total = SubmissionReviewer::where('user_id', $user->id)
             ->where('status', '!=', 'declined')
             ->count();
 
-        $pending = SubmissionReviewer::where('user_id', $user->id)
+        $pending = (clone $activeStageAssignments)
             ->whereNull('decision')
-            ->where('status', '!=', 'declined')
             ->count();
 
-        $overdue = SubmissionReviewer::where('user_id', $user->id)
+        $overdue = (clone $activeStageAssignments)
             ->whereNull('decision')
-            ->where('status', '!=', 'declined')
             ->where('due_at', '<', now()->toDateString())
             ->count();
 

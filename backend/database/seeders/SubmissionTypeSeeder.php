@@ -6,6 +6,7 @@ use App\Models\StageDefinition;
 use App\Models\SubmissionType;
 use App\Models\WorkflowDefinition;
 use Illuminate\Database\Seeder;
+use Illuminate\Support\Str;
 
 class SubmissionTypeSeeder extends Seeder
 {
@@ -30,14 +31,18 @@ class SubmissionTypeSeeder extends Seeder
 
         $workflowIds = [];
         foreach ($workflows as $workflow) {
-            $row = WorkflowDefinition::updateOrCreate(
-                ['name' => $workflow['name']],
-                [
-                    'revision_restart_policy' => $workflow['revision_restart_policy'],
-                    'final_status_on_pass' => $workflow['final_status_on_pass'],
-                    'is_active' => $workflow['is_active'],
-                ]
-            );
+            $row = WorkflowDefinition::firstOrNew(['name' => $workflow['name']]);
+            if (!$row->exists) {
+                $row->id = (string) Str::uuid();
+            }
+
+            $row->fill([
+                'revision_restart_policy' => $workflow['revision_restart_policy'],
+                'final_status_on_pass' => $workflow['final_status_on_pass'],
+                'is_active' => $workflow['is_active'],
+            ]);
+            $row->save();
+
             $workflowIds[$workflow['key']] = $row->id;
         }
 

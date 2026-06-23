@@ -26,15 +26,13 @@ class SubmissionController extends Controller
     /**
      * GET /api/submissions/my-reviews
      * Returns submissions where the current user is an assigned reviewer.
+     * Response includes both 'pending' (awaiting decision) and 'completed' (past reviews).
      *
-     * ?mode=submissions  — all submissions reviewer is part of (any stage, including future-only)
-     * ?mode=assignments  — only active pending assignments (current stage, no decision yet)
-     * default            — current deduplication (active or most recently completed)
+     * Note: Old modes (assignments, submissions) are deprecated. Use the new split response.
      */
     public function myReviews(Request $request): JsonResponse
     {
         $user = $request->user();
-        $mode = $request->get('mode', 'default');
 
         // Load ALL non-declined assignments for this reviewer (across all stages).
         $allAssignments = SubmissionReviewer::with([
@@ -50,125 +48,119 @@ class SubmissionController extends Controller
         ->where('status', '!=', 'declined')
         ->get();
 
-        // ── Filter/deduplicate depending on mode ─────────────────────────────
-        $chosen = collect();
+        // ── Build two collections: pending and completed ─────────────────────
+        $pending = collect();
+        $completed = collect();
 
-        if ($mode === 'assignments') {
-            // Only active pending: stage matches submission's current stage AND no decision yet
-            foreach ($allAssignments->groupBy('submission_id') as $assignments) {
-                $s = $assignments->first()?->submission;
-                if (!$s) continue;
-                $active = $assignments->first(
-                    fn($a) => $a->stage_id === $s->current_stage_id && $a->decision === null
-                );
-                if ($active) {
-                    $chosen->push($active);
-                }
+        foreach ($allAssignments->groupBy('submission_id') as $assignments) {
+            $s = $assignments->first()?->submission;
+            if (!$s) continue;
+
+            // Pending: active stage assignment with no decision
+            $activePending = $assignments->first(
+                fn($a) => $a->stage_id === $s->current_stage_id && $a->decision === null
+            );
+            if ($activePending) {
+                $pending->push($activePending);
             }
-        } elseif ($mode === 'submissions') {
-            // All submissions — one per submission, prefer active stage, include future-only
-            foreach ($allAssignments->groupBy('submission_id') as $assignments) {
-                $s = $assignments->first()?->submission;
-                if (!$s) continue;
 
-                $active = $assignments->first(fn($a) => $a->stage_id === $s->current_stage_id);
-                if ($active) { $chosen->push($active); continue; }
-
-                $lastCompleted = $assignments
-                    ->filter(fn($a) => $a->decision !== null)
-                    ->sortByDesc('decision_at')
-                    ->first();
-                if ($lastCompleted) { $chosen->push($lastCompleted); continue; }
-
-                // Include future-only (show first future assignment)
-                $future = $assignments->sortBy(fn($a) => $a->stage?->order ?? 999)->first();
-                if ($future) $chosen->push($future);
-            }
-        } else {
-            // Default: active stage OR most recently completed; hide future-only
-            foreach ($allAssignments->groupBy('submission_id') as $assignments) {
-                $s = $assignments->first()?->submission;
-                if (!$s) continue;
-
-                $active = $assignments->first(fn($a) => $a->stage_id === $s->current_stage_id);
-                if ($active) { $chosen->push($active); continue; }
-
-                $lastCompleted = $assignments
-                    ->filter(fn($a) => $a->decision !== null)
-                    ->sortByDesc('decision_at')
-                    ->first();
-                if ($lastCompleted) $chosen->push($lastCompleted);
-                // else: future-only — hidden
+            // Completed: any assignment with a decision (most recent per submission)
+            $completedAssignment = $assignments
+                ->filter(fn($a) => $a->decision !== null)
+                ->sortByDesc('decision_at')
+                ->first();
+            if ($completedAssignment) {
+                $completed->push($completedAssignment);
             }
         }
 
-        // Sort: overdue first, then due-soon, then by due_at asc
-        $chosen = $chosen->sortBy([
+        // Sort pending: overdue first, then due-soon, then by due_at asc
+        $pending = $pending->sortBy([
             fn($a) => $a->due_at ? 0 : 1,
             fn($a) => $a->due_at?->toDateString() ?? '9999-12-31',
         ]);
 
+        // Sort completed: most recent decisions first
+        $completed = $completed->sortByDesc(fn($a) => $a->decision_at?->timestamp ?? 0);
+
         $today = now()->toDateString();
 
-        $data = $chosen->map(function ($a) use ($today) {
-            $s = $a->submission;
-
-            $isOverdue = $a->due_at && $a->due_at->toDateString() < $today && $a->decision === null;
-            $isDueSoon = $a->due_at && !$isOverdue
-                && $a->due_at->toDateString() <= now()->addDays(3)->toDateString()
-                && $a->decision === null;
-
-            return [
-                'assignment_id'             => $a->id,
-                'assignment_status'         => $a->status,
-                'due_at'                    => $a->due_at?->toDateString(),
-                'decision'                  => $a->decision,
-                'decision_at'               => $a->decision_at?->toIso8601String(),
-                'comments'                  => $a->comments,
-                'is_overdue'                => $isOverdue,
-                'is_due_soon'               => $isDueSoon,
-                // Extension request fields
-                'extension_status'          => $a->extension_status,
-                'extension_reason'          => $a->extension_reason,
-                'extension_requested_days'  => $a->extension_requested_days,
-                'extension_requested_at'    => $a->extension_requested_at?->toIso8601String(),
-                'extension_request_count'   => $a->extension_request_count ?? 0,
-                // Conflict of interest
-                'conflict_flagged'          => $a->conflict_flagged ?? false,
-                'conflict_reason'           => $a->conflict_reason,
-                // The specific stage this reviewer is assigned to (their review stage)
-                'stage'                     => $a->stage ? [
-                    'id'   => $a->stage->id,
-                    'name' => $a->stage->name,
-                    'role' => $a->stage->stage_role_label,
-                ] : null,
-                'submission' => [
-                    'id'              => $s->id,
-                    'title'           => $s->title,
-                    'status'          => $s->status,
-                    'current_version' => $s->current_version,
-                    'submission_type' => $s->submissionType ? [
-                        'id'    => $s->submissionType->id,
-                        'slug'  => $s->submissionType->slug,
-                        'label' => $s->submissionType->label,
-                    ] : null,
-                    'submitter' => [
-                        'id'    => $s->submitter->id,
-                        'name'  => $s->submitter->name,
-                        'email' => $s->submitter->email,
-                    ],
-                    'created_at'               => $s->created_at,
-                    'program'                  => $s->program ? ['name' => $s->program->name] : null,
-                    'current_stage'            => $s->currentStage ? [
-                        'id'   => $s->currentStage->id,
-                        'name' => $s->currentStage->name,
-                    ] : null,
-                    'current_stage_entered_at' => $s->current_stage_entered_at?->toIso8601String(),
-                ],
-            ];
+        // Map pending assignments
+        $pendingData = $pending->map(function ($a) use ($today) {
+            return $this->formatReviewAssignment($a, $today);
         })->values();
 
-        return response()->json(['data' => $data]);
+        // Map completed assignments
+        $completedData = $completed->map(function ($a) use ($today) {
+            return $this->formatReviewAssignment($a, $today);
+        })->values();
+
+        return response()->json([
+            'pending' => $pendingData,
+            'completed' => $completedData,
+        ]);
+    }
+
+    /**
+     * Format a single review assignment for API response.
+     */
+    private function formatReviewAssignment(SubmissionReviewer $a, string $today): array
+    {
+        $s = $a->submission;
+
+        $isOverdue = $a->due_at && $a->due_at->toDateString() < $today && $a->decision === null;
+        $isDueSoon = $a->due_at && !$isOverdue
+            && $a->due_at->toDateString() <= now()->addDays(3)->toDateString()
+            && $a->decision === null;
+
+        return [
+            'assignment_id'             => $a->id,
+            'assignment_status'         => $a->status,
+            'due_at'                    => $a->due_at?->toDateString(),
+            'decision'                  => $a->decision,
+            'decision_at'               => $a->decision_at?->toIso8601String(),
+            'comments'                  => $a->comments,
+            'is_overdue'                => $isOverdue,
+            'is_due_soon'               => $isDueSoon,
+            // Extension request fields
+            'extension_status'          => $a->extension_status,
+            'extension_reason'          => $a->extension_reason,
+            'extension_requested_days'  => $a->extension_requested_days,
+            'extension_requested_at'    => $a->extension_requested_at?->toIso8601String(),
+            'extension_request_count'   => $a->extension_request_count ?? 0,
+            // Conflict of interest
+            'conflict_flagged'          => $a->conflict_flagged ?? false,
+            'conflict_reason'           => $a->conflict_reason,
+            // The specific stage this reviewer is assigned to (their review stage)
+            'stage'                     => $a->stage ? [
+                'id'   => $a->stage->id,
+                'name' => $a->stage->name,
+                'role' => $a->stage->stage_role_label,
+            ] : null,
+            'submission' => [
+                'id'              => $s->id,
+                'title'           => $s->title,
+                'status'          => $s->status,
+                'current_version' => $s->current_version,
+                'submission_type' => $s->submissionType ? [
+                    'id'    => $s->submissionType->id,
+                    'slug'  => $s->submissionType->slug,
+                    'label' => $s->submissionType->label,
+                ] : null,
+                'submitter' => [
+                    'id'    => $s->submitter->id,
+                    'name'  => $s->submitter->name,
+                    'email' => $s->submitter->email,
+                ],
+                'created_at'               => $s->created_at,
+                'program'                  => $s->program ? ['name' => $s->program->name] : null,
+                'current_stage'            => $s->currentStage ? [
+                    'id'   => $s->currentStage->id,
+                    'name' => $s->currentStage->name,
+                ] : null,
+                'current_stage_entered_at' => $s->current_stage_entered_at?->toIso8601String(),
+            ],
+        ];
     }
 
     /**

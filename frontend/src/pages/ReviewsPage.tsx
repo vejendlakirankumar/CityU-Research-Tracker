@@ -746,13 +746,13 @@ export default function ReviewsPage() {
   const conflictDeclarations = coordData?.conflicts ?? []
   const incomingSubmissions = coordData?.unassigned ?? []
 
-  const { data, isLoading } = useQuery<{ data: ReviewAssignment[] }>({
+  const { data, isLoading } = useQuery<{ pending: ReviewAssignment[], completed: ReviewAssignment[] }>({
     queryKey: ['my-reviews', 'assignments'],
-    queryFn: () => api.get('/submissions/my-reviews', { params: { mode: 'assignments' } }).then((r) => r.data),
+    queryFn: () => api.get('/submissions/my-reviews').then((r) => r.data),
     staleTime: 30_000,
   })
 
-  const items = data?.data ?? []
+  const items = [...(data?.pending ?? []), ...(data?.completed ?? [])]
 
   const awaiting  = items.filter((i) => classifyItem(i) === 'awaiting')
   const completed = items.filter((i) => classifyItem(i) === 'completed')

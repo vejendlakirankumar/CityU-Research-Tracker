@@ -62,6 +62,12 @@ if [[ "$UBUNTU_CODENAME" != "jammy" && "$UBUNTU_CODENAME" != "noble" ]]; then
   rm -f /etc/apt/sources.list.d/redis.list
 fi
 
+# Remove stale Microsoft package feeds that are unrelated to this app but can
+# break apt-get update on Azure images or recycled VMs.
+rm -f /etc/apt/sources.list.d/microsoft-prod.list
+rm -f /etc/apt/sources.list.d/*microsoft*.list
+rm -f /etc/apt/sources.list.d/*microsoft*.sources
+
 # ---------- 1. System packages ------------------------------------------------
 info "Updating apt and installing base packages..."
 export DEBIAN_FRONTEND=noninteractive
@@ -170,6 +176,12 @@ mkdir -p "$APP_DIR/backend/storage/framework/views"
 mkdir -p "$APP_DIR/.composer"
 
 chown -R "$APP_USER:$APP_USER" "$APP_DIR"
+# Normalize permissions after rsync — Windows zips strip Unix execute bits from
+# directories, which prevents PHP/Composer from traversing them.
+find "$APP_DIR" -type d -exec chmod 755 {} \;
+find "$APP_DIR" -type f -name "*.php" -exec chmod 644 {} \;
+find "$APP_DIR" -type f -name "artisan" -exec chmod 755 {} \;
+find "$APP_DIR/deploy" -type f -name "*.sh" -exec chmod 755 {} \;
 
 # ---------- 4. Database setup -------------------------------------------------
 info "Setting up PostgreSQL database..."
