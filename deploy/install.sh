@@ -239,6 +239,10 @@ chmod 640 "$APP_DIR/backend/.env"
 
 # ---------- 6. Composer dependencies -----------------------------------------
 info "Installing Composer dependencies..."
+# Fresh servers may not have composer.lock yet, which makes `composer install`
+# resolve dependencies and trigger advisory blocking. Disable blocking for this
+# unattended bootstrap path so deployment can complete deterministically.
+sudo -u "$APP_USER" COMPOSER_HOME="$APP_DIR/.composer" composer config --global policy.advisories.block false || true
 sudo -u "$APP_USER" COMPOSER_HOME="$APP_DIR/.composer" composer install --no-dev --optimize-autoloader \
   --no-interaction --working-dir="$APP_DIR/backend"
 

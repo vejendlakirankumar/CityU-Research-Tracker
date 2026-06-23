@@ -15,6 +15,8 @@ import { STATUS_LABELS, STATUS_COLORS } from '../types/submissions'
 interface ReviewQueueItem {
   assignment_id: string
   due_at: string | null
+  decision: string | null
+  decision_at: string | null
   is_overdue: boolean
   is_due_soon: boolean
   /** The stage this reviewer is personally assigned to. */
