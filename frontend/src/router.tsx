@@ -49,12 +49,54 @@ export const router = createBrowserRouter(
         { path: '/submissions',            element: <SubmissionsPage /> },
         { path: '/submissions/new',        element: <NewSubmissionPage /> },
         { path: '/submissions/:id',        element: <SubmissionDetailPage /> },
-        { path: '/reviews',                element: <ReviewsPage /> },
-        { path: '/reviewer-analytics',     element: <ReviewerAnalyticsPage /> },
-        { path: '/submission-categories',  element: <SubmissionCategoriesPage /> },
-        { path: '/reviewer-assignments',    element: <ReviewerAssignmentsPage /> },
-        { path: '/researcher-access',       element: <ResearcherAccessPage /> },
-        { path: '/workflows',              element: <WorkflowsPage /> },
+        {
+          path: '/reviews',
+          element: (
+            <RoleRoute allowedRoles={['admin', 'coordinator', 'reviewer']}>
+              <ReviewsPage />
+            </RoleRoute>
+          ),
+        },
+        {
+          path: '/reviewer-analytics',
+          element: (
+            <RoleRoute allowedRoles={['reviewer']}>
+              <ReviewerAnalyticsPage />
+            </RoleRoute>
+          ),
+        },
+        {
+          path: '/submission-categories',
+          element: (
+            <RoleRoute allowedRoles={['admin', 'coordinator']}>
+              <SubmissionCategoriesPage />
+            </RoleRoute>
+          ),
+        },
+        {
+          path: '/reviewer-assignments',
+          element: (
+            <RoleRoute allowedRoles={['admin', 'coordinator']}>
+              <ReviewerAssignmentsPage />
+            </RoleRoute>
+          ),
+        },
+        {
+          path: '/researcher-access',
+          element: (
+            <RoleRoute allowedRoles={['admin', 'coordinator']}>
+              <ResearcherAccessPage />
+            </RoleRoute>
+          ),
+        },
+        {
+          path: '/workflows',
+          element: (
+            <RoleRoute allowedRoles={['admin', 'coordinator']}>
+              <WorkflowsPage />
+            </RoleRoute>
+          ),
+        },
         {
           path: '/users',
           element: (
@@ -63,18 +105,88 @@ export const router = createBrowserRouter(
             </RoleRoute>
           ),
         },
-        { path: '/reports',                element: <ReportsPage /> },
+        {
+          path: '/reports',
+          element: (
+            <RoleRoute allowedRoles={['admin', 'coordinator']}>
+              <ReportsPage />
+            </RoleRoute>
+          ),
+        },
         { path: '/notifications',          element: <NotificationsPage /> },
-        { path: '/settings',               element: <SettingsPage /> },
-        { path: '/audit-log',              element: <AuditLogPage /> },
-        { path: '/webhooks',               element: <WebhooksPage /> },
-        { path: '/gated-reviews',          element: <GatedReviewsPage /> },
-        { path: '/appeals',                element: <AppealsPage /> },
+        {
+          path: '/settings',
+          element: (
+            <RoleRoute allowedRoles={['admin']}>
+              <SettingsPage />
+            </RoleRoute>
+          ),
+        },
+        {
+          path: '/audit-log',
+          element: (
+            <RoleRoute allowedRoles={['admin']}>
+              <AuditLogPage />
+            </RoleRoute>
+          ),
+        },
+        {
+          path: '/webhooks',
+          element: (
+            <RoleRoute allowedRoles={['admin']}>
+              <WebhooksPage />
+            </RoleRoute>
+          ),
+        },
+        {
+          path: '/gated-reviews',
+          element: (
+            <RoleRoute allowedRoles={['admin', 'coordinator']}>
+              <GatedReviewsPage />
+            </RoleRoute>
+          ),
+        },
+        {
+          path: '/appeals',
+          element: (
+            <RoleRoute allowedRoles={['admin', 'coordinator']}>
+              <AppealsPage />
+            </RoleRoute>
+          ),
+        },
         { path: '/calendar',               element: <CalendarPage /> },
-        { path: '/programs',               element: <ProgramsPage /> },
-        { path: '/review-management',       element: <ReviewManagementPage /> },
-        { path: '/announcements',          element: <AnnouncementsPage /> },
-        { path: '/custom-roles',           element: <CustomRolesPage /> },
+        {
+          path: '/programs',
+          element: (
+            <RoleRoute allowedRoles={['admin', 'coordinator']}>
+              <ProgramsPage />
+            </RoleRoute>
+          ),
+        },
+        {
+          path: '/review-management',
+          element: (
+            <RoleRoute allowedRoles={['admin', 'coordinator']}>
+              <ReviewManagementPage />
+            </RoleRoute>
+          ),
+        },
+        {
+          path: '/announcements',
+          element: (
+            <RoleRoute allowedRoles={['admin', 'coordinator']}>
+              <AnnouncementsPage />
+            </RoleRoute>
+          ),
+        },
+        {
+          path: '/custom-roles',
+          element: (
+            <RoleRoute allowedRoles={['admin', 'coordinator']}>
+              <CustomRolesPage />
+            </RoleRoute>
+          ),
+        },
         { path: '/references',             element: <ReferencesPage /> },
       ],
     },

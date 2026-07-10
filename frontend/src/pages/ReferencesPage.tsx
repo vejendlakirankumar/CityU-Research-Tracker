@@ -1,12 +1,12 @@
-import { useState } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import {
   BookOpen, Link, Hash, Barcode, FileText, Atom,
   Copy, Trash2, Check, Loader2, AlertCircle,
-  Plus, Download, ChevronDown, Info,
+  Plus, Download, ChevronDown, Info, Pencil, Search,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import api from '../lib/axios'
-import type { RefMeta } from '../lib/apa7'
+import type { RefMeta, Author } from '../lib/apa7'
 import {
   formatReference, formatInTextCitation,
   referenceToHtml, referencePlainText,
@@ -15,7 +15,7 @@ import { bibtexToMetas } from '../lib/bibtex-parser'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-type InputMode = 'doi' | 'isbn' | 'url' | 'bibtex' | 'arxiv'
+type InputMode = 'doi' | 'isbn' | 'url' | 'bibtex' | 'arxiv' | 'title' | 'manual'
 
 interface RefEntry {
   id: string
@@ -80,12 +80,28 @@ const MODES: {
     multiline: false,
   },
   {
+    id: 'title',
+    label: 'Title',
+    icon: Search,
+    placeholder: 'Dendritic mRNA: transport, translation and function',
+    hint: 'Searches CrossRef by title and fetches the best-matching work (free, no API key). Verify the result — the closest match is returned.',
+    multiline: false,
+  },
+  {
     id: 'bibtex',
     label: 'BibTeX',
     icon: FileText,
     placeholder: `@article{smith2020,\n  author  = {Smith, John A.},\n  title   = {The role of context in understanding},\n  journal = {Psychological Review},\n  year    = {2020},\n  volume  = {127},\n  number  = {3},\n  pages   = {411--430},\n  doi     = {10.1037/rev0000186}\n}`,
     hint: 'Processed entirely offline — no network request made.',
     multiline: true,
+  },
+  {
+    id: 'manual',
+    label: 'Manual',
+    icon: Pencil,
+    placeholder: '',
+    hint: 'Enter the reference details by hand — useful for sources that cannot be fetched automatically (e.g. JSTOR, print-only works, or items without a DOI).',
+    multiline: false,
   },
 ]
 
@@ -97,14 +113,22 @@ function RefCard({
   onDelete,
   copiedId,
   onCopy,
+  highlighted,
 }: {
   index: number
   entry: RefEntry
   onDelete: () => void
   copiedId: string | null
   onCopy: (text: string, id: string) => void
+  highlighted: boolean
 }) {
   const [expanded, setExpanded] = useState(false)
+  const cardRef = useRef<HTMLDivElement>(null)
+
+  // Bring a freshly added / duplicate-matched card into view.
+  useEffect(() => {
+    if (highlighted) cardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }, [highlighted])
 
   const refHtml  = referenceToHtml(entry.reference)
   const refPlain = referencePlainText(entry.reference)
@@ -131,7 +155,15 @@ function RefCard({
   }
 
   return (
-    <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+    <div
+      ref={cardRef}
+      className={clsx(
+        'rounded-xl shadow-sm overflow-hidden transition-all duration-700',
+        highlighted
+          ? 'bg-yellow-50 border border-yellow-300 ring-2 ring-yellow-300'
+          : 'bg-white border border-gray-200',
+      )}
+    >
       <div className="px-5 py-4">
         <div className="flex items-start gap-3">
           {/* Number */}
@@ -216,6 +248,14 @@ function RefCard({
             <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full font-medium capitalize">
               {entry.meta.type}
             </span>
+            {entry.meta.source && (
+              <>
+                <span className="text-xs text-gray-400 ml-2">Source:</span>
+                <span className="text-xs bg-gray-200 text-gray-700 px-2 py-0.5 rounded-full font-medium">
+                  {entry.meta.source}
+                </span>
+              </>
+            )}
           </div>
         </div>
       )}
@@ -223,28 +263,307 @@ function RefCard({
   )
 }
 
+// ── Manual entry ──────────────────────────────────────────────────────────────
+
+/** Parse a free-text author list into Author[]. */
+function parseAuthorsInput(raw: string): Author[] {
+  return raw
+    .split(/\r?\n|;/)
+    .map(s => s.trim())
+    .filter(Boolean)
+    .map<Author>(line => {
+      const idx = line.indexOf(',')
+      if (idx >= 0) {
+        // "Last, First M." → inverted personal author
+        return { last: line.slice(0, idx).trim(), first: line.slice(idx + 1).trim() }
+      }
+      // No comma → group / organisation author (kept whole, not inverted)
+      return { last: line, first: '', isOrg: true }
+    })
+}
+
+const TYPE_OPTIONS: { value: RefMeta['type']; label: string }[] = [
+  { value: 'article',    label: 'Journal article' },
+  { value: 'book',       label: 'Book' },
+  { value: 'chapter',    label: 'Book chapter' },
+  { value: 'website',    label: 'Web page' },
+  { value: 'conference', label: 'Conference paper' },
+  { value: 'report',     label: 'Report' },
+  { value: 'thesis',     label: 'Thesis / dissertation' },
+  { value: 'misc',       label: 'Other' },
+]
+
+const EMPTY_FORM = {
+  type: 'article' as RefMeta['type'],
+  authors: '', year: '', title: '',
+  journal: '', volume: '', issue: '', pages: '',
+  doi: '', url: '',
+  edition: '', publisher: '',
+  editors: '', bookTitle: '', chapterPages: '',
+  siteName: '', month: '', day: '',
+  conference: '', conferencePages: '',
+  institution: '', thesisType: '',
+  reportNumber: '', reportType: '',
+}
+
+type FormState = typeof EMPTY_FORM
+
+function ManualForm({ onAdd }: { onAdd: (meta: RefMeta) => 'added' | 'duplicate' }) {
+  const [f, setF]     = useState<FormState>({ ...EMPTY_FORM })
+  const [err, setErr] = useState('')
+  const [added, setAdded] = useState(false)
+
+  const set = (k: keyof FormState) =>
+    (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) =>
+      setF(prev => ({ ...prev, [k]: e.target.value }))
+
+  // Rendered as a function (not a nested component) so inputs keep focus on re-render.
+  const field = (label: string, k: keyof FormState, placeholder = '', full = false) => (
+    <div className={full ? 'sm:col-span-2' : ''}>
+      <label className="block text-xs font-medium text-gray-500 mb-1">{label}</label>
+      <input
+        className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+        placeholder={placeholder}
+        value={f[k]}
+        onChange={set(k)}
+      />
+    </div>
+  )
+
+  const submit = () => {
+    if (!f.title.trim()) { setErr('Title is required.'); return }
+
+    const meta: RefMeta = {
+      type:    f.type,
+      authors: parseAuthorsInput(f.authors),
+      year:    f.year.trim() || 'n.d.',
+      title:   f.title.trim(),
+    }
+    const put = (k: keyof RefMeta, v: string) => {
+      const t = v.trim()
+      if (t) (meta as unknown as Record<string, unknown>)[k] = t
+    }
+    const eds = parseAuthorsInput(f.editors)
+    if (eds.length) meta.editors = eds
+
+    switch (f.type) {
+      case 'article':
+        put('journal', f.journal); put('volume', f.volume); put('issue', f.issue)
+        put('pages', f.pages); put('doi', f.doi); put('url', f.url)
+        break
+      case 'book':
+        put('edition', f.edition); put('publisher', f.publisher)
+        put('doi', f.doi); put('url', f.url)
+        break
+      case 'chapter':
+        put('bookTitle', f.bookTitle); put('chapterPages', f.chapterPages)
+        put('publisher', f.publisher); put('doi', f.doi); put('url', f.url)
+        break
+      case 'website':
+        put('siteName', f.siteName); put('month', f.month); put('day', f.day)
+        put('url', f.url)
+        break
+      case 'conference':
+        put('conference', f.conference); put('conferencePages', f.conferencePages)
+        put('publisher', f.publisher); put('doi', f.doi); put('url', f.url)
+        break
+      case 'report':
+        put('reportType', f.reportType); put('reportNumber', f.reportNumber)
+        put('institution', f.institution); put('doi', f.doi); put('url', f.url)
+        break
+      case 'thesis':
+        put('thesisType', f.thesisType); put('institution', f.institution)
+        put('doi', f.doi); put('url', f.url)
+        break
+      case 'misc':
+        put('publisher', f.publisher); put('url', f.url)
+        break
+    }
+
+    if (onAdd(meta) === 'duplicate') {
+      setErr('This reference is already in your list — highlighted in the list below.')
+      return
+    }
+    setF({ ...EMPTY_FORM, type: f.type })   // keep the chosen type for repeated entry
+    setErr('')
+    setAdded(true)
+    setTimeout(() => setAdded(false), 2000)
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* Type + common fields */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div>
+          <label className="block text-xs font-medium text-gray-500 mb-1">Reference type</label>
+          <select
+            className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+            value={f.type}
+            onChange={set('type')}
+          >
+            {TYPE_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </select>
+        </div>
+        {field('Year', 'year', 'e.g. 1994  (blank → n.d.)')}
+
+        <div className="sm:col-span-2">
+          <label className="block text-xs font-medium text-gray-500 mb-1">Authors</label>
+          <textarea
+            className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-y min-h-[64px]"
+            placeholder={'Longobardi, Giuseppe\nSmith, Jane A.'}
+            value={f.authors}
+            onChange={set('authors')}
+          />
+          <p className="text-xs text-gray-400 mt-1">
+            One author per line as <code className="bg-gray-100 px-1 rounded">Last, First M.</code> ·
+            for a group/organisation, type the full name with no comma.
+          </p>
+        </div>
+
+        {field('Title', 'title', 'Title of the work', true)}
+      </div>
+
+      {/* Type-specific fields */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1 border-t border-gray-100">
+        {f.type === 'article' && (<>
+          {field('Journal', 'journal', 'e.g. Linguistic Inquiry', true)}
+          {field('Volume', 'volume', 'e.g. 25')}
+          {field('Issue', 'issue', 'e.g. 4')}
+          {field('Pages', 'pages', 'e.g. 609-665')}
+          {field('DOI', 'doi', 'e.g. 10.1037/rev0000186')}
+          {field('URL (if no DOI)', 'url', 'e.g. http://www.jstor.org/stable/4178880', true)}
+        </>)}
+
+        {f.type === 'book' && (<>
+          {field('Editors (if edited)', 'editors', 'Sternberg, Robert J.', true)}
+          {field('Edition', 'edition', 'e.g. 2')}
+          {field('Publisher', 'publisher', 'e.g. Harvard University Press')}
+          {field('DOI', 'doi')}
+          {field('URL (if no DOI)', 'url', '', true)}
+        </>)}
+
+        {f.type === 'chapter' && (<>
+          {field('Editors', 'editors', 'Sternberg, Robert J.; Kaufman, Scott B.', true)}
+          {field('Book title', 'bookTitle', 'Title of the edited book', true)}
+          {field('Chapter pages', 'chapterPages', 'e.g. 45-67')}
+          {field('Publisher', 'publisher')}
+          {field('DOI', 'doi')}
+          {field('URL (if no DOI)', 'url')}
+        </>)}
+
+        {f.type === 'website' && (<>
+          {field('Site name', 'siteName', 'e.g. World Health Organization', true)}
+          {field('Month', 'month', 'e.g. March')}
+          {field('Day', 'day', 'e.g. 15')}
+          {field('URL', 'url', 'https://…', true)}
+        </>)}
+
+        {f.type === 'conference' && (<>
+          {field('Proceedings / conference name', 'conference', '', true)}
+          {field('Pages', 'conferencePages', 'e.g. 12-20')}
+          {field('Publisher', 'publisher')}
+          {field('DOI', 'doi')}
+          {field('URL (if no DOI)', 'url')}
+        </>)}
+
+        {f.type === 'report' && (<>
+          {field('Report type', 'reportType', 'e.g. Technical report')}
+          {field('Report number', 'reportNumber', 'e.g. 42')}
+          {field('Institution', 'institution', '', true)}
+          {field('DOI', 'doi')}
+          {field('URL (if no DOI)', 'url')}
+        </>)}
+
+        {f.type === 'thesis' && (<>
+          {field('Thesis type', 'thesisType', "e.g. Doctoral dissertation")}
+          {field('Institution', 'institution', 'e.g. University of California')}
+          {field('DOI', 'doi')}
+          {field('URL (if no DOI)', 'url')}
+        </>)}
+
+        {f.type === 'misc' && (<>
+          {field('Publisher', 'publisher', '', true)}
+          {field('URL', 'url', '', true)}
+        </>)}
+      </div>
+
+      {err && (
+        <div className="flex items-start gap-2 text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg p-3">
+          <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+          <span>{err}</span>
+        </div>
+      )}
+
+      <div className="flex items-center justify-between gap-4">
+        <p className="text-xs text-gray-400 flex-1">
+          Sentence case, author inversion, and italics are applied automatically.
+        </p>
+        <button
+          onClick={submit}
+          className="flex items-center gap-2 px-5 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 whitespace-nowrap"
+        >
+          {added
+            ? <><Check className="w-4 h-4" /> Added</>
+            : <><Plus className="w-4 h-4" /> Add Reference</>}
+        </button>
+      </div>
+    </div>
+  )
+}
+
 // ── Main page ─────────────────────────────────────────────────────────────────
+
+/** Stable key for detecting duplicate references (by DOI, else title+year). */
+function dedupKey(meta: RefMeta): string {
+  if (meta.doi) {
+    return 'doi:' + meta.doi.toLowerCase()
+      .replace(/^https?:\/\/(dx\.)?doi\.org\//, '')
+      .trim()
+  }
+  const t = (meta.title || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
+  return 'ttl:' + t + '|' + (meta.year || '')
+}
 
 export default function ReferencesPage() {
   const [mode, setMode]       = useState<InputMode>('doi')
   const [value, setValue]     = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError]     = useState('')
+  const [notice, setNotice]   = useState('')
   const [refs, setRefs]       = useState<RefEntry[]>([])
+  const [highlightId, setHighlightId] = useState<string | null>(null)
+  const highlightTimer = useRef<number | null>(null)
   const { copiedId, copy }    = useCopy()
 
   const currentMode = MODES.find(m => m.id === mode)!
 
-  const addMeta = (meta: RefMeta) => {
+  // Flash a card yellow for a few seconds, then fade.
+  const flash = (id: string) => {
+    setHighlightId(id)
+    if (highlightTimer.current) window.clearTimeout(highlightTimer.current)
+    highlightTimer.current = window.setTimeout(() => setHighlightId(null), 4000)
+  }
+
+  /** Add a reference unless an identical one already exists. */
+  const addMeta = (meta: RefMeta): 'added' | 'duplicate' => {
+    const key      = dedupKey(meta)
+    const existing = refs.find(r => dedupKey(r.meta) === key)
+    if (existing) {
+      flash(existing.id)
+      return 'duplicate'
+    }
+    const id = crypto.randomUUID()
     setRefs(prev => [
       ...prev,
       {
-        id:        crypto.randomUUID(),
+        id,
         meta,
         reference: formatReference(meta),
         citation:  formatInTextCitation(meta),
       },
     ])
+    flash(id)
+    return 'added'
   }
 
   const deleteRef = (id: string) => setRefs(prev => prev.filter(r => r.id !== id))
@@ -256,7 +575,7 @@ export default function ReferencesPage() {
   const resolve = async () => {
     const trimmed = value.trim()
     if (!trimmed) return
-    setError(''); setLoading(true)
+    setError(''); setNotice(''); setLoading(true)
     try {
       if (mode === 'bibtex') {
         const metas = bibtexToMetas(trimmed)
@@ -264,15 +583,21 @@ export default function ReferencesPage() {
           setError('No valid BibTeX entries found. Check the format and try again.')
           return
         }
-        metas.forEach(addMeta)
+        let added = 0, dup = 0
+        metas.forEach(m => { addMeta(m) === 'added' ? added++ : dup++ })
         setValue('')
+        if (dup > 0) setNotice(`${added} added · ${dup} already in your list.`)
       } else if (mode === 'arxiv') {
         const r = await api.post('/references/resolve', { type: 'arxiv', value: trimmed })
-        addMeta(r.data as RefMeta)
+        if (addMeta(r.data as RefMeta) === 'duplicate') {
+          setNotice('This reference is already in your list — highlighted below.')
+        }
         setValue('')
       } else {
         const r = await api.post('/references/resolve', { type: mode, value: trimmed })
-        addMeta(r.data as RefMeta)
+        if (addMeta(r.data as RefMeta) === 'duplicate') {
+          setNotice('This reference is already in your list — highlighted below.')
+        }
         setValue('')
       }
     } catch (e: unknown) {
@@ -314,7 +639,7 @@ export default function ReferencesPage() {
         <div>
           <h1 className="text-2xl font-bold text-gray-900">APA7 Reference Formatter</h1>
           <p className="text-sm text-gray-500 mt-0.5">
-            Generate correctly formatted APA 7th edition citations and references from DOI, ISBN, URL, or BibTeX.
+            Generate correctly formatted APA 7th edition citations and references from DOI, ISBN, URL, title search, BibTeX, or manual entry.
           </p>
         </div>
       </div>
@@ -335,7 +660,7 @@ export default function ReferencesPage() {
           {MODES.map(tab => (
             <button
               key={tab.id}
-              onClick={() => { setMode(tab.id); setValue(''); setError('') }}
+              onClick={() => { setMode(tab.id); setValue(''); setError(''); setNotice('') }}
               className={clsx(
                 'flex items-center gap-2 px-5 py-3.5 text-sm font-medium border-b-2 whitespace-nowrap transition-colors',
                 mode === tab.id
@@ -350,45 +675,59 @@ export default function ReferencesPage() {
         </div>
 
         <div className="p-5">
-          {currentMode.multiline ? (
-            <textarea
-              className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500 resize-y min-h-[160px]"
-              placeholder={currentMode.placeholder}
-              value={value}
-              onChange={e => setValue(e.target.value)}
-            />
+          {mode === 'manual' ? (
+            <ManualForm onAdd={addMeta} />
           ) : (
-            <input
-              className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              placeholder={currentMode.placeholder}
-              value={value}
-              onChange={e => setValue(e.target.value)}
-              onKeyDown={e => e.key === 'Enter' && !loading && resolve()}
-            />
-          )}
+            <>
+              {currentMode.multiline ? (
+                <textarea
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500 resize-y min-h-[160px]"
+                  placeholder={currentMode.placeholder}
+                  value={value}
+                  onChange={e => setValue(e.target.value)}
+                />
+              ) : (
+                <input
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  placeholder={currentMode.placeholder}
+                  value={value}
+                  onChange={e => setValue(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && !loading && resolve()}
+                />
+              )}
 
-          {/* Error message */}
-          {error && (
-            <div className="mt-3 flex items-start gap-2 text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg p-3">
-              <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
-              <span>{error}</span>
-            </div>
-          )}
+              {/* Error message */}
+              {error && (
+                <div className="mt-3 flex items-start gap-2 text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg p-3">
+                  <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                  <span>{error}</span>
+                </div>
+              )}
 
-          {/* Footer row */}
-          <div className="mt-4 flex items-center justify-between gap-4">
-            <p className="text-xs text-gray-400 flex-1">{currentMode.hint}</p>
-            <button
-              onClick={resolve}
-              disabled={loading || !value.trim()}
-              className="flex items-center gap-2 px-5 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 whitespace-nowrap"
-            >
-              {loading
-                ? <><Loader2 className="w-4 h-4 animate-spin" /> Resolving…</>
-                : <><Plus className="w-4 h-4" /> {mode === 'bibtex' ? 'Parse BibTeX' : 'Get Reference'}</>
-              }
-            </button>
-          </div>
+              {/* Informational notice (duplicates, batch results) */}
+              {notice && (
+                <div className="mt-3 flex items-start gap-2 text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-3">
+                  <Info className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                  <span>{notice}</span>
+                </div>
+              )}
+
+              {/* Footer row */}
+              <div className="mt-4 flex items-center justify-between gap-4">
+                <p className="text-xs text-gray-400 flex-1">{currentMode.hint}</p>
+                <button
+                  onClick={resolve}
+                  disabled={loading || !value.trim()}
+                  className="flex items-center gap-2 px-5 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 whitespace-nowrap"
+                >
+                  {loading
+                    ? <><Loader2 className="w-4 h-4 animate-spin" /> Resolving…</>
+                    : <><Plus className="w-4 h-4" /> {mode === 'bibtex' ? 'Parse BibTeX' : 'Get Reference'}</>
+                  }
+                </button>
+              </div>
+            </>
+          )}
         </div>
       </div>
 
@@ -433,6 +772,7 @@ export default function ReferencesPage() {
               onDelete={() => deleteRef(ref.id)}
               copiedId={copiedId}
               onCopy={copy}
+              highlighted={ref.id === highlightId}
             />
           ))}
         </div>

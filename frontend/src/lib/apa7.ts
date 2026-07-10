@@ -64,6 +64,9 @@ export interface RefMeta {
   // Report
   reportNumber?: string
   reportType?: string     // "Technical report" | custom
+
+  // Provenance — which engine supplied the metadata (e.g. "Crossref", "OpenAlex")
+  source?: string
 }
 
 // ── Case helpers ──────────────────────────────────────────────────────────────
@@ -97,23 +100,84 @@ export function toTitleCase(str: string): string {
 }
 
 /**
+ * Languages, nationalities and proper linguistic/geographic adjectives that are
+ * ALWAYS capitalised in English, even mid-sentence. Sentence-casing a title must
+ * not lower-case these (e.g. "…reference to Hungarian)" must stay "Hungarian").
+ */
+const PROPER_NOUNS = new Set<string>([
+  'english', 'french', 'german', 'germanic', 'spanish', 'italian', 'portuguese',
+  'dutch', 'flemish', 'russian', 'polish', 'czech', 'slovak', 'slovenian',
+  'croatian', 'serbian', 'bulgarian', 'romanian', 'hungarian', 'finnish',
+  'estonian', 'latvian', 'lithuanian', 'turkish', 'greek', 'latin', 'hebrew',
+  'arabic', 'persian', 'chinese', 'mandarin', 'cantonese', 'japanese', 'korean',
+  'vietnamese', 'thai', 'indonesian', 'malay', 'hindi', 'urdu', 'bengali',
+  'tamil', 'swahili', 'basque', 'catalan', 'galician', 'welsh', 'irish', 'gaelic',
+  'scottish', 'icelandic', 'norwegian', 'swedish', 'danish', 'romance', 'slavic',
+  'semitic', 'celtic', 'baltic', 'european', 'american', 'african', 'asian',
+  'british', 'australian', 'canadian', 'mexican', 'brazilian', 'roman', 'greco',
+])
+
+/**
  * Sentence Case — used for article titles, chapter titles, thesis titles.
  * Rules:
  *   • Only the first word of the title is capitalised.
  *   • The first word after a colon ( : ), em-dash (—/–), or question mark is capitalised.
- *   • Everything else is lowercased.
+ *   • Everything else is lowercased — EXCEPT words that carry meaningful
+ *     capitalisation (acronyms / brand names) such as "mRNA", "DNA", "iOS",
+ *     "COVID-19", "U.S.". These keep their original casing so e.g.
+ *     "Dendritic mRNA: transport" → "Dendritic mRNA: Transport".
  *
- * ⚠ Proper nouns cannot be auto-detected — users should review after applying.
+ * ⚠ Proper nouns written in ordinary case (e.g. "France", "N-movement") cannot
+ *   be auto-detected — users should review after applying.
  */
 export function toSentenceCase(str: string): string {
   if (!str) return ''
-  // Lowercase the entire string first
-  let result = str.toLowerCase()
-  // Capitalise the very first character
-  result = result.charAt(0).toUpperCase() + result.slice(1)
-  // Capitalise the first letter after ": ", "— ", "– ", "? "
-  result = result.replace(/([:—–?]\s+)([a-z])/g, (_, sep, ch) => sep + ch.toUpperCase())
-  return result
+
+  // Split on whitespace but keep the separators so spacing is preserved.
+  const tokens = str.split(/(\s+)/)
+  let capitaliseNext = true   // first significant word starts capitalised
+
+  const out = tokens.map(tok => {
+    if (tok === '' || /^\s+$/.test(tok)) return tok
+
+    // Languages / nationalities (Hungarian, English, Germanic…) are always
+    // capitalised in English, even mid-sentence — restore proper case.
+    const lowerCore = tok.replace(/^[^A-Za-z0-9]+/, '').replace(/[^A-Za-z0-9]+$/, '').toLowerCase()
+    if (PROPER_NOUNS.has(lowerCore)) {
+      const w = tok.toLowerCase().replace(/[a-z]/, c => c.toUpperCase())
+      capitaliseNext = /[:—–?]$/.test(tok)
+      return w
+    }
+
+    const preserve = preserveWordCase(tok)
+    let w = preserve ? tok : tok.toLowerCase()
+
+    // Capitalise the first alphabetic character of the word when required,
+    // unless the word carries its own meaningful casing (acronym/brand).
+    if (capitaliseNext && !preserve) {
+      w = w.replace(/[a-z]/, c => c.toUpperCase())
+    }
+
+    // The next word is capitalised when this token ends a sub-clause.
+    capitaliseNext = /[:—–?]$/.test(tok)
+    return w
+  })
+
+  return out.join('')
+}
+
+/**
+ * Decide whether a word should keep its original capitalisation rather than be
+ * lower-cased. True for acronyms and mixed-case brand/technical terms.
+ */
+function preserveWordCase(word: string): boolean {  // Strip surrounding punctuation (quotes, brackets, trailing colon/period…)
+  const core = word.replace(/^[^A-Za-z0-9]+/, '').replace(/[^A-Za-z0-9]+$/, '')
+  if (core.length < 2) return false
+  // Uppercase letter anywhere after the first char → mixed case (mRNA, iOS, McDonald, U.S.)
+  if (/[A-Z]/.test(core.slice(1))) return true
+  // Entirely uppercase (optionally with digits/hyphens) → acronym (DNA, HIV, COVID-19)
+  if (/^[A-Z0-9-]+$/.test(core) && /[A-Z]/.test(core)) return true
+  return false
 }
 
 /** Capitalise first letter of a word; preserve rest as-is (for acronyms). */
@@ -198,6 +262,27 @@ function formatEditorList(editors: Author[]): string {
   return `${formatted.join(', ')}, & ${last} (${label})`
 }
 
+/** Format a name in standard (non-inverted) order: "F. M. Last". */
+function formatNameStandard(a: Author): string {
+  if (a.isOrg) return a.last
+  const initials = toInitials(a.first)
+  const suffix   = a.suffix ? ` ${a.suffix}` : ''
+  return initials ? `${initials} ${a.last}${suffix}` : `${a.last}${suffix}`
+}
+
+/**
+ * Editors in the "In … (Eds.)," position of a chapter reference — names are NOT
+ * inverted per APA7 §10.3, e.g. "R. J. Sternberg & S. B. Kaufman (Eds.)".
+ */
+function formatEditorsInline(editors: Author[]): string {
+  if (editors.length === 0) return ''
+  const formatted = editors.map(formatNameStandard)
+  const label     = editors.length === 1 ? 'Ed.' : 'Eds.'
+  if (formatted.length === 1) return `${formatted[0]} (${label})`
+  const last = formatted.pop()!
+  return `${formatted.join(', ')}, & ${last} (${label})`
+}
+
 // ── In-text citation ──────────────────────────────────────────────────────────
 
 /**
@@ -212,9 +297,13 @@ export function formatInTextCitation(meta: RefMeta): string {
 
   let authorPart: string
   if (authors.length === 0) {
-    // Use italicised short title for no-author works
-    const shortTitle = meta.title.split(/\s+/).slice(0, 4).join(' ')
-    authorPart = `*${toTitleCase(shortTitle)}*`
+    // APA7 §8.14: cite the first few words of the title. Italicise titles that
+    // are italic in the reference (books, reports, webpages, theses,
+    // proceedings); use quotation marks for those that are not (journal
+    // articles, book chapters).
+    const shortTitle  = toTitleCase(meta.title.split(/\s+/).slice(0, 4).join(' '))
+    const italicTitle = meta.type !== 'article' && meta.type !== 'chapter'
+    authorPart = italicTitle ? `*${shortTitle}*` : `"${shortTitle}"`
   } else if (authors.length === 1) {
     authorPart = authors[0].isOrg ? authors[0].last : authors[0].last
   } else if (authors.length === 2) {
@@ -244,6 +333,17 @@ function normalisePages(pages: string): string {
 
 // ── Reference builders ────────────────────────────────────────────────────────
 
+/**
+ * Join the author element to the following segment with a single period.
+ * APA7: when the author element already ends with a period (e.g. an initial
+ * "K. Y." or "Inc."), do not add a second one — avoids "K. Y.. (2020)".
+ */
+function joinAuthorYear(authorStr: string, yearStr: string): string {
+  if (!authorStr) return yearStr
+  const sep = authorStr.endsWith('.') ? ' ' : '. '
+  return `${authorStr}${sep}${yearStr}`
+}
+
 /** Shared: author + year opener — e.g. "Smith, J. A. (2020)." */
 function opener(m: RefMeta): string {
   const authorStr = formatAuthorList(m.authors)
@@ -251,14 +351,14 @@ function opener(m: RefMeta): string {
     m.month && m.day   ? `(${m.year}, ${m.month} ${m.day}).` :
     m.month            ? `(${m.year}, ${m.month}).` :
                          `(${m.year}).`
-  return authorStr ? `${authorStr}. ${yearStr}` : yearStr
+  return joinAuthorYear(authorStr, yearStr)
 }
 
 /** Article in a journal / periodical */
 function buildArticle(m: RefMeta): string {
-  const parts: string[] = [opener(m)]
-
-  parts.push(toSentenceCase(m.title) + '.')
+  const titleStr = toSentenceCase(m.title) + '.'
+  // APA7 §9.12: when there is no author the title moves to the author position.
+  const parts: string[] = m.authors.length ? [opener(m), titleStr] : [titleStr, opener(m)]
 
   if (m.journal) {
     let source = `*${toTitleCase(m.journal)}*`
@@ -285,13 +385,14 @@ function buildBook(m: RefMeta): string {
     : formatAuthorList(authors)
 
   const yearStr   = `(${m.year}).`
-  const openerStr = authorStr ? `${authorStr}. ${yearStr}` : yearStr
+  const openerStr = joinAuthorYear(authorStr, yearStr)
 
   let titleStr = `*${toSentenceCase(m.title)}*`
   if (m.edition) titleStr += ` (${ordinal(m.edition)} ed.)`
   titleStr += '.'
 
-  const parts = [openerStr, titleStr]
+  // APA7 §9.12: title leads when there is no author/editor name element.
+  const parts = authorStr ? [openerStr, titleStr] : [titleStr, openerStr]
 
   const pub = [m.publisher].filter(Boolean).join('')
   if (pub) parts.push(pub + '.')
@@ -304,13 +405,16 @@ function buildBook(m: RefMeta): string {
 
 /** Chapter in an edited book */
 function buildChapter(m: RefMeta): string {
-  const parts = [opener(m)]
-
-  parts.push(toSentenceCase(m.title) + '.')
+  const titleStr = toSentenceCase(m.title) + '.'
+  // APA7 §10.3: chapters in edited books use the year only (no month).
+  const openerStr = joinAuthorYear(formatAuthorList(m.authors), `(${m.year}).`)
+  // APA7 §9.12: title leads when there is no author.
+  const parts: string[] = m.authors.length ? [openerStr, titleStr] : [titleStr, openerStr]
 
   let inStr = 'In '
   if (m.editors && m.editors.length > 0) {
-    inStr += `${formatEditorList(m.editors)}, `
+    // APA7 §10.3: editors in the "In …" position are NOT inverted.
+    inStr += `${formatEditorsInline(m.editors)}, `
   }
   inStr += `*${toSentenceCase(m.bookTitle ?? 'Unknown book')}*`
   if (m.chapterPages) inStr += ` (pp. ${normalisePages(m.chapterPages)})`
@@ -327,10 +431,14 @@ function buildChapter(m: RefMeta): string {
 
 /** Web page / online resource */
 function buildWebsite(m: RefMeta): string {
-  const parts = [opener(m)]
+  const hasAuthor = m.authors.length > 0
+  const titleStr  = `*${toSentenceCase(m.title)}*.`
 
-  // APA7 §9.32: webpage title is italicised, sentence case
-  parts.push(`*${toSentenceCase(m.title)}*.`)
+  // APA7 §9.12: with no author, the title moves to the author position and
+  // therefore precedes the date — "*Title*. (Year). Site Name. URL".
+  const parts: string[] = hasAuthor
+    ? [opener(m), titleStr]                    // Author. (Date). *Title*.
+    : [titleStr, opener(m)]                    // *Title*. (Date).
 
   // APA7 §9.32 note: omit site name when the sole author is the same organisation
   // e.g. World Health Organization → skip "World Health Organization." as site name
@@ -356,9 +464,8 @@ function buildWebsite(m: RefMeta): string {
 
 /** Conference paper / proceedings article */
 function buildConference(m: RefMeta): string {
-  const parts = [opener(m)]
-
-  parts.push(toSentenceCase(m.title) + '.')
+  const titleStr = toSentenceCase(m.title) + '.'
+  const parts: string[] = m.authors.length ? [opener(m), titleStr] : [titleStr, opener(m)]
 
   if (m.conference) {
     let confStr = `In *${toTitleCase(m.conference)}*`
@@ -377,14 +484,13 @@ function buildConference(m: RefMeta): string {
 
 /** Technical / institutional report */
 function buildReport(m: RefMeta): string {
-  const parts = [opener(m)]
-
   let titleStr = `*${toSentenceCase(m.title)}*`
   const rInfo = [m.reportType, m.reportNumber ? `No. ${m.reportNumber}` : null]
     .filter(Boolean).join(', ')
   if (rInfo) titleStr += ` (${rInfo})`
   titleStr += '.'
-  parts.push(titleStr)
+  // APA7 §9.12: title leads when there is no author.
+  const parts: string[] = m.authors.length ? [opener(m), titleStr] : [titleStr, opener(m)]
 
   if (m.institution) parts.push(m.institution + '.')
 
@@ -396,13 +502,12 @@ function buildReport(m: RefMeta): string {
 
 /** PhD / Master's thesis or dissertation */
 function buildThesis(m: RefMeta): string {
-  const parts = [opener(m)]
-
   let titleStr = `*${toSentenceCase(m.title)}*`
   const tInfo = [m.thesisType, m.institution].filter(Boolean).join(', ')
   if (tInfo) titleStr += ` [${tInfo}]`
   titleStr += '.'
-  parts.push(titleStr)
+  // APA7 §9.12: title leads when there is no author.
+  const parts: string[] = m.authors.length ? [opener(m), titleStr] : [titleStr, opener(m)]
 
   if (m.doi) parts.push(normaliseDoi(m.doi))
   else if (m.url) parts.push(m.url)
@@ -412,8 +517,8 @@ function buildThesis(m: RefMeta): string {
 
 /** Misc / unknown type */
 function buildMisc(m: RefMeta): string {
-  const parts = [opener(m)]
-  parts.push(toSentenceCase(m.title) + '.')
+  const titleStr = toSentenceCase(m.title) + '.'
+  const parts: string[] = m.authors.length ? [opener(m), titleStr] : [titleStr, opener(m)]
   if (m.publisher) parts.push(m.publisher + '.')
   if (m.doi) parts.push(normaliseDoi(m.doi))
   else if (m.url) parts.push(m.url)

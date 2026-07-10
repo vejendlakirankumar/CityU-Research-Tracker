@@ -2257,6 +2257,7 @@ function DocCompareViewer({
 
 function DocumentsTab({ sub, canEdit }: { sub: Submission; canEdit: boolean }) {
   const qc = useQueryClient()
+  const toast = useToastHelpers()
   const [viewingDoc, setViewingDoc] = useState<ViewingDoc | null>(null)
   const [showCompare, setShowCompare] = useState(false)
   const [showUploadForm, setShowUploadForm] = useState(false)
@@ -2264,6 +2265,7 @@ function DocumentsTab({ sub, canEdit }: { sub: Submission; canEdit: boolean }) {
   const [changeSummary, setChangeSummary] = useState('')
   const [uploadError, setUploadError] = useState('')
   const [isUploading, setIsUploading] = useState(false)
+  const [openingFileKey, setOpeningFileKey] = useState<string | null>(null)
 
   const allowedExts = sub.submission_type?.allowed_extensions ?? ['pdf', 'docx']
   const maxSizeMb   = sub.submission_type?.max_file_size_mb ?? 8
@@ -2306,6 +2308,45 @@ function DocumentsTab({ sub, canEdit }: { sub: Submission; canEdit: boolean }) {
     })
   })
   const canCompare = docxFiles.length >= 2
+
+  const detectStoredFileType = async (apiDownloadPath: string, ext: string): Promise<'pdf' | 'docx' | null> => {
+    if (ext === 'pdf' || ext === 'docx') return ext
+
+    const res = await api.get(apiDownloadPath, { responseType: 'blob' })
+    const blob = res.data as Blob
+    const mime = blob.type.toLowerCase()
+
+    if (mime.includes('pdf')) return 'pdf'
+    if (mime.includes('wordprocessingml.document')) return 'docx'
+
+    const bytes = new Uint8Array(await blob.slice(0, 4).arrayBuffer())
+    if (bytes[0] === 0x25 && bytes[1] === 0x50 && bytes[2] === 0x44 && bytes[3] === 0x46) return 'pdf'
+    if (bytes[0] === 0x50 && bytes[1] === 0x4b) return 'docx'
+
+    return null
+  }
+
+  const openDocument = async (apiDownloadPath: string, fileKey: string, filename: string, ext: string, versionNumber: number) => {
+    setOpeningFileKey(fileKey)
+    try {
+      const fileType = await detectStoredFileType(apiDownloadPath, ext)
+      if (!fileType) {
+        toast.error('Preview unavailable', 'This file type can only be downloaded.')
+        return
+      }
+
+      setViewingDoc({
+        submissionId: sub.id,
+        versionNumber,
+        filename,
+        fileType,
+      })
+    } catch {
+      toast.error('Preview unavailable', 'Could not open the document preview. Please download the file instead.')
+    } finally {
+      setOpeningFileKey(null)
+    }
+  }
 
   return (
     <>
@@ -2453,11 +2494,13 @@ function DocumentsTab({ sub, canEdit }: { sub: Submission; canEdit: boolean }) {
                   <div className="px-4 py-3 bg-white space-y-2">
                     {v.document_paths.map((path, pi) => {
                       const filename = path.split('/').pop() ?? 'file'
-                      const ext = filename.split('.').pop()?.toLowerCase() ?? ''
+                      const ext = filename.includes('.') ? filename.split('.').pop()?.toLowerCase() ?? '' : ''
                       const isPdf = ext === 'pdf'
                       const isDocx = ext === 'docx'
                       const canView = isPdf || isDocx
+                      const canAttemptView = canView || ext === ''
                       const apiDownloadPath = `/submissions/${sub.id}/files/${v.version_number}/${encodeURIComponent(filename)}`
+                      const fileKey = `${v.id}-${pi}`
                       const handleFileDownload = () => {
                         api.get(apiDownloadPath, { responseType: 'blob' }).then(res => {
                           const url = URL.createObjectURL(res.data)
@@ -2473,17 +2516,14 @@ function DocumentsTab({ sub, canEdit }: { sub: Submission; canEdit: boolean }) {
                           <FileText className="w-4 h-4 text-gray-400 flex-shrink-0" />
                           <p className="flex-1 text-sm text-gray-700 truncate min-w-0">{filename}</p>
                           <div className="flex items-center gap-2 flex-shrink-0">
-                            {canView && (
+                            {canAttemptView && (
                               <button
-                                onClick={() => setViewingDoc({
-                                  submissionId: sub.id,
-                                  versionNumber: v.version_number,
-                                  filename,
-                                  fileType: isPdf ? 'pdf' : 'docx',
-                                })}
+                                onClick={() => openDocument(apiDownloadPath, fileKey, filename, ext, v.version_number)}
+                                disabled={openingFileKey === fileKey}
                                 className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-200 rounded-lg text-xs text-gray-700 hover:bg-blue-50 hover:border-blue-200 hover:text-blue-700 transition-colors"
                               >
-                                <Eye className="w-3.5 h-3.5" /> View
+                                {openingFileKey === fileKey ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Eye className="w-3.5 h-3.5" />}
+                                View
                               </button>
                             )}
                             <button

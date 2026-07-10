@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import type { AuthUser } from '../types/auth'
+import { queryClient } from '../lib/queryClient'
 
 interface AuthState {
   user: AuthUser | null
@@ -22,11 +23,17 @@ export const useAuthStore = create<AuthState>()((set) => ({
   profileOpen: false,
 
   setAuth: (user, token) => {
+    // Drop any cached query data belonging to a previous session so a newly
+    // authenticated (possibly lower-privilege) user never sees stale data.
+    queryClient.clear()
     sessionStorage.setItem('rrp_token', token)
     set({ user, token })
   },
 
   clearAuth: () => {
+    // Wipe all cached API responses on logout / 401 so the next user cannot
+    // see the previous user's data while React Query revalidates.
+    queryClient.clear()
     sessionStorage.removeItem('rrp_token')
     set({ user: null, token: null })
   },

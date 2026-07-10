@@ -17,6 +17,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 
 class SubmissionController extends Controller
@@ -624,8 +625,27 @@ class SubmissionController extends Controller
         $nextVersion = $submission->versions()->max('version_number') + 1;
         $storedPaths = [];
 
+        $usedNames = [];
         foreach ($request->file('files') as $file) {
-            $path = $file->store("uploads/{$submission->id}/v{$nextVersion}");
+            $originalName = basename($file->getClientOriginalName());
+            $safeName = preg_replace('/[^A-Za-z0-9._-]+/', '_', $originalName) ?: '';
+            $extension = strtolower($file->getClientOriginalExtension());
+
+            if ($safeName === '' || ! str_contains($safeName, '.')) {
+                $safeName = (string) Str::uuid() . ($extension ? ".{$extension}" : '');
+            }
+
+            $base = pathinfo($safeName, PATHINFO_FILENAME) ?: 'document';
+            $ext = pathinfo($safeName, PATHINFO_EXTENSION);
+            $candidate = $safeName;
+            $index = 2;
+            while (in_array(strtolower($candidate), $usedNames, true)) {
+                $candidate = $base . '-' . $index . ($ext ? ".{$ext}" : '');
+                $index++;
+            }
+            $usedNames[] = strtolower($candidate);
+
+            $path = $file->storeAs("uploads/{$submission->id}/v{$nextVersion}", $candidate);
             $storedPaths[] = $path;
         }
 
