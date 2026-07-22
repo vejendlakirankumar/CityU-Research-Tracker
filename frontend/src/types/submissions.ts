@@ -114,6 +114,10 @@ export interface SubmissionReviewer {
   decision: 'approve' | 'reject' | 'revise' | null
   decision_at: string | null
   comments: string | null
+  // Reviewer-uploaded annotated document
+  annotated_document_name: string | null
+  annotated_document_uploaded_at: string | null
+  has_annotated_document: boolean
   // Extension request
   extension_status: 'pending' | 'approved' | 'rejected' | null
   extension_reason: string | null
@@ -206,6 +210,11 @@ export interface FeedbackItem {
   comments: string | null
   reviewer: { name: string } | null
   is_gated_release?: boolean
+  annotated_document?: {
+    reviewer_id: string
+    name: string
+    uploaded_at: string | null
+  } | null
 }
 
 // ── Appeal ────────────────────────────────────────────────────────────────────

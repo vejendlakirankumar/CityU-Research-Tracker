@@ -118,9 +118,9 @@ class WorkflowAdvancer
                 $this->notifyGatekeepers($submission, $stage->name, $outcome);
             } else {
                 // Either:
-                //  a) The gatekeeper stage itself failed — gatekeeper already made this
-                //     decision, so send the revision request directly to the submitter.
-                //  b) Non-gated review — failures always go straight to the submitter.
+                //  a) The gatekeeper stage itself produced the outcome — for gated
+                //     reviews the gatekeeper is the final decision maker.
+                //  b) Non-gated review — the reviewer's decision is final.
                 unset(
                     $metadata['pending_gatekeeper_stage_id'],
                     $metadata['pending_gatekeeper_stage_name'],
@@ -128,8 +128,16 @@ class WorkflowAdvancer
                 );
                 $submission->update(['metadata' => $metadata]);
 
-                $this->transition($submission, Submission::STATUS_REVISION_REQUIRED, 'auto_revision_required');
-                $this->notifySubmitterRevisionRequired($submission, $stage->name, $outcome);
+                if ($outcome === 'FAILED') {
+                    // A rejection is final — the submission is rejected outright.
+                    $this->setCurrentStage($submission, null);
+                    $this->transition($submission, Submission::STATUS_REJECTED, 'auto_rejected');
+                    $this->notifySubmitterFinalDecision($submission, $stage->name);
+                } else {
+                    // Revision requested — send back to the submitter to revise.
+                    $this->transition($submission, Submission::STATUS_REVISION_REQUIRED, 'auto_revision_required');
+                    $this->notifySubmitterRevisionRequired($submission, $stage->name, $outcome);
+                }
             }
             return;
         }
@@ -216,6 +224,26 @@ class WorkflowAdvancer
             'stage_name'       => $stageName,
             'outcome'          => $outcome,
             'note'             => "Reviewers {$outcomeLabel} stage \"{$stageName}\". Please revise and resubmit.",
+        ]);
+    }
+
+    /**
+     * Notify the submitter that their submission has been rejected as a final decision.
+     * Used when a reviewer (non-gated) or the gatekeeper (gated) rejects the submission.
+     */
+    private function notifySubmitterFinalDecision(Submission $submission, string $stageName): void
+    {
+        $submission->loadMissing('submitter');
+        if (!$submission->submitter) {
+            return;
+        }
+
+        app(NotificationService::class)->notify($submission->submitter, Notification::TYPE_STAGE_COMPLETE, [
+            'submission_id'    => $submission->id,
+            'submission_title' => $submission->title,
+            'stage_name'       => $stageName,
+            'outcome'          => 'FAILED',
+            'note'             => "Your submission was rejected at stage \"{$stageName}\".",
         ]);
     }
 

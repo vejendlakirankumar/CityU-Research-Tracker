@@ -316,6 +316,7 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::get('/{id}/reviewer-pool-suggestions',        [SubmissionReviewerController::class, 'poolSuggestions']);
         });
         Route::patch('/{id}/reviewers/{reviewerId}',             [SubmissionReviewerController::class, 'update']);
+        Route::get('/{id}/reviewers/{reviewerId}/annotated-document', [SubmissionReviewerController::class, 'downloadAnnotatedDocument']);
         Route::post('/{id}/reviewers/{reviewerId}/request-extension', [SubmissionReviewerController::class, 'requestExtension'])->middleware('throttle:10,1');
         Route::post('/{id}/reviewers/{reviewerId}/flag-conflict',      [SubmissionReviewerController::class, 'flagConflict'])->middleware('throttle:10,1');
         Route::post('/{id}/reviewers/{reviewerId}/resolve-conflict',   [SubmissionReviewerController::class, 'resolveConflict'])->middleware('throttle:10,1');

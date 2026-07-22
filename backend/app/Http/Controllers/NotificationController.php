@@ -89,7 +89,9 @@ class NotificationController extends Controller
 
     private function titleFor(Notification $n): string
     {
+        $data = $n->data ?? [];
         return match ($n->type) {
+            'announcement'         => $data['title'] ?? 'Announcement',
             'reviewer_assigned'    => 'You have been assigned as a reviewer',
             'decision_submitted'   => 'A reviewer submitted their decision',
             'submission_accepted'  => 'Your submission has been accepted',
@@ -110,6 +112,7 @@ class NotificationController extends Controller
         $stage = $data['stage_name'] ?? null;
 
         return match ($n->type) {
+            'announcement'         => $data['body'] ?? '',
             'reviewer_assigned'    => 'You have been asked to review "' . $title . '"' . ($stage ? ' — ' . $stage . ' stage' : '') . '.',
             'decision_submitted'   => 'A decision was recorded on "' . $title . '"' . ($stage ? ' — ' . $stage . ' stage' : '') . '.',
             'submission_accepted'  => '"' . $title . '" has been accepted.',
@@ -125,6 +128,9 @@ class NotificationController extends Controller
 
     private function linkFor(Notification $n): string|null
     {
+        if ($n->type === 'announcement') {
+            return '/announcements';
+        }
         $submissionId = ($n->data ?? [])['submission_id'] ?? null;
         return $submissionId ? '/submissions/' . $submissionId : null;
     }

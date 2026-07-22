@@ -200,7 +200,7 @@ class GatedReleaseController extends Controller
     {
         $data = $request->validate([
             'submission_id' => ['required', 'uuid'],
-            'decision'      => ['required', 'in:REVISION_REQUIRED'],
+            'decision'      => ['required', 'in:ACCEPTED,CONDITIONALLY_ACCEPTED,REVISION_REQUIRED,REJECTED'],
             'feedback'      => ['required', 'string', 'max:5000'],
         ]);
 
@@ -215,11 +215,19 @@ class GatedReleaseController extends Controller
             ->where('status', Submission::STATUS_PENDING_RELEASE)
             ->findOrFail($data['submission_id']);
 
-        // Gatekeeper can only send consolidated feedback to the submitter.
-        // Accepting / rejecting outright is not permitted — all stages must
-        // pass on their own merits for auto-acceptance, or the gatekeeper
-        // sends back for re-review via the recheck endpoint.
-        $newStatus = Submission::STATUS_REVISION_REQUIRED;
+        // The gatekeeper is the final decision maker for gated reviews. They may
+        // accept, conditionally accept, reject, or send back for revision.
+        $newStatus = match ($data['decision']) {
+            GatedRelease::DECISION_ACCEPTED               => Submission::STATUS_ACCEPTED,
+            GatedRelease::DECISION_CONDITIONALLY_ACCEPTED => Submission::STATUS_CONDITIONALLY_ACCEPTED,
+            GatedRelease::DECISION_REJECTED               => Submission::STATUS_REJECTED,
+            default                                       => Submission::STATUS_REVISION_REQUIRED,
+        };
+        $isTerminal = in_array($newStatus, [
+            Submission::STATUS_ACCEPTED,
+            Submission::STATUS_CONDITIONALLY_ACCEPTED,
+            Submission::STATUS_REJECTED,
+        ], true);
 
         // Clear gatekeeper pending metadata now that a decision is being issued.
         $metadata = $submission->metadata ?? [];
@@ -234,14 +242,19 @@ class GatedReleaseController extends Controller
             'submission_id'   => $submission->id,
             'workflow_run_id' => null,
             'version_number'  => $submission->current_version,
-            'decision'        => GatedRelease::DECISION_REVISION_REQUIRED,
+            'decision'        => $data['decision'],
             'feedback'        => $data['feedback'],
             'released_by'     => $request->user()->id,
             'released_at'     => now(),
         ]);
 
         $oldStatus = $submission->status;
-        $submission->update(['status' => $newStatus]);
+        $submissionUpdate = ['status' => $newStatus];
+        if ($isTerminal) {
+            $submissionUpdate['current_stage_id'] = null;
+            $submissionUpdate['current_stage_entered_at'] = null;
+        }
+        $submission->update($submissionUpdate);
 
         AuditLog::create([
             'submission_id' => $submission->id,
@@ -401,7 +414,7 @@ class GatedReleaseController extends Controller
         }
 
         $data = $request->validate([
-            'decision' => ['required', 'in:REVISION_REQUIRED'],
+            'decision' => ['required', 'in:ACCEPTED,CONDITIONALLY_ACCEPTED,REVISION_REQUIRED,REJECTED'],
             'feedback' => ['required', 'string', 'max:5000'],
         ]);
 
@@ -409,7 +422,19 @@ class GatedReleaseController extends Controller
             ->where('status', Submission::STATUS_PENDING_RELEASE)
             ->findOrFail($submissionId);
 
-        $newStatus = Submission::STATUS_REVISION_REQUIRED;
+        // The gatekeeper is the final decision maker for gated reviews. They may
+        // accept, conditionally accept, reject, or send back for revision.
+        $newStatus = match ($data['decision']) {
+            GatedRelease::DECISION_ACCEPTED               => Submission::STATUS_ACCEPTED,
+            GatedRelease::DECISION_CONDITIONALLY_ACCEPTED => Submission::STATUS_CONDITIONALLY_ACCEPTED,
+            GatedRelease::DECISION_REJECTED               => Submission::STATUS_REJECTED,
+            default                                       => Submission::STATUS_REVISION_REQUIRED,
+        };
+        $isTerminal = in_array($newStatus, [
+            Submission::STATUS_ACCEPTED,
+            Submission::STATUS_CONDITIONALLY_ACCEPTED,
+            Submission::STATUS_REJECTED,
+        ], true);
 
         // Clear gatekeeper pending metadata.
         $metadata = $submission->metadata ?? [];
@@ -424,14 +449,19 @@ class GatedReleaseController extends Controller
             'submission_id'   => $submission->id,
             'workflow_run_id' => null,
             'version_number'  => $submission->current_version,
-            'decision'        => GatedRelease::DECISION_REVISION_REQUIRED,
+            'decision'        => $data['decision'],
             'feedback'        => $data['feedback'],
             'released_by'     => $user->id,
             'released_at'     => now(),
         ]);
 
         $oldStatus = $submission->status;
-        $submission->update(['status' => $newStatus]);
+        $submissionUpdate = ['status' => $newStatus];
+        if ($isTerminal) {
+            $submissionUpdate['current_stage_id'] = null;
+            $submissionUpdate['current_stage_entered_at'] = null;
+        }
+        $submission->update($submissionUpdate);
 
         AuditLog::create([
             'submission_id' => $submission->id,

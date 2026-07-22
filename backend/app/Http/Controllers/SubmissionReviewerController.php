@@ -12,6 +12,7 @@ use App\Services\NotificationService;
 use App\Services\WorkflowAdvancer;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 
 class SubmissionReviewerController extends Controller
@@ -153,6 +154,29 @@ class SubmissionReviewerController extends Controller
             'due_at'   => ['sometimes', 'nullable', 'date'],
             'decision' => ['sometimes', 'nullable', 'in:approve,reject,revise,APPROVE,REJECT,REQUEST_CHANGES'],
             'comments' => ['sometimes', 'nullable', 'string', 'max:10000'],
+            'annotated_document' => [
+                'sometimes',
+                'nullable',
+                'file',
+                'max:25600', // 25 MB
+                function ($attr, $value, $fail) {
+                    $allowedExts = ['pdf', 'doc', 'docx'];
+                    $ext = strtolower($value->getClientOriginalExtension());
+                    if (! in_array($ext, $allowedExts, true)) {
+                        $fail("File extension '.{$ext}' is not allowed. Allowed: " . implode(', ', $allowedExts));
+                        return;
+                    }
+                    $blockedMimes = [
+                        'application/x-php', 'text/x-php', 'application/php',
+                        'application/x-httpd-php', 'application/x-httpd-php-source',
+                        'text/html', 'application/javascript', 'text/javascript',
+                        'application/x-sh', 'application/x-executable',
+                    ];
+                    if (in_array($value->getMimeType() ?? '', $blockedMimes, true)) {
+                        $fail('This file type is not permitted.');
+                    }
+                },
+            ],
         ]);
 
         // Normalise decision values to lowercase canonical form
@@ -170,11 +194,57 @@ class SubmissionReviewerController extends Controller
             return response()->json(['message' => 'Only the reviewer can accept or decline.'], 403);
         }
 
+        // Once the submission has reached a terminal / finalized state, its reviewer
+        // decisions are locked and can no longer be accepted, declined, or changed.
+        if (isset($data['decision']) || isset($data['status'])) {
+            $submissionForGuard = Submission::findOrFail($submissionId);
+            $terminalStatuses = [
+                Submission::STATUS_ACCEPTED,
+                Submission::STATUS_CONDITIONALLY_ACCEPTED,
+                Submission::STATUS_REJECTED,
+                Submission::STATUS_WITHDRAWN,
+                Submission::STATUS_CANCELLED,
+                Submission::STATUS_APPEAL_PENDING,
+            ];
+            if (in_array($submissionForGuard->status, $terminalStatuses, true)) {
+                return response()->json([
+                    'message' => 'This submission has been finalized; reviewer decisions can no longer be changed.',
+                ], 422);
+            }
+        }
+
         // Submitting a decision → auto-complete
         if (isset($data['decision'])) {
             $data['status'] = 'completed';
             $data['decision_at'] = now();
         }
+
+        // Handle an optional annotated document uploaded by the reviewer.
+        // Only the assigned reviewer may attach one, and only alongside their decision.
+        if ($request->hasFile('annotated_document')) {
+            if (!$isReviewer) {
+                return response()->json(['message' => 'Only the assigned reviewer can upload an annotated document.'], 403);
+            }
+
+            $file = $request->file('annotated_document');
+            $originalName = basename($file->getClientOriginalName());
+            $safeName = preg_replace('/[^A-Za-z0-9._-]+/', '_', $originalName) ?: '';
+            $extension = strtolower($file->getClientOriginalExtension());
+            if ($safeName === '' || ! str_contains($safeName, '.')) {
+                $safeName = (string) Str::uuid() . ($extension ? ".{$extension}" : '');
+            }
+
+            // Remove any previously uploaded annotated document for this reviewer
+            if ($reviewer->annotated_document_path && Storage::exists($reviewer->annotated_document_path)) {
+                Storage::delete($reviewer->annotated_document_path);
+            }
+
+            $path = $file->storeAs("uploads/{$submissionId}/reviews/{$reviewer->id}", $safeName);
+            $data['annotated_document_path'] = $path;
+            $data['annotated_document_name'] = $originalName;
+            $data['annotated_document_uploaded_at'] = now();
+        }
+        unset($data['annotated_document']);
 
         $reviewer->update($data);
 
@@ -250,6 +320,83 @@ class SubmissionReviewerController extends Controller
         ]);
 
         return response()->json(['data' => $this->toResource($reviewer)]);
+    }
+
+    /**
+     * GET /api/submissions/{submissionId}/reviewers/{reviewerId}/annotated-document
+     *
+     * Securely download the annotated document a reviewer attached to their decision.
+     * Visibility mirrors reviewer-comment visibility: admins/coordinators, the uploading
+     * reviewer, and the gatekeeper may always download it; the submitter (and other
+     * viewers) may download it once it is releasable to them.
+     */
+    public function downloadAnnotatedDocument(Request $request, string $submissionId, string $reviewerId): mixed
+    {
+        $submission = Submission::with('submissionType:id,is_gated_review')->findOrFail($submissionId);
+        $this->authorize('view', $submission);
+
+        $reviewer = SubmissionReviewer::where('submission_id', $submissionId)
+            ->where('id', $reviewerId)
+            ->firstOrFail();
+
+        if (empty($reviewer->annotated_document_path)) {
+            return response()->json(['message' => 'No annotated document found.'], 404);
+        }
+
+        if (!$this->canViewReviewerArtifacts($submission, $reviewer, $request->user())) {
+            return response()->json(['message' => 'This annotated document is not available to you yet.'], 403);
+        }
+
+        if (! Storage::exists($reviewer->annotated_document_path)) {
+            return response()->json(['message' => 'File not found.'], 404);
+        }
+
+        return Storage::download(
+            $reviewer->annotated_document_path,
+            $reviewer->annotated_document_name ?: basename($reviewer->annotated_document_path),
+        );
+    }
+
+    /**
+     * Whether $user is allowed to see a reviewer's artifacts (comments / annotated
+     * document) for this submission. Mirrors the gated-review visibility rules.
+     */
+    private function canViewReviewerArtifacts(Submission $submission, SubmissionReviewer $reviewer, $user): bool
+    {
+        $roles = (array) ($user->roles ?? []);
+        if (count(array_intersect($roles, ['admin', 'coordinator'])) > 0) {
+            return true;
+        }
+
+        // The reviewer who uploaded it can always retrieve their own document.
+        if ($reviewer->user_id === $user->id) {
+            return true;
+        }
+
+        $isGated = $submission->submissionType?->is_gated_review ?? false;
+        if (!$isGated) {
+            // Non-gated: reviewer artifacts are visible as soon as they exist.
+            return true;
+        }
+
+        // Gated review: the assigned gatekeeper can always see reviewer artifacts.
+        $isGatekeeper = SubmissionReviewer::where('submission_id', $submission->id)
+            ->where('user_id', $user->id)
+            ->whereHas('stage', fn ($q) => $q->where('is_gatekeeper', true))
+            ->exists();
+        if ($isGatekeeper) {
+            return true;
+        }
+
+        // Submitter / other viewers: only once the decision has been released.
+        $finalized = in_array($submission->status, [
+            Submission::STATUS_ACCEPTED,
+            Submission::STATUS_CONDITIONALLY_ACCEPTED,
+            Submission::STATUS_REJECTED,
+            Submission::STATUS_REVISION_REQUIRED,
+        ], true);
+
+        return $finalized;
     }
 
     /**
@@ -663,6 +810,10 @@ class SubmissionReviewerController extends Controller
             'decision'      => $r->decision,
             'decision_at'   => $r->decision_at?->toIso8601String(),
             'comments'      => $r->comments,
+            // Reviewer-uploaded annotated document
+            'annotated_document_name'        => $r->annotated_document_name,
+            'annotated_document_uploaded_at' => $r->annotated_document_uploaded_at?->toIso8601String(),
+            'has_annotated_document'         => !empty($r->annotated_document_path),
             // Extension request
             'extension_status'          => $r->extension_status,
             'extension_reason'          => $r->extension_reason,

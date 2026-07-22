@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import {
   FileText, Plus, Search, Filter, RefreshCw,
-  XCircle, ChevronRight, ShieldCheck, AlertTriangle, Clock,
+  XCircle, ChevronRight, ShieldCheck, AlertTriangle, Clock, Gavel,
 } from 'lucide-react'
 import api from '../lib/axios'
 import { useAuthStore } from '../stores/authStore'
@@ -36,10 +36,19 @@ interface ReviewQueueItem {
   }
 }
 
+interface GatedQueueItem {
+  id: string
+  title: string
+  submission_type: string | null
+  program: string | null
+  submitter_name: string | null
+  pending_gatekeeper_stage_name: string | null
+  pending_gatekeeper_stage_outcome: string | null
+}
+
 function ReviewerQueueView() {
   const navigate = useNavigate()
   const [search, setSearch] = useState('')
-  const [activeTab, setActiveTab] = useState<'pending' | 'completed'>('pending')
 
   const { data, isLoading, isError, refetch } = useQuery<{ pending: ReviewQueueItem[], completed: ReviewQueueItem[] }>({
     queryKey: ['my-reviews-queue', 'submissions'],
@@ -47,21 +56,32 @@ function ReviewerQueueView() {
     staleTime: 30_000,
   })
 
+  const { data: gatedData } = useQuery<{ pending: GatedQueueItem[] }>({
+    queryKey: ['gated-reviews'],
+    queryFn: () => api.get('/admin/gated-reviews').then((r) => r.data),
+    staleTime: 30_000,
+  })
+
   const pending = data?.pending ?? []
-  const completed = data?.completed ?? []
+  const gated = gatedData?.pending ?? []
 
-  const filterItems = (items: ReviewQueueItem[]) =>
-    search
-      ? items.filter(
-          (i) =>
-            i.submission.title.toLowerCase().includes(search.toLowerCase()) ||
-            (i.submission.submission_type?.label ?? '').toLowerCase().includes(search.toLowerCase()),
-        )
-      : items
+  const s = search.toLowerCase()
+  const pendingFiltered = search
+    ? pending.filter(
+        (i) =>
+          i.submission.title.toLowerCase().includes(s) ||
+          (i.submission.submission_type?.label ?? '').toLowerCase().includes(s),
+      )
+    : pending
+  const gatedFiltered = search
+    ? gated.filter(
+        (g) =>
+          g.title.toLowerCase().includes(s) ||
+          (g.submission_type ?? '').toLowerCase().includes(s),
+      )
+    : gated
 
-  const pendingFiltered = filterItems(pending)
-  const completedFiltered = filterItems(completed)
-  const activeItems = activeTab === 'pending' ? pendingFiltered : completedFiltered
+  const pendingCount = pending.length + gated.length
 
   return (
     <div>
@@ -69,7 +89,7 @@ function ReviewerQueueView() {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">My Review Queue</h1>
-          <p className="text-sm text-gray-500 mt-0.5">Submissions assigned to you for review</p>
+          <p className="text-sm text-gray-500 mt-0.5">Reviews awaiting your action ({pendingCount})</p>
         </div>
         <button
           onClick={() => refetch()}
@@ -94,31 +114,61 @@ function ReviewerQueueView() {
         </div>
       </div>
 
-      <div className="mb-4 flex items-center gap-2 border-b border-gray-200">
-        <button
-          type="button"
-          onClick={() => setActiveTab('pending')}
-          className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
-            activeTab === 'pending'
-              ? 'border-blue-600 text-blue-600'
-              : 'border-transparent text-gray-500 hover:text-gray-700'
-          }`}
-        >
-          Awaiting My Review ({pending.length})
-        </button>
-        <button
-          type="button"
-          onClick={() => setActiveTab('completed')}
-          className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
-            activeTab === 'completed'
-              ? 'border-blue-600 text-blue-600'
-              : 'border-transparent text-gray-500 hover:text-gray-700'
-          }`}
-        >
-          Completed Reviews ({completed.length})
-        </button>
-      </div>
+      {/* Gatekeeper decisions — final release decisions awaiting this reviewer */}
+      {gatedFiltered.length > 0 && (
+        <div className="mb-5 bg-white rounded-xl border-2 border-purple-200 shadow-sm overflow-hidden">
+          <div className="flex items-center gap-2 px-5 py-3 border-b border-purple-100 bg-purple-50 text-purple-700">
+            <Gavel className="w-4 h-4" aria-hidden="true" />
+            <span className="text-sm font-semibold">Gatekeeper Decisions — Awaiting You</span>
+            <span className="ml-1 text-xs bg-white/60 px-2 py-0.5 rounded-full font-medium">{gatedFiltered.length}</span>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[640px]">
+              <thead>
+                <tr className="border-b border-gray-100 bg-gray-50">
+                  <th scope="col" className="text-left text-xs font-semibold text-gray-500 uppercase tracking-wide px-4 py-3">Title</th>
+                  <th scope="col" className="text-left text-xs font-semibold text-gray-500 uppercase tracking-wide px-4 py-3">Type</th>
+                  <th scope="col" className="text-left text-xs font-semibold text-gray-500 uppercase tracking-wide px-4 py-3">Program</th>
+                  <th scope="col" className="text-left text-xs font-semibold text-gray-500 uppercase tracking-wide px-4 py-3">Stage Requiring Decision</th>
+                  <th scope="col" className="text-left text-xs font-semibold text-gray-500 uppercase tracking-wide px-4 py-3">Outcome</th>
+                  <th scope="col" className="px-4 py-3 w-8" />
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-50">
+                {gatedFiltered.map((g) => (
+                  <tr
+                    key={g.id}
+                    className="hover:bg-purple-50/40 cursor-pointer"
+                    onClick={() => navigate(`/submissions/${g.id}`)}
+                  >
+                    <td className="px-4 py-3">
+                      <p className="text-sm font-medium text-gray-900 truncate max-w-[240px]">{g.title}</p>
+                      {g.submitter_name && <p className="text-xs text-gray-400 mt-0.5">{g.submitter_name}</p>}
+                    </td>
+                    <td className="px-4 py-3 text-sm text-gray-600 whitespace-nowrap">{g.submission_type ?? '—'}</td>
+                    <td className="px-4 py-3 text-sm text-gray-600 whitespace-nowrap">{g.program ?? '—'}</td>
+                    <td className="px-4 py-3 text-sm font-medium text-gray-700 whitespace-nowrap">{g.pending_gatekeeper_stage_name ?? '—'}</td>
+                    <td className="px-4 py-3">
+                      {g.pending_gatekeeper_stage_outcome ? (
+                        <span className={`inline-flex text-[10px] px-2 py-0.5 rounded-full font-medium ${
+                          g.pending_gatekeeper_stage_outcome === 'FAILED' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'
+                        }`}>
+                          {g.pending_gatekeeper_stage_outcome === 'FAILED' ? 'Rejected' : 'Revision Requested'}
+                        </span>
+                      ) : <span className="text-xs text-gray-300">—</span>}
+                    </td>
+                    <td className="px-4 py-3">
+                      <ChevronRight className="w-4 h-4 text-gray-300" />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
+      {/* Awaiting my review */}
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
         {isLoading ? (
           <table className="w-full">
@@ -134,16 +184,17 @@ function ReviewerQueueView() {
             <p className="text-gray-500">Failed to load review queue.</p>
             <button onClick={() => refetch()} className="mt-3 text-blue-600 text-sm hover:underline">Retry</button>
           </div>
-        ) : activeItems.length === 0 ? (
+        ) : pendingFiltered.length === 0 ? (
           <div className="flex flex-col items-center py-12 text-center">
             <ShieldCheck className="w-10 h-10 text-gray-200 mb-3" />
             <p className="text-sm font-medium text-gray-500">
               {search
-                ? `No ${activeTab} items match your search.`
-                : activeTab === 'pending'
-                ? 'No submissions awaiting your review.'
-                : 'No completed reviews.'}
+                ? 'No items match your search.'
+                : gatedFiltered.length > 0
+                ? 'No submissions awaiting your review. See gatekeeper decisions above.'
+                : 'Nothing is awaiting your review right now.'}
             </p>
+            <p className="text-xs text-gray-400 mt-1">Completed reviews are available under Assignments.</p>
           </div>
         ) : (
           <div className="overflow-x-auto">
@@ -155,23 +206,14 @@ function ReviewerQueueView() {
                   <th scope="col" className="text-left text-xs font-semibold text-gray-500 uppercase tracking-wide px-4 py-3">Program</th>
                   <th scope="col" className="text-left text-xs font-semibold text-gray-500 uppercase tracking-wide px-4 py-3">My Stage</th>
                   <th scope="col" className="text-left text-xs font-semibold text-gray-500 uppercase tracking-wide px-4 py-3">Current Stage</th>
-                  {activeTab === 'pending' ? (
-                    <>
-                      <th scope="col" className="text-left text-xs font-semibold text-gray-500 uppercase tracking-wide px-4 py-3">Stage Since</th>
-                      <th scope="col" className="text-left text-xs font-semibold text-gray-500 uppercase tracking-wide px-4 py-3">Due</th>
-                    </>
-                  ) : (
-                    <>
-                      <th scope="col" className="text-left text-xs font-semibold text-gray-500 uppercase tracking-wide px-4 py-3">Decision</th>
-                      <th scope="col" className="text-left text-xs font-semibold text-gray-500 uppercase tracking-wide px-4 py-3">Decided</th>
-                    </>
-                  )}
+                  <th scope="col" className="text-left text-xs font-semibold text-gray-500 uppercase tracking-wide px-4 py-3">Stage Since</th>
+                  <th scope="col" className="text-left text-xs font-semibold text-gray-500 uppercase tracking-wide px-4 py-3">Due</th>
                   <th scope="col" className="text-left text-xs font-semibold text-gray-500 uppercase tracking-wide px-4 py-3">Ver.</th>
                   <th scope="col" className="px-4 py-3 w-8" />
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-50">
-                {activeItems.map((item) => (
+                {pendingFiltered.map((item) => (
                   <tr
                     key={item.assignment_id}
                     className="hover:bg-gray-50 cursor-pointer"
@@ -194,36 +236,23 @@ function ReviewerQueueView() {
                     <td className="px-4 py-3 text-sm text-gray-600 whitespace-nowrap">
                       {item.submission.current_stage?.name ?? '—'}
                     </td>
-                    {activeTab === 'pending' ? (
-                      <>
-                        <td className="px-4 py-3 text-sm text-gray-400 whitespace-nowrap">
-                          {item.submission.current_stage_entered_at
-                            ? new Date(item.submission.current_stage_entered_at).toLocaleDateString()
-                            : '—'}
-                        </td>
-                        <td className="px-4 py-3">
-                          {item.due_at ? (
-                            <span className={`flex items-center gap-1 text-xs whitespace-nowrap ${
-                              item.is_overdue ? 'text-red-600 font-semibold' : item.is_due_soon ? 'text-amber-600 font-medium' : 'text-gray-500'
-                            }`}>
-                              {item.is_overdue ? <AlertTriangle size={11} /> : item.is_due_soon ? <Clock size={11} /> : null}
-                              {new Date(item.due_at).toLocaleDateString()}
-                            </span>
-                          ) : (
-                            <span className="text-xs text-gray-300">—</span>
-                          )}
-                        </td>
-                      </>
-                    ) : (
-                      <>
-                        <td className="px-4 py-3 text-sm capitalize text-gray-600 whitespace-nowrap">
-                          {item.decision ?? '—'}
-                        </td>
-                        <td className="px-4 py-3 text-sm text-gray-400 whitespace-nowrap">
-                          {item.decision_at ? new Date(item.decision_at).toLocaleDateString() : '—'}
-                        </td>
-                      </>
-                    )}
+                    <td className="px-4 py-3 text-sm text-gray-400 whitespace-nowrap">
+                      {item.submission.current_stage_entered_at
+                        ? new Date(item.submission.current_stage_entered_at).toLocaleDateString()
+                        : '—'}
+                    </td>
+                    <td className="px-4 py-3">
+                      {item.due_at ? (
+                        <span className={`flex items-center gap-1 text-xs whitespace-nowrap ${
+                          item.is_overdue ? 'text-red-600 font-semibold' : item.is_due_soon ? 'text-amber-600 font-medium' : 'text-gray-500'
+                        }`}>
+                          {item.is_overdue ? <AlertTriangle size={11} /> : item.is_due_soon ? <Clock size={11} /> : null}
+                          {new Date(item.due_at).toLocaleDateString()}
+                        </span>
+                      ) : (
+                        <span className="text-xs text-gray-300">—</span>
+                      )}
+                    </td>
                     <td className="px-4 py-3 text-sm text-gray-500">
                       {item.submission.current_version > 0 ? `v${item.submission.current_version}` : '—'}
                     </td>

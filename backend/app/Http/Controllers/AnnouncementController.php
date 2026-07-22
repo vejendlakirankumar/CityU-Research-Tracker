@@ -101,10 +101,12 @@ class AnnouncementController extends Controller
             Notification::create([
                 'user_id'     => $user->id,
                 'type'        => 'announcement',
-                'title'       => $announcement->title,
-                'body'        => $announcement->body,
-                'data'        => ['announcement_id' => $announcement->id, 'ann_type' => $announcement->type],
-                'is_read'     => false,
+                'data'        => [
+                    'announcement_id' => $announcement->id,
+                    'ann_type'        => $announcement->type,
+                    'title'           => $announcement->title,
+                    'body'            => $announcement->body,
+                ],
             ]);
         }
     }

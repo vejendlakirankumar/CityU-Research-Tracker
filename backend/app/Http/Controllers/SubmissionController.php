@@ -837,6 +837,14 @@ class SubmissionController extends Controller
         $isBlind        = $submission->submissionType?->is_blind_review ?? false;
         $isGatedReview  = $submission->submissionType?->is_gated_review ?? false;
 
+        // Builds the annotated-document payload for a reviewer feedback item (or null).
+        // The frontend uses reviewer_id to resolve the secure download endpoint.
+        $annotatedDoc = fn ($r) => $r->annotated_document_path ? [
+            'reviewer_id' => $r->id,
+            'name'        => $r->annotated_document_name ?: 'annotated-document',
+            'uploaded_at' => $r->annotated_document_uploaded_at,
+        ] : null;
+
         $appeal = AppealRequest::where('submission_id', $id)->latest()->first();
         $appealData = $appeal ? [
             'id'              => $appeal->id,
@@ -854,21 +862,61 @@ class SubmissionController extends Controller
                 ->exists();
 
             if (!$isGatekeeper) {
-                // Submitter: show only the published GatedRelease feedback
+                // Submitter: comments are withheld until the gatekeeper finalizes.
                 if ($submission->submitter_id === $user->id) {
                     $latestRelease = GatedRelease::where('submission_id', $id)
                         ->latest('released_at')
                         ->first();
 
-                    $feedbackItems = $latestRelease ? [[
-                        'id'               => $latestRelease->id,
-                        'stage'            => null,
-                        'decision'         => $latestRelease->decision,
-                        'decision_at'      => $latestRelease->released_at,
-                        'comments'         => $latestRelease->feedback,
-                        'reviewer'         => null,
-                        'is_gated_release' => true,
-                    ]] : [];
+                    if ($latestRelease) {
+                        // Gatekeeper published a consolidated release (escalation path).
+                        $feedbackItems = [[
+                            'id'               => $latestRelease->id,
+                            'stage'            => null,
+                            'decision'         => $latestRelease->decision,
+                            'decision_at'      => $latestRelease->released_at,
+                            'comments'         => $latestRelease->feedback,
+                            'reviewer'         => null,
+                            'is_gated_release' => true,
+                        ]];
+
+                        return response()->json(['data' => $feedbackItems, 'appeal' => $appealData]);
+                    }
+
+                    // No explicit release: if the gatekeeper finalized the outcome by
+                    // deciding the gatekeeper stage directly, surface that decision +
+                    // comment. Otherwise the review is still in progress → withhold.
+                    $finalized = in_array($submission->status, [
+                        Submission::STATUS_ACCEPTED,
+                        Submission::STATUS_CONDITIONALLY_ACCEPTED,
+                        Submission::STATUS_REJECTED,
+                        Submission::STATUS_REVISION_REQUIRED,
+                    ], true);
+
+                    $feedbackItems = [];
+                    if ($finalized) {
+                        $gatekeeperDecisions = $submission->reviewers()
+                            ->with(['user:id,name', 'stage:id,name,stage_role_label'])
+                            ->whereHas('stage', fn ($q) => $q->where('is_gatekeeper', true))
+                            ->whereNotNull('decision')
+                            ->orderBy('decision_at')
+                            ->get();
+
+                        $feedbackItems = $gatekeeperDecisions->map(fn ($r) => [
+                            'id'               => $r->id,
+                            'stage'            => $r->stage ? [
+                                'id'   => $r->stage->id,
+                                'name' => $r->stage->name,
+                                'role' => $r->stage->stage_role_label,
+                            ] : null,
+                            'decision'         => $r->decision,
+                            'decision_at'      => $r->decision_at,
+                            'comments'         => $r->comments,
+                            'annotated_document' => $annotatedDoc($r),
+                            'reviewer'         => $isBlind ? null : ($r->user ? ['name' => $r->user->name] : null),
+                            'is_gated_release' => true,
+                        ])->values();
+                    }
 
                     return response()->json(['data' => $feedbackItems, 'appeal' => $appealData]);
                 }
@@ -897,6 +945,7 @@ class SubmissionController extends Controller
                     'decision'    => $r->decision,
                     'decision_at' => $r->decision_at,
                     'comments'    => $r->comments,
+                    'annotated_document' => $annotatedDoc($r),
                     'reviewer'    => $isBlind ? null : ($r->user ? ['name' => $r->user->name] : null),
                 ]);
 
@@ -922,6 +971,7 @@ class SubmissionController extends Controller
             'decision'    => $r->decision,
             'decision_at' => $r->decision_at,
             'comments'    => $r->comments,
+            'annotated_document' => $annotatedDoc($r),
             'reviewer'    => $isBlind ? null : ($r->user ? ['name' => $r->user->name] : null),
         ]);
 
@@ -963,6 +1013,7 @@ class SubmissionController extends Controller
             'grounds'       => $data['grounds'],
             'status'        => AppealRequest::STATUS_PENDING,
         ]);
+        $appeal->refresh();
 
         // Mark submission as appeal-pending so it surfaces in appeals queue
         $submission->update(['status' => Submission::STATUS_APPEAL_PENDING]);

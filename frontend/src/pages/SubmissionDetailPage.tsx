@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import DOMPurify from 'dompurify'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useParams, useNavigate, useLocation } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   ChevronLeft, FileText, Download, Upload,
@@ -15,6 +15,8 @@ import {
   CalendarDays, Ban,
 } from 'lucide-react'
 import { renderAsync } from 'docx-preview'
+import * as pdfjsLib from 'pdfjs-dist'
+import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 import api from '../lib/axios'
 import { useAuthStore } from '../stores/authStore'
 import { useToastHelpers } from '../lib/toast'
@@ -25,6 +27,13 @@ import type {
 } from '../types/submissions'
 import { STATUS_LABELS, STATUS_COLORS } from '../types/submissions'
 import type { SubmissionTypeAdmin } from '../types/admin'
+
+// Configure the PDF.js worker (bundled by Vite) so PDFs render to canvas
+// without relying on the browser's native PDF plugin (which some embedded
+// browsers / webviews lack, showing a blank iframe). The version query busts
+// any client that cached the worker before the server was configured to serve
+// .mjs with a JavaScript MIME type.
+pdfjsLib.GlobalWorkerOptions.workerSrc = `${pdfWorkerUrl}?v=2`
 
 // ── Status Badge ──────────────────────────────────────────────────────────────
 
@@ -1295,7 +1304,7 @@ function ReviewersPanel({ submissionId, submissionTypeId }: { submissionId: stri
 
 // ── Inline Document Viewer ────────────────────────────────────────────────────
 
-type ViewingDoc = { submissionId: string; versionNumber: number; filename: string; fileType: 'pdf' | 'docx' }
+type ViewingDoc = { submissionId: string; versionNumber: number; filename: string; fileType: 'pdf' | 'docx'; apiPath?: string; external?: boolean }
 
 type PendingAnnotation = { quote: string; positionHint: string; x: number; y: number }
 
@@ -1319,12 +1328,12 @@ function normalizeWS(s: string) { return s.replace(/[\s\u00a0]+/g, ' ').trim() }
 
 function InlineDocViewer({ doc, onClose }: { doc: ViewingDoc; onClose: () => void }) {
   const containerRef = useRef<HTMLDivElement>(null)
+  const pdfContainerRef = useRef<HTMLDivElement>(null)
   const downloadBtnRef = useRef<HTMLDivElement>(null)
   const skipSelectionRef = useRef(false)
 
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [blobUrl, setBlobUrl] = useState<string | null>(null)
 
   // Annotation state
   const [annotations, setAnnotations] = useState<DocumentAnnotation[]>([])
@@ -1342,7 +1351,7 @@ function InlineDocViewer({ doc, onClose }: { doc: ViewingDoc; onClose: () => voi
 
   const { user } = useAuthStore()
 
-  const apiPath = `/submissions/${doc.submissionId}/files/${doc.versionNumber}/${encodeURIComponent(doc.filename)}`
+  const apiPath = doc.apiPath ?? `/submissions/${doc.submissionId}/files/${doc.versionNumber}/${encodeURIComponent(doc.filename)}`
 
   // ── Download handlers ───────────────────────────────────────────────────────
 
@@ -1466,16 +1475,18 @@ tbody tr{border-bottom:1px solid #e5e7eb}tbody tr:hover{background:#f9fafb}</sty
   // ── Annotation highlight ────────────────────────────────────────────────────
 
   const clearHighlight = useCallback(() => {
-    containerRef.current?.querySelectorAll('.ann-active-mark').forEach((mark: Element) => {
-      const p = mark.parentNode
-      if (!p) return
-      if (mark.tagName === 'MARK') {
-        while (mark.firstChild) p.insertBefore(mark.firstChild, mark)
-        p.removeChild(mark)
-        ;(p as Element).normalize?.()
-      } else {
-        mark.classList.remove('ann-active-mark')
-      }
+    ;[containerRef.current, pdfContainerRef.current].forEach(root => {
+      root?.querySelectorAll('.ann-active-mark').forEach((mark: Element) => {
+        const p = mark.parentNode
+        if (!p) return
+        if (mark.tagName === 'MARK') {
+          while (mark.firstChild) p.insertBefore(mark.firstChild, mark)
+          p.removeChild(mark)
+          ;(p as Element).normalize?.()
+        } else {
+          mark.classList.remove('ann-active-mark')
+        }
+      })
     })
   }, [])
 
@@ -1487,11 +1498,11 @@ tbody tr{border-bottom:1px solid #e5e7eb}tbody tr:hover{background:#f9fafb}</sty
   const jumpToAnnotation = useCallback((ann: DocumentAnnotation) => {
     setHighlightedId(ann.id)
     setShowPanel(true)
-    if (doc.fileType !== 'docx' || !containerRef.current) return
+    const container = doc.fileType === 'pdf' ? pdfContainerRef.current : containerRef.current
+    if (!container) return
     if (!ann.quote || ann.quote === '(no excerpt)') return
 
     clearHighlight()
-    const container = containerRef.current
     const { nodes, fullText } = buildTextMap(container)
 
     // ── Search ──────────────────────────────────────────────────────────────
@@ -1530,8 +1541,25 @@ tbody tr{border-bottom:1px solid #e5e7eb}tbody tr:hover{background:#f9fafb}</sty
 
     if (rawIdx === -1 || matchLen === 0) return
 
-    // ── Map to text nodes and create Range ─────────────────────────────────
     const endIdx = rawIdx + matchLen
+
+    // For PDFs the text layer spans are absolutely positioned; wrapping a
+    // cross-span Range would break their layout, so highlight the covering
+    // spans directly instead of surrounding the range.
+    if (doc.fileType === 'pdf') {
+      let firstSpan: HTMLElement | null = null
+      for (const { node, start } of nodes) {
+        const nEnd = start + (node.textContent?.length ?? 0)
+        if (nEnd > rawIdx && start < endIdx) {
+          const span = node.parentElement
+          if (span) { span.classList.add('ann-active-mark'); if (!firstSpan) firstSpan = span }
+        }
+      }
+      if (firstSpan) firstSpan.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      return
+    }
+
+    // ── Map to text nodes and create Range ─────────────────────────────────
     let startNode: Text | null = null, startOffset = 0
     let endNode: Text | null = null, endOffset = 0
 
@@ -1571,17 +1599,64 @@ tbody tr{border-bottom:1px solid #e5e7eb}tbody tr:hover{background:#f9fafb}</sty
 
   // Load document file
   useEffect(() => {
-    let objectUrl: string | null = null
-    setLoading(true); setError(null); setBlobUrl(null)
+    let cancelled = false
+    setLoading(true); setError(null)
 
     api.get(apiPath, { responseType: 'arraybuffer' })
       .then(res => {
         const buf = res.data as ArrayBuffer
         if (doc.fileType === 'pdf') {
-          const blob = new Blob([buf], { type: 'application/pdf' })
-          objectUrl = URL.createObjectURL(blob)
-          setBlobUrl(objectUrl)
-          setLoading(false)
+          // Render with PDF.js to <canvas> so it works without a native PDF plugin.
+          // A selectable text layer is overlaid on each page so reviewers can
+          // select text to annotate and jump-to-highlight existing annotations.
+          const container = pdfContainerRef.current
+          if (!container) { setLoading(false); return }
+          container.innerHTML = ''
+          pdfjsLib.getDocument({ data: new Uint8Array(buf) }).promise
+            .then(async (pdf: pdfjsLib.PDFDocumentProxy) => {
+              if (cancelled) { pdf.destroy(); return }
+              for (let i = 1; i <= pdf.numPages; i++) {
+                if (cancelled) break
+                const page = await pdf.getPage(i)
+                const viewport = page.getViewport({ scale: 1.5 })
+
+                const pageDiv = document.createElement('div')
+                pageDiv.className = 'pdf-page'
+                pageDiv.dataset.page = String(i)
+                pageDiv.style.cssText = `position:relative;margin:0 auto 12px;width:${viewport.width}px;height:${viewport.height}px;box-shadow:0 1px 4px rgba(0,0,0,0.15);background:#fff;`
+                pageDiv.style.setProperty('--scale-factor', String(viewport.scale))
+                pageDiv.style.setProperty('--total-scale-factor', String(viewport.scale))
+
+                const canvas = document.createElement('canvas')
+                canvas.width = viewport.width
+                canvas.height = viewport.height
+                canvas.style.cssText = 'display:block;width:100%;height:100%;'
+                const ctx = canvas.getContext('2d')
+                if (!ctx) continue
+                pageDiv.appendChild(canvas)
+
+                const textLayerDiv = document.createElement('div')
+                textLayerDiv.className = 'pdf-text-layer'
+                pageDiv.appendChild(textLayerDiv)
+
+                container.appendChild(pageDiv)
+                await page.render({ canvasContext: ctx, viewport }).promise
+                if (cancelled) break
+
+                // Overlay selectable text so the same annotate/jump flow as DOCX works.
+                try {
+                  const textContent = await page.getTextContent()
+                  if (cancelled) break
+                  const TL = (pdfjsLib as unknown as { TextLayer?: new (o: unknown) => { render: () => Promise<void> } }).TextLayer
+                  if (typeof TL === 'function') {
+                    await new TL({ textContentSource: textContent, container: textLayerDiv, viewport }).render()
+                  }
+                } catch { /* text layer is best-effort; canvas still renders */ }
+              }
+              if (!cancelled) setLoading(false)
+              pdf.destroy()
+            })
+            .catch(() => { if (!cancelled) { setError('Failed to load document.'); setLoading(false) } })
         } else {
           const container = containerRef.current
           if (!container) { setLoading(false); return }
@@ -1597,16 +1672,17 @@ tbody tr{border-bottom:1px solid #e5e7eb}tbody tr:hover{background:#f9fafb}</sty
       })
       .catch(() => { setError('Failed to load document.'); setLoading(false) })
 
-    return () => { if (objectUrl) URL.revokeObjectURL(objectUrl) }
+    return () => { cancelled = true }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [apiPath, doc.fileType])
 
   // Load annotations
   useEffect(() => {
+    if (doc.external) return
     api.get(`/submissions/${doc.submissionId}/annotations`, {
       params: { version: doc.versionNumber, filename: doc.filename },
     }).then(res => setAnnotations(res.data.data ?? [])).catch(() => {})
-  }, [doc.submissionId, doc.versionNumber, doc.filename])
+  }, [doc.submissionId, doc.versionNumber, doc.filename, doc.external])
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -1623,28 +1699,35 @@ tbody tr{border-bottom:1px solid #e5e7eb}tbody tr:hover{background:#f9fafb}</sty
     return () => window.removeEventListener('keydown', handler)
   }, [onClose, pending, pdfNoteOpen, showDownloadMenu, highlightedId, clearHighlight])
 
-  // DOCX text-selection handler
+  // Text-selection handler (DOCX preview and PDF text layer)
   const handleMouseUp = useCallback(() => {
-    if (doc.fileType !== 'docx') return
+    if (doc.external) return
+    if (doc.fileType !== 'docx' && doc.fileType !== 'pdf') return
     if (skipSelectionRef.current) return
     const sel = window.getSelection()
     if (!sel || sel.isCollapsed) return
     const text = sel.toString().trim()
     if (text.length < 3) return
     const range = sel.getRangeAt(0)
-    const container = containerRef.current
+    const container = doc.fileType === 'pdf' ? pdfContainerRef.current : containerRef.current
     if (!container?.contains(range.commonAncestorContainer)) return
 
     const rect = range.getBoundingClientRect()
     let hint = ''
-    let el: Element | null = (range.startContainer instanceof Element ? range.startContainer : range.startContainer.parentElement)
-    let count = 0
-    while (el && el !== container) {
-      let sib = el.previousElementSibling
-      while (sib) { count++; sib = sib.previousElementSibling }
-      el = el.parentElement
+    if (doc.fileType === 'pdf') {
+      const startEl = range.startContainer instanceof Element ? range.startContainer : range.startContainer.parentElement
+      const pageEl = startEl?.closest('.pdf-page') as HTMLElement | null
+      if (pageEl?.dataset.page) hint = `page ${pageEl.dataset.page}`
+    } else {
+      let el: Element | null = (range.startContainer instanceof Element ? range.startContainer : range.startContainer.parentElement)
+      let count = 0
+      while (el && el !== container) {
+        let sib = el.previousElementSibling
+        while (sib) { count++; sib = sib.previousElementSibling }
+        el = el.parentElement
+      }
+      if (count > 0) hint = `paragraph ${count + 1}`
     }
-    if (count > 0) hint = `paragraph ${count + 1}`
 
     setPending({
       quote: text.slice(0, 500),
@@ -1654,7 +1737,7 @@ tbody tr{border-bottom:1px solid #e5e7eb}tbody tr:hover{background:#f9fafb}</sty
     })
     setNewComment('')
     setHighlightedId(null)
-  }, [doc.fileType])
+  }, [doc.fileType, doc.external])
 
   const saveAnnotation = async (quote: string, comment: string, positionHint: string) => {
     if (!comment.trim()) return
@@ -1694,7 +1777,7 @@ tbody tr{border-bottom:1px solid #e5e7eb}tbody tr:hover{background:#f9fafb}</sty
       <div className="flex items-center gap-3 px-4 py-3 bg-white border-b border-gray-200 flex-shrink-0">
         <FileText className="w-4 h-4 text-gray-500 flex-shrink-0" />
         <p className="text-sm font-medium text-gray-800 flex-1 truncate">{doc.filename}</p>
-        {doc.fileType === 'pdf' && !loading && !error && (
+        {doc.fileType === 'pdf' && !doc.external && !loading && !error && (
           <button
             onClick={() => { setPdfNoteOpen(true); setShowPanel(true) }}
             className="flex items-center gap-1.5 px-3 py-1.5 border border-blue-200 text-blue-700 bg-blue-50 rounded-lg text-xs hover:bg-blue-100"
@@ -1702,6 +1785,7 @@ tbody tr{border-bottom:1px solid #e5e7eb}tbody tr:hover{background:#f9fafb}</sty
             <Plus className="w-3.5 h-3.5" /> Add Note
           </button>
         )}
+        {!doc.external && (
         <button
           onClick={() => setShowPanel(v => !v)}
           className={`relative flex items-center gap-1.5 px-3 py-1.5 border rounded-lg text-xs transition-colors ${
@@ -1716,6 +1800,7 @@ tbody tr{border-bottom:1px solid #e5e7eb}tbody tr:hover{background:#f9fafb}</sty
             </span>
           )}
         </button>
+        )}
 
         {/* Download button with dropdown */}
         <div ref={downloadBtnRef} className="relative">
@@ -1786,8 +1871,12 @@ tbody tr{border-bottom:1px solid #e5e7eb}tbody tr:hover{background:#f9fafb}</sty
               </div>
             </div>
           )}
-          {doc.fileType === 'pdf' && blobUrl && (
-            <iframe src={blobUrl} title={doc.filename} className="flex-1 w-full" style={{ minHeight: 'calc(100vh - 57px)', border: 'none' }} />
+          {doc.fileType === 'pdf' && (
+            <div
+              ref={pdfContainerRef}
+              className="flex-1 overflow-auto"
+              style={{ padding: '1rem', display: loading || error ? 'none' : 'block' }}
+            />
           )}
           {doc.fileType === 'docx' && (
             <div
@@ -1802,7 +1891,7 @@ tbody tr{border-bottom:1px solid #e5e7eb}tbody tr:hover{background:#f9fafb}</sty
               }}
             />
           )}
-          {doc.fileType === 'docx' && !loading && !error && (
+          {!doc.external && !loading && !error && (doc.fileType === 'docx' || doc.fileType === 'pdf') && (
             <p className="text-center text-xs text-gray-400 pb-3">
               Select any text in the document and release to add an inline annotation.
             </p>
@@ -1818,7 +1907,7 @@ tbody tr{border-bottom:1px solid #e5e7eb}tbody tr:hover{background:#f9fafb}</sty
                 Annotations
                 <span className="text-xs text-gray-400 font-normal">({annotations.length})</span>
               </h3>
-              {highlightedId && doc.fileType === 'docx' && (
+              {highlightedId && (
                 <button
                   onClick={() => { clearHighlight(); setHighlightedId(null) }}
                   className="text-xs text-gray-400 hover:text-gray-600 flex items-center gap-1"
@@ -1859,14 +1948,16 @@ tbody tr{border-bottom:1px solid #e5e7eb}tbody tr:hover{background:#f9fafb}</sty
                 <div className="flex flex-col items-center justify-center py-10 px-4 text-center">
                   <MessageSquare className="w-6 h-6 text-gray-300 mb-2" />
                   <p className="text-xs text-gray-400">
-                    {doc.fileType === 'docx' ? 'Select text in the document to add an annotation.' : 'Click "Add Note" to annotate a section of this PDF.'}
+                    {doc.fileType === 'docx'
+                      ? 'Select text in the document to add an annotation.'
+                      : 'Select text in the PDF (or use “Add Note”) to annotate.'}
                   </p>
                 </div>
               )}
               {annotations.map((ann, i) => {
                 const isActive = highlightedId === ann.id
                 const hasQuote = !!ann.quote && ann.quote !== '(no excerpt)'
-                const canJump = doc.fileType === 'docx' && hasQuote
+                const canJump = hasQuote
                 return (
                   <div
                     key={ann.id}
@@ -1906,11 +1997,6 @@ tbody tr{border-bottom:1px solid #e5e7eb}tbody tr:hover{background:#f9fafb}</sty
                       }`}>
                         "{ann.quote}"
                       </blockquote>
-                    )}
-                    {doc.fileType === 'pdf' && isActive && hasQuote && (
-                      <p className="text-[10px] text-amber-700 bg-amber-50 rounded px-2 py-1 mb-1">
-                        Use Ctrl+F in the PDF viewer to search for the quoted text.
-                      </p>
                     )}
                     <p className="text-xs text-gray-700 leading-relaxed">{ann.comment}</p>
                     <p className="text-[10px] text-gray-400 mt-1">{new Date(ann.created_at).toLocaleDateString()}</p>
@@ -2588,6 +2674,60 @@ const APPEAL_STATUS_COLORS: Record<string, string> = {
 
 // ── Gated Release Panel (for the assigned gatekeeper) ─────────────────────────
 
+interface ReleaseDecisionMeta {
+  value: string
+  label: string
+  button: string
+  confirmTitle: string
+  confirmMessage: string
+  confirmLabel: string
+  toast: string
+  btnClass: string
+}
+
+const RELEASE_DECISIONS: ReleaseDecisionMeta[] = [
+  {
+    value: 'REJECTED',
+    label: 'Reject submission (agree with reviewers)',
+    button: 'Reject Submission',
+    confirmTitle: 'Reject Submission',
+    confirmMessage: 'The submission will be rejected and finalized. The submitter will be notified with your consolidated feedback. Individual reviewer comments will not be visible to them.',
+    confirmLabel: 'Yes, Reject',
+    toast: 'The submitter has been notified of the rejection.',
+    btnClass: 'bg-red-600 hover:bg-red-700',
+  },
+  {
+    value: 'REVISION_REQUIRED',
+    label: 'Request revision from submitter',
+    button: 'Send Feedback \u0026 Request Revision',
+    confirmTitle: 'Request Revision',
+    confirmMessage: 'The submitter will be asked to revise and resubmit using your consolidated feedback. Individual reviewer comments will not be visible to them.',
+    confirmLabel: 'Yes, Request Revision',
+    toast: 'The submitter has been notified to revise and resubmit.',
+    btnClass: 'bg-orange-500 hover:bg-orange-600',
+  },
+  {
+    value: 'ACCEPTED',
+    label: 'Accept submission (override reviewers)',
+    button: 'Accept Submission',
+    confirmTitle: 'Accept Submission',
+    confirmMessage: 'The submission will be accepted and finalized, overriding the reviewers. The submitter will be notified with your consolidated feedback.',
+    confirmLabel: 'Yes, Accept',
+    toast: 'The submitter has been notified of the acceptance.',
+    btnClass: 'bg-green-600 hover:bg-green-700',
+  },
+  {
+    value: 'CONDITIONALLY_ACCEPTED',
+    label: 'Conditionally accept (override reviewers)',
+    button: 'Conditionally Accept',
+    confirmTitle: 'Conditionally Accept',
+    confirmMessage: 'The submission will be conditionally accepted, overriding the reviewers. The submitter will be notified with your consolidated feedback.',
+    confirmLabel: 'Yes, Conditionally Accept',
+    toast: 'The submitter has been notified.',
+    btnClass: 'bg-teal-600 hover:bg-teal-700',
+  },
+]
+
 function GatedReleasePanel({
   submissionId,
   pendingGatekeeperStage,
@@ -2597,16 +2737,21 @@ function GatedReleasePanel({
 }) {
   const qc = useQueryClient()
   const toast = useToastHelpers()
-  const [mode,          setMode]          = useState<'feedback' | 'recheck'>('feedback')
+  const [mode,          setMode]          = useState<'decision' | 'recheck'>('decision')
+  const [decision,      setDecision]      = useState<string>(
+    () => (pendingGatekeeperStage?.outcome === 'REVISION_REQUIRED' ? 'REVISION_REQUIRED' : 'REJECTED'),
+  )
   const [feedbackText,  setFeedbackText]  = useState('')
   const [recheckReason, setRecheckReason] = useState('')
   const [showConfirm,   setShowConfirm]   = useState(false)
   const [submitError,   setSubmitError]   = useState('')
 
+  const activeDecision = RELEASE_DECISIONS.find(d => d.value === decision) ?? RELEASE_DECISIONS[0]
+
   const releaseMutation = useMutation({
     mutationFn: () =>
       api.post(`/submissions/${submissionId}/gated-release`, {
-        decision: 'REVISION_REQUIRED',
+        decision,
         feedback: feedbackText.trim(),
       }),
     onSuccess: () => {
@@ -2617,13 +2762,13 @@ function GatedReleasePanel({
       qc.invalidateQueries({ queryKey: ['my-reviews-queue'] })
       qc.invalidateQueries({ queryKey: ['gated-reviews'] })
       qc.invalidateQueries({ queryKey: ['dashboard-stats'] })
-      toast.success('Feedback sent to submitter.', 'The submitter has been notified to revise and resubmit.')
+      toast.success('Decision released to submitter.', activeDecision.toast)
     },
     onError: (e: any) => {
-      const msg = e?.response?.data?.message ?? 'Failed to send feedback.'
+      const msg = e?.response?.data?.message ?? 'Failed to release decision.'
       setSubmitError(msg)
       setShowConfirm(false)
-      toast.error('Failed to send feedback.', msg)
+      toast.error('Failed to release decision.', msg)
     },
   })
 
@@ -2654,7 +2799,7 @@ function GatedReleasePanel({
         <Gavel className="w-4 h-4 text-purple-600" />
         <div>
           <p className="text-sm font-semibold text-purple-900">Gatekeeper Action Required</p>
-          <p className="text-xs text-purple-600 mt-0.5">Read reviewer feedback, then send consolidated feedback to the submitter or return the stage for re-review.</p>
+          <p className="text-xs text-purple-600 mt-0.5">Read reviewer feedback, then issue your final decision to the submitter or return the stage for re-review.</p>
         </div>
       </div>
 
@@ -2676,10 +2821,10 @@ function GatedReleasePanel({
       {/* Mode tabs */}
       <div className="flex gap-2 px-5 pt-4">
         <button
-          onClick={() => setMode('feedback')}
-          className={`px-3 py-1.5 text-xs rounded-md font-medium transition-colors ${mode === 'feedback' ? 'bg-purple-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+          onClick={() => setMode('decision')}
+          className={`px-3 py-1.5 text-xs rounded-md font-medium transition-colors ${mode === 'decision' ? 'bg-purple-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
         >
-          Send Feedback to Submitter
+          Issue Final Decision
         </button>
         {stageName && (
           <button
@@ -2692,10 +2837,25 @@ function GatedReleasePanel({
       </div>
 
       <div className="p-5 space-y-4">
-        {mode === 'feedback' ? (
+        {mode === 'decision' ? (
           <>
             <div className="rounded-lg bg-blue-50 border border-blue-100 px-4 py-3 text-xs text-blue-700">
-              Write consolidated feedback for the submitter. They will see only this message — not the individual reviewer comments.
+              As the assigned gatekeeper you issue the final decision. The submitter sees only your consolidated feedback and the decision — not the individual reviewer comments.
+            </div>
+
+            <div>
+              <label className="text-xs font-semibold text-gray-600 mb-1 block uppercase tracking-wide">
+                Final decision <span className="text-red-500">*</span>
+              </label>
+              <select
+                className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-purple-400 bg-white"
+                value={decision}
+                onChange={e => { setDecision(e.target.value); setSubmitError('') }}
+              >
+                {RELEASE_DECISIONS.map(d => (
+                  <option key={d.value} value={d.value}>{d.label}</option>
+                ))}
+              </select>
             </div>
 
             <div>
@@ -2706,7 +2866,7 @@ function GatedReleasePanel({
               <textarea
                 className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-purple-400 resize-none"
                 rows={5}
-                placeholder="Summarise the reviewer feedback and explain what the submitter needs to address in their revision…"
+                placeholder="Summarise the reviewer feedback and explain the reasons for your decision…"
                 value={feedbackText}
                 onChange={e => { setFeedbackText(e.target.value); setSubmitError('') }}
                 maxLength={5000}
@@ -2720,10 +2880,10 @@ function GatedReleasePanel({
               <button
                 onClick={() => setShowConfirm(true)}
                 disabled={!feedbackText.trim()}
-                className="flex items-center gap-2 px-5 py-2.5 text-sm font-semibold rounded-lg bg-orange-500 hover:bg-orange-600 text-white disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                className={`flex items-center gap-2 px-5 py-2.5 text-sm font-semibold rounded-lg text-white disabled:opacity-40 disabled:cursor-not-allowed transition-colors ${activeDecision.btnClass}`}
               >
-                <RotateCcw className="w-4 h-4" />
-                Send Feedback &amp; Request Revision
+                <Gavel className="w-4 h-4" />
+                {activeDecision.button}
               </button>
             </div>
           </>
@@ -2766,10 +2926,10 @@ function GatedReleasePanel({
 
       {showConfirm && (
         <ConfirmModal
-          title="Send Feedback to Submitter"
-          message="Your consolidated feedback will be sent to the submitter. They will be asked to revise and resubmit. Individual reviewer comments will not be visible to them."
-          confirmLabel="Yes, Send Feedback"
-          confirmClass="bg-orange-500 hover:bg-orange-600"
+          title={activeDecision.confirmTitle}
+          message={activeDecision.confirmMessage}
+          confirmLabel={activeDecision.confirmLabel}
+          confirmClass={activeDecision.btnClass}
           onConfirm={() => releaseMutation.mutate()}
           onCancel={() => setShowConfirm(false)}
           loading={releaseMutation.isPending}
@@ -2791,6 +2951,7 @@ function FeedbackTab({
 }) {
   const qc = useQueryClient()
   const [showAppeal, setShowAppeal] = useState(false)
+  const [viewingDoc, setViewingDoc] = useState<ViewingDoc | null>(null)
 
   const { data, isLoading } = useQuery<{ data: FeedbackItem[]; appeal: Appeal | null }>({
     queryKey: ['submission-feedback', submissionId],
@@ -2798,6 +2959,27 @@ function FeedbackTab({
   })
 
   const feedbackItems = data?.data ?? []
+
+  const downloadAnnotated = async (reviewerId: string, filename: string) => {
+    const res = await api.get(`/submissions/${submissionId}/reviewers/${reviewerId}/annotated-document`, { responseType: 'blob' })
+    const url = URL.createObjectURL(res.data)
+    const a = document.createElement('a')
+    a.href = url; a.download = filename; a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  // Open the reviewer's annotated document in the same in-page viewer used by the Documents tab.
+  const openAnnotated = (reviewerId: string, filename: string) => {
+    const ext = filename.split('.').pop()?.toLowerCase()
+    setViewingDoc({
+      submissionId,
+      versionNumber: 0,
+      filename,
+      fileType: ext === 'pdf' ? 'pdf' : 'docx',
+      apiPath: `/submissions/${submissionId}/reviewers/${reviewerId}/annotated-document`,
+      external: true,
+    })
+  }
   const appeal = data?.appeal ?? null
   const isDraft = submissionStatus === 'DRAFT'
 
@@ -2856,6 +3038,29 @@ function FeedbackTab({
                   <p className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap">{item.comments}</p>
                 ) : (
                   <p className="text-sm text-gray-400 italic">No comments provided.</p>
+                )}
+                {item.annotated_document && (
+                  <div className="mt-3 flex items-center gap-3 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2.5">
+                    <FileText className="w-4 h-4 text-blue-500 shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-blue-800 truncate">{item.annotated_document.name}</p>
+                      <p className="text-xs text-blue-500">Annotated document from reviewer</p>
+                    </div>
+                    <button
+                      onClick={() => openAnnotated(item.annotated_document!.reviewer_id, item.annotated_document!.name)}
+                      className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-blue-600 border border-blue-200 rounded-lg hover:bg-blue-100 transition-colors shrink-0"
+                      title="Open in the document viewer"
+                    >
+                      <Eye className="w-3.5 h-3.5" /> View
+                    </button>
+                    <button
+                      onClick={() => downloadAnnotated(item.annotated_document!.reviewer_id, item.annotated_document!.name)}
+                      className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors shrink-0"
+                      title="Download"
+                    >
+                      <Download className="w-3.5 h-3.5" /> Download
+                    </button>
+                  </div>
                 )}
               </div>
             </div>
@@ -2956,6 +3161,7 @@ function FeedbackTab({
           }}
         />
       )}
+      {viewingDoc && <InlineDocViewer doc={viewingDoc} onClose={() => setViewingDoc(null)} />}
     </div>
   )
 }
@@ -3274,6 +3480,11 @@ function ReviewerDecisionPanel({
   const [showConfirm, setShowConfirm] = useState(false)
   const [submitError, setSubmitError] = useState('')
 
+  // Annotated document upload
+  const [annotatedFile, setAnnotatedFile] = useState<File | null>(null)
+  const [fileError, setFileError] = useState('')
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
   // Extension request state
   const [showExtension, setShowExtension] = useState(false)
   const [extReason, setExtReason] = useState('')
@@ -3292,13 +3503,25 @@ function ReviewerDecisionPanel({
   const myAssignment = reviewersData?.data?.find(r => r.user_id === user?.id) ?? null
 
   const decisionMutation = useMutation({
-    mutationFn: () =>
-      api.patch(`/submissions/${submissionId}/reviewers/${myAssignment!.id}`, {
+    mutationFn: () => {
+      if (annotatedFile) {
+        const fd = new FormData()
+        fd.append('_method', 'PATCH') // method spoofing so PHP parses the multipart body
+        fd.append('decision', selectedDecision ?? '')
+        if (comments.trim()) fd.append('comments', comments.trim())
+        fd.append('annotated_document', annotatedFile)
+        return api.post(`/submissions/${submissionId}/reviewers/${myAssignment!.id}`, fd, {
+          headers: { 'Content-Type': 'multipart/form-data' },
+        })
+      }
+      return api.patch(`/submissions/${submissionId}/reviewers/${myAssignment!.id}`, {
         decision: selectedDecision,
         comments: comments.trim() || null,
-      }),
+      })
+    },
     onSuccess: () => {
       setShowConfirm(false)
+      setAnnotatedFile(null)
       qc.invalidateQueries({ queryKey: ['submission', submissionId] })
       qc.invalidateQueries({ queryKey: ['submission-reviewers', submissionId] })
       qc.invalidateQueries({ queryKey: ['review-progress', submissionId] })
@@ -3442,6 +3665,64 @@ function ReviewerDecisionPanel({
             maxLength={10000}
           />
           <p className="text-xs text-gray-400 mt-1">{comments.length}/10000</p>
+        </div>
+
+        {/* Annotated document upload */}
+        <div>
+          <label className="text-xs font-semibold text-gray-600 mb-1 block uppercase tracking-wide">
+            Annotated document <span className="text-gray-400 normal-case font-normal">(optional)</span>
+          </label>
+          <p className="text-xs text-gray-400 mb-2">
+            Attach the reviewed file with your inline comments or annotations. The submitter will be able to view and download it. PDF or Word, up to 25&nbsp;MB.
+          </p>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".pdf,.doc,.docx"
+            className="hidden"
+            onChange={e => {
+              const f = e.target.files?.[0] ?? null
+              setFileError('')
+              if (!f) { setAnnotatedFile(null); return }
+              const ext = f.name.split('.').pop()?.toLowerCase() ?? ''
+              if (!['pdf', 'doc', 'docx'].includes(ext)) {
+                setFileError('Only PDF or Word (.pdf, .doc, .docx) files are allowed.')
+                setAnnotatedFile(null)
+                return
+              }
+              if (f.size > 25 * 1024 * 1024) {
+                setFileError('File exceeds the 25 MB limit.')
+                setAnnotatedFile(null)
+                return
+              }
+              setAnnotatedFile(f)
+            }}
+          />
+          {annotatedFile ? (
+            <div className="flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2.5">
+              <FileText className="w-4 h-4 text-blue-500 shrink-0" />
+              <span className="text-sm text-blue-800 truncate flex-1">{annotatedFile.name}</span>
+              <span className="text-xs text-blue-500 shrink-0">{(annotatedFile.size / 1024 / 1024).toFixed(1)} MB</span>
+              <button
+                type="button"
+                onClick={() => { setAnnotatedFile(null); if (fileInputRef.current) fileInputRef.current.value = '' }}
+                className="text-blue-400 hover:text-blue-600 shrink-0"
+                title="Remove file"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-blue-600 border border-dashed border-blue-300 rounded-lg hover:bg-blue-50 transition-colors w-full justify-center"
+            >
+              <Upload className="w-4 h-4" />
+              Attach annotated document
+            </button>
+          )}
+          {fileError && <p className="text-xs text-red-600 mt-1">{fileError}</p>}
         </div>
 
         {submitError && (
@@ -3612,6 +3893,10 @@ function ReviewerDecisionPanel({
 export default function SubmissionDetailPage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
+  const location = useLocation()
+  // Where the user came from (e.g. the Assignments page) so "Back" returns there.
+  const backTo = (location.state as { from?: string } | null)?.from ?? '/submissions'
+  const backLabel = backTo === '/reviews' ? 'Back to assignments' : 'Back to submissions'
   const user = useAuthStore((s) => s.user)
   const qc = useQueryClient()
   const [tab, setTab] = useState<Tab>('overview')
@@ -3734,8 +4019,8 @@ export default function SubmissionDetailPage() {
       <div className="flex flex-col items-center py-20 text-center">
         <XCircle className="w-10 h-10 text-red-300 mb-3" />
         <p className="text-gray-500">Submission not found or access denied.</p>
-        <button onClick={() => navigate('/submissions')} className="mt-3 text-blue-600 text-sm hover:underline">
-          Back to submissions
+        <button onClick={() => navigate(backTo)} className="mt-3 text-blue-600 text-sm hover:underline">
+          {backLabel}
         </button>
       </div>
     )
@@ -3757,11 +4042,11 @@ export default function SubmissionDetailPage() {
       {/* Back */}
       <div className="flex items-center justify-between mb-5">
         <button
-          onClick={() => navigate('/submissions')}
+          onClick={() => navigate(backTo)}
           className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700"
         >
           <ChevronLeft className="w-4 h-4" />
-          Back to submissions
+          {backLabel}
         </button>
         <button
           onClick={() => window.print()}

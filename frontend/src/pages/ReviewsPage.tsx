@@ -5,7 +5,7 @@ import {
   ShieldCheck, Hourglass, CheckCircle2, Archive,
   AlertCircle, CalendarDays, Ban, X,
   Loader2, AlertTriangle, Clock, ChevronRight, Gavel,
-  UserX, InboxIcon,
+  UserX, InboxIcon, Search, RefreshCw,
 } from 'lucide-react'
 import api from '../lib/axios'
 import { useAuthStore } from '../stores/authStore'
@@ -252,7 +252,7 @@ function CoordConflictPanel({ items }: { items: ConflictDeclaration[] }) {
                 </td>
                 <td className="px-4 py-3 max-w-[180px]">
                   <button
-                    onClick={() => navigate(`/submissions/${c.submission_id}`)}
+                    onClick={() => navigate(`/submissions/${c.submission_id}`, { state: { from: '/reviews' } })}
                     className="text-sm text-indigo-600 hover:underline truncate block max-w-full text-left"
                     title={c.submission_title ?? ''}
                   >
@@ -325,7 +325,7 @@ function CoordIncomingPanel({ items }: { items: IncomingSubmission[] }) {
           </thead>
           <tbody>
             {items.map((s) => (
-              <tr key={s.id} className="border-b border-gray-50 hover:bg-amber-50/30 cursor-pointer group" onClick={() => navigate(`/submissions/${s.id}`)}>
+              <tr key={s.id} className="border-b border-gray-50 hover:bg-amber-50/30 cursor-pointer group" onClick={() => navigate(`/submissions/${s.id}`, { state: { from: '/reviews' } })}>
                 <td className="px-4 py-3 max-w-[220px]">
                   <p className="text-sm font-medium text-gray-900 truncate" title={s.title}>{s.title}</p>
                 </td>
@@ -487,23 +487,15 @@ function AssignmentTableRow({
   )
 }
 
-// ── Section Table ─────────────────────────────────────────────────────────────
+// ── Plain assignments table (no section header — used inside tabs) ────────────
 
-function SectionTable({
-  title,
-  count,
-  icon: Icon,
-  headerClass,
+function AssignmentsTable({
   items,
   onExtension,
   onConflict,
   navigate,
   maxExtensions,
 }: {
-  title: string
-  count: number
-  icon: React.ElementType
-  headerClass: string
   items: ReviewAssignment[]
   onExtension: (item: ReviewAssignment) => void
   onConflict: (item: ReviewAssignment) => void
@@ -512,12 +504,6 @@ function SectionTable({
 }) {
   return (
     <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
-      <div className={`flex items-center gap-2 px-5 py-3 border-b border-gray-100 ${headerClass}`}>
-        <Icon size={15} />
-        <span className="text-sm font-semibold">{title}</span>
-        <span className="ml-1 text-xs bg-white/60 px-2 py-0.5 rounded-full font-medium">{count}</span>
-      </div>
-
       <div className="overflow-x-auto">
         <table className="w-full min-w-[900px]">
           <thead>
@@ -538,7 +524,7 @@ function SectionTable({
               <AssignmentTableRow
                 key={item.assignment_id}
                 item={item}
-                onClick={() => navigate(`/submissions/${item.submission.id}`)}
+                onClick={() => navigate(`/submissions/${item.submission.id}`, { state: { from: '/reviews' } })}
                 onExtension={onExtension}
                 onConflict={onConflict}
                 maxExtensions={maxExtensions}
@@ -546,6 +532,79 @@ function SectionTable({
             ))}
           </tbody>
         </table>
+      </div>
+    </div>
+  )
+}
+
+// ── Gated (gatekeeper) decisions table — used inside tabs ─────────────────────
+
+function GatedAssignmentsTable({
+  items,
+  navigate,
+}: {
+  items: GatedItem[]
+  navigate: ReturnType<typeof useNavigate>
+}) {
+  return (
+    <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[700px]">
+          <thead>
+            <tr className="border-b border-gray-100 bg-gray-50/80">
+              <th scope="col" className="text-left text-[10px] font-semibold text-gray-400 uppercase tracking-wide px-4 py-2.5">Title</th>
+              <th scope="col" className="text-left text-[10px] font-semibold text-gray-400 uppercase tracking-wide px-4 py-2.5">Type</th>
+              <th scope="col" className="text-left text-[10px] font-semibold text-gray-400 uppercase tracking-wide px-4 py-2.5">Program</th>
+              <th scope="col" className="text-left text-[10px] font-semibold text-gray-400 uppercase tracking-wide px-4 py-2.5">Stage Requiring Decision</th>
+              <th scope="col" className="text-left text-[10px] font-semibold text-gray-400 uppercase tracking-wide px-4 py-2.5">Stage Outcome</th>
+              <th scope="col" className="px-4 py-2.5 w-16" />
+            </tr>
+          </thead>
+          <tbody>
+            {items.map((item) => (
+              <tr
+                key={item.id}
+                className="border-b border-gray-50 hover:bg-purple-50/40 cursor-pointer group"
+                onClick={() => navigate(`/submissions/${item.id}`, { state: { from: '/reviews' } })}
+              >
+                <td className="px-4 py-3">
+                  <p className="text-sm font-medium text-gray-900 truncate max-w-[200px]" title={item.title}>{item.title}</p>
+                  {item.submitter_name && <p className="text-xs text-gray-400 mt-0.5">{item.submitter_name}</p>}
+                </td>
+                <td className="px-4 py-3 text-xs text-gray-600 whitespace-nowrap">{item.submission_type ?? '—'}</td>
+                <td className="px-4 py-3 text-xs text-gray-600 whitespace-nowrap">{item.program ?? '—'}</td>
+                <td className="px-4 py-3 text-xs text-gray-700 font-medium">{item.pending_gatekeeper_stage_name ?? '—'}</td>
+                <td className="px-4 py-3">
+                  {item.pending_gatekeeper_stage_outcome ? (
+                    <span className={`inline-flex text-[10px] px-2 py-0.5 rounded-full font-medium ${
+                      item.pending_gatekeeper_stage_outcome === 'FAILED'
+                        ? 'bg-red-100 text-red-700'
+                        : 'bg-amber-100 text-amber-700'
+                    }`}>
+                      {item.pending_gatekeeper_stage_outcome === 'FAILED' ? 'Rejected' : 'Revision Requested'}
+                    </span>
+                  ) : <span className="text-gray-300 text-xs">—</span>}
+                </td>
+                <td className="px-4 py-3">
+                  <ChevronRight size={14} className="text-gray-300 group-hover:text-purple-500" />
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
+// ── Empty state (per tab) ─────────────────────────────────────────────────────
+
+function TabEmptyState({ icon: Icon, message }: { icon: React.ElementType; message: string }) {
+  return (
+    <div className="bg-white rounded-xl border border-gray-200 shadow-sm">
+      <div className="flex flex-col items-center justify-center py-16 text-center">
+        <Icon className="w-10 h-10 text-gray-200 mb-3" />
+        <p className="text-sm text-gray-500">{message}</p>
       </div>
     </div>
   )
@@ -719,11 +778,15 @@ function ConflictModal({ item, onClose }: { item: ReviewAssignment; onClose: () 
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
+type TabKey = 'gated' | 'awaiting' | 'upcoming' | 'completed' | 'archived'
+
 export default function ReviewsPage() {
   const user = useAuthStore((s) => s.user)
   const navigate = useNavigate()
   const [extensionItem, setExtensionItem] = useState<ReviewAssignment | null>(null)
   const [conflictItem, setConflictItem] = useState<ReviewAssignment | null>(null)
+  const [search, setSearch] = useState('')
+  const [activeTab, setActiveTab] = useState<TabKey>('awaiting')
 
   const { data: reviewSettings } = useQuery<{ max_extension_requests: number }>({
     queryKey: ['review-settings'],
@@ -757,7 +820,7 @@ export default function ReviewsPage() {
   const conflictDeclarations = coordData?.conflicts ?? []
   const incomingSubmissions = coordData?.unassigned ?? []
 
-  const { data, isLoading } = useQuery<{ pending: ReviewAssignment[], future: ReviewAssignment[], completed: ReviewAssignment[] }>({
+  const { data, isLoading, refetch } = useQuery<{ pending: ReviewAssignment[], future: ReviewAssignment[], completed: ReviewAssignment[] }>({
     queryKey: ['my-reviews', 'assignments'],
     queryFn: () => api.get('/submissions/my-reviews').then((r) => r.data),
     staleTime: 30_000,
@@ -778,6 +841,34 @@ export default function ReviewsPage() {
     ...awaiting.filter((i) => i.is_due_soon && !i.is_overdue),
     ...awaiting.filter((i) => !i.is_overdue && !i.is_due_soon),
   ]
+
+  // ── Search filtering ────────────────────────────────────────────────────────
+  const s = search.toLowerCase()
+  const matchesAssignment = (i: ReviewAssignment) =>
+    !search ||
+    i.submission.title.toLowerCase().includes(s) ||
+    (i.submission.submission_type?.label ?? '').toLowerCase().includes(s)
+  const matchesGated = (g: GatedItem) =>
+    !search ||
+    g.title.toLowerCase().includes(s) ||
+    (g.submission_type ?? '').toLowerCase().includes(s)
+
+  const gatedF     = gatedPending.filter(matchesGated)
+  const awaitingF  = awaitingSorted.filter(matchesAssignment)
+  const upcomingF  = future.filter(matchesAssignment)
+  const completedF = completedByMe.filter(matchesAssignment)
+  const othersF    = others.filter(matchesAssignment)
+
+  // ── Tab definitions (gated + archived only shown when populated) ─────────────
+  const tabDefs: { key: TabKey; label: string; count: number; show: boolean }[] = [
+    { key: 'gated',     label: 'Gatekeeper Decisions', count: gatedPending.length,  show: gatedPending.length > 0 },
+    { key: 'awaiting',  label: 'Awaiting My Review',   count: awaitingSorted.length, show: true },
+    { key: 'upcoming',  label: 'Upcoming',             count: future.length,         show: true },
+    { key: 'completed', label: 'Completed',            count: completedByMe.length,  show: true },
+    { key: 'archived',  label: 'Archived',             count: others.length,         show: others.length > 0 },
+  ]
+  const visibleTabs = tabDefs.filter((t) => t.show)
+  const effectiveTab: TabKey = visibleTabs.some((t) => t.key === activeTab) ? activeTab : 'awaiting'
 
   return (
     <>
@@ -803,69 +894,37 @@ export default function ReviewsPage() {
         </div>
       )}
 
-      {/* Gated reviews section — shown if user has pending gatekeeper decisions */}
-      {gatedPending.length > 0 && (
-        <div className="mb-6 bg-white rounded-xl border-2 border-purple-200 shadow-sm overflow-hidden">
-          <div className="flex items-center gap-2 px-5 py-3 border-b border-purple-100 bg-purple-50 text-purple-700">
-            <Gavel size={15} />
-            <span className="text-sm font-semibold">Gated Reviews — Awaiting Your Decision</span>
-            <span className="ml-1 text-xs bg-white/60 px-2 py-0.5 rounded-full font-medium">{gatedPending.length}</span>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[700px]">
-              <thead>
-                <tr className="border-b border-gray-100 bg-gray-50/80">
-                  <th scope="col" className="text-left text-[10px] font-semibold text-gray-400 uppercase tracking-wide px-4 py-2.5">Title</th>
-                  <th scope="col" className="text-left text-[10px] font-semibold text-gray-400 uppercase tracking-wide px-4 py-2.5">Type</th>
-                  <th scope="col" className="text-left text-[10px] font-semibold text-gray-400 uppercase tracking-wide px-4 py-2.5">Program</th>
-                  <th scope="col" className="text-left text-[10px] font-semibold text-gray-400 uppercase tracking-wide px-4 py-2.5">Stage Requiring Decision</th>
-                  <th scope="col" className="text-left text-[10px] font-semibold text-gray-400 uppercase tracking-wide px-4 py-2.5">Stage Outcome</th>
-                  <th scope="col" className="px-4 py-2.5 w-16" />
-                </tr>
-              </thead>
-              <tbody>
-                {gatedPending.map((item) => (
-                  <tr
-                    key={item.id}
-                    className="border-b border-gray-50 hover:bg-purple-50/40 cursor-pointer group"
-                    onClick={() => navigate(`/submissions/${item.id}`)}
-                  >
-                    <td className="px-4 py-3">
-                      <p className="text-sm font-medium text-gray-900 truncate max-w-[200px]" title={item.title}>{item.title}</p>
-                      {item.submitter_name && <p className="text-xs text-gray-400 mt-0.5">{item.submitter_name}</p>}
-                    </td>
-                    <td className="px-4 py-3 text-xs text-gray-600 whitespace-nowrap">{item.submission_type ?? '—'}</td>
-                    <td className="px-4 py-3 text-xs text-gray-600 whitespace-nowrap">{item.program ?? '—'}</td>
-                    <td className="px-4 py-3 text-xs text-gray-700 font-medium">{item.pending_gatekeeper_stage_name ?? '—'}</td>
-                    <td className="px-4 py-3">
-                      {item.pending_gatekeeper_stage_outcome ? (
-                        <span className={`inline-flex text-[10px] px-2 py-0.5 rounded-full font-medium ${
-                          item.pending_gatekeeper_stage_outcome === 'FAILED'
-                            ? 'bg-red-100 text-red-700'
-                            : 'bg-amber-100 text-amber-700'
-                        }`}>
-                          {item.pending_gatekeeper_stage_outcome === 'FAILED' ? 'Rejected' : 'Revision Requested'}
-                        </span>
-                      ) : <span className="text-gray-300 text-xs">—</span>}
-                    </td>
-                    <td className="px-4 py-3">
-                      <ChevronRight size={14} className="text-gray-300 group-hover:text-purple-500" />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+      {/* Header */}
+      <div className="flex items-start justify-between mb-6 gap-4">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">Assignments</h1>
+          <p className="text-sm text-gray-500 mt-0.5">
+            {isAdminOrCoord
+              ? 'Manage peer review assignments, extensions, and decisions'
+              : 'Submissions assigned to you for peer review'}
+          </p>
         </div>
-      )}
+        <button
+          onClick={() => refetch()}
+          aria-label="Refresh"
+          className="flex items-center gap-1.5 px-3 py-2 border border-gray-200 rounded-lg text-sm text-gray-600 hover:bg-gray-50 shrink-0"
+        >
+          <RefreshCw className="w-4 h-4" aria-hidden="true" />
+        </button>
+      </div>
 
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold text-gray-900">Assignments</h1>
-        <p className="text-sm text-gray-500 mt-0.5">
-          {isAdminOrCoord
-            ? 'Manage peer review assignments, extensions, and decisions'
-            : 'Submissions assigned to you for peer review'}
-        </p>
+      {/* Search */}
+      <div className="mb-4">
+        <div className="relative max-w-xs">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" aria-hidden="true" />
+          <input
+            className="w-full pl-9 pr-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            placeholder="Search by title or type…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            aria-label="Search assignments"
+          />
+        </div>
       </div>
 
       {isLoading ? (
@@ -883,7 +942,7 @@ export default function ReviewsPage() {
             </div>
           ))}
         </div>
-      ) : items.length === 0 ? (
+      ) : items.length === 0 && gatedPending.length === 0 ? (
         <div className="bg-white rounded-xl border border-gray-200 shadow-sm">
           <div className="flex flex-col items-center justify-center py-24 text-center">
             <ShieldCheck className="w-12 h-12 text-gray-200 mb-4" />
@@ -894,63 +953,56 @@ export default function ReviewsPage() {
           </div>
         </div>
       ) : (
-        <div className="space-y-5">
-          {awaitingSorted.length > 0 && (
-            <SectionTable
-              title="Waiting for My Review"
-              count={awaitingSorted.length}
-              icon={Hourglass}
-              headerClass="bg-blue-50 text-blue-700"
-              items={awaitingSorted}
-              onExtension={setExtensionItem}
-              onConflict={setConflictItem}
-              navigate={navigate}
-              maxExtensions={maxExtensions}
-            />
+        <>
+          {/* Tab bar */}
+          <div className="mb-5 flex items-center gap-1 border-b border-gray-200 overflow-x-auto">
+            {visibleTabs.map((t) => (
+              <button
+                key={t.key}
+                type="button"
+                onClick={() => setActiveTab(t.key)}
+                className={`px-4 py-2 text-sm font-medium border-b-2 whitespace-nowrap transition-colors ${
+                  effectiveTab === t.key
+                    ? 'border-blue-600 text-blue-600'
+                    : 'border-transparent text-gray-500 hover:text-gray-700'
+                }`}
+              >
+                {t.label} ({t.count})
+              </button>
+            ))}
+          </div>
+
+          {/* Tab content */}
+          {effectiveTab === 'gated' && (
+            gatedF.length > 0
+              ? <GatedAssignmentsTable items={gatedF} navigate={navigate} />
+              : <TabEmptyState icon={Gavel} message={search ? 'No gatekeeper decisions match your search.' : 'No gatekeeper decisions awaiting you.'} />
           )}
 
-          {future.length > 0 && (
-            <SectionTable
-              title="Future Work (Assigned in Later Stages)"
-              count={future.length}
-              icon={Clock}
-              headerClass="bg-amber-50 text-amber-700"
-              items={future}
-              onExtension={setExtensionItem}
-              onConflict={setConflictItem}
-              navigate={navigate}
-              maxExtensions={maxExtensions}
-            />
+          {effectiveTab === 'awaiting' && (
+            awaitingF.length > 0
+              ? <AssignmentsTable items={awaitingF} onExtension={setExtensionItem} onConflict={setConflictItem} navigate={navigate} maxExtensions={maxExtensions} />
+              : <TabEmptyState icon={Hourglass} message={search ? 'No items awaiting your review match your search.' : 'Nothing is awaiting your review right now.'} />
           )}
 
-          {completedByMe.length > 0 && (
-            <SectionTable
-              title="Reviewed by Me"
-              count={completedByMe.length}
-              icon={CheckCircle2}
-              headerClass="bg-green-50 text-green-700"
-              items={completedByMe}
-              onExtension={setExtensionItem}
-              onConflict={setConflictItem}
-              navigate={navigate}
-              maxExtensions={maxExtensions}
-            />
+          {effectiveTab === 'upcoming' && (
+            upcomingF.length > 0
+              ? <AssignmentsTable items={upcomingF} onExtension={setExtensionItem} onConflict={setConflictItem} navigate={navigate} maxExtensions={maxExtensions} />
+              : <TabEmptyState icon={Clock} message={search ? 'No upcoming assignments match your search.' : 'No upcoming assignments in later stages.'} />
           )}
 
-          {others.length > 0 && (
-            <SectionTable
-              title="Others (Withdrawn / Cancelled)"
-              count={others.length}
-              icon={Archive}
-              headerClass="bg-gray-50 text-gray-600"
-              items={others}
-              onExtension={setExtensionItem}
-              onConflict={setConflictItem}
-              navigate={navigate}
-              maxExtensions={maxExtensions}
-            />
+          {effectiveTab === 'completed' && (
+            completedF.length > 0
+              ? <AssignmentsTable items={completedF} onExtension={setExtensionItem} onConflict={setConflictItem} navigate={navigate} maxExtensions={maxExtensions} />
+              : <TabEmptyState icon={CheckCircle2} message={search ? 'No completed reviews match your search.' : 'You have not completed any reviews yet.'} />
           )}
-        </div>
+
+          {effectiveTab === 'archived' && (
+            othersF.length > 0
+              ? <AssignmentsTable items={othersF} onExtension={setExtensionItem} onConflict={setConflictItem} navigate={navigate} maxExtensions={maxExtensions} />
+              : <TabEmptyState icon={Archive} message={search ? 'No archived items match your search.' : 'No withdrawn or cancelled items.'} />
+          )}
+        </>
       )}
 
       {extensionItem && (

@@ -10,6 +10,9 @@ class AppealRequest extends Model
 {
     use HasUuids;
 
+    // The appeal_requests table only has created_at (DB default now()); no updated_at column.
+    public $timestamps = false;
+
     const STATUS_PENDING      = 'PENDING';
     const STATUS_UNDER_REVIEW = 'UNDER_REVIEW';
     const STATUS_UPHELD       = 'UPHELD';

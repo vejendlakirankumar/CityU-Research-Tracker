@@ -108,8 +108,11 @@ class SubmissionPolicy
 
     private function isAssignedReviewer(User $user, Submission $submission): bool
     {
+        // A reviewer who has flagged a conflict of interest loses access to the
+        // submission until a coordinator resolves the conflict.
         return SubmissionReviewer::where('submission_id', $submission->id)
             ->where('user_id', $user->id)
+            ->where('conflict_flagged', false)
             ->exists();
     }
 }

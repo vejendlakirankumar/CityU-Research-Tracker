@@ -31,6 +31,33 @@ mark.ann-active-mark,
   100% { background: #fde68a; box-shadow: 0 0 0 2px #f59e0b; }
 }
 
+/* ── PDF.js text layer (selectable text overlaid on the page canvas) ───────── */
+.pdf-text-layer {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  line-height: 1;
+  text-size-adjust: none;
+  forced-color-adjust: none;
+  transform-origin: 0 0;
+  z-index: 2;
+}
+.pdf-text-layer span,
+.pdf-text-layer br {
+  color: transparent;
+  position: absolute;
+  white-space: pre;
+  cursor: text;
+  transform-origin: 0 0;
+}
+.pdf-text-layer ::selection { background: rgba(37, 99, 235, 0.35); }
+/* Translucent so the underlying canvas text stays visible when highlighted */
+.pdf-text-layer span.ann-active-mark {
+  background: rgba(251, 191, 36, 0.4);
+  box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.7);
+  animation: ann-highlight-pulse 0.4s ease;
+}
+
 /* ── Toast slide-in animation ─────────────────────────────────────────────── */
 @keyframes toast-in {
   from { opacity: 0; transform: translateY(8px) scale(0.97); }

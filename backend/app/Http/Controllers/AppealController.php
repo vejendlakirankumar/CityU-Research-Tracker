@@ -88,6 +88,25 @@ class AppealController extends Controller
             }
         }
 
+        // If dismissed, the original rejection stands — return the submission to REJECTED.
+        if ($data['status'] === AppealRequest::STATUS_DISMISSED) {
+            $submission = Submission::find($appeal->submission_id);
+            if ($submission && $submission->status === Submission::STATUS_APPEAL_PENDING) {
+                $prevStatus = $submission->status;
+                $submission->update(['status' => Submission::STATUS_REJECTED]);
+
+                AuditLog::create([
+                    'submission_id' => $submission->id,
+                    'actor_id'      => $request->user()->id,
+                    'action'        => 'APPEAL_DISMISSED',
+                    'before_state'  => ['status' => $prevStatus, 'appeal_status' => $oldStatus],
+                    'after_state'   => ['status' => Submission::STATUS_REJECTED, 'appeal_status' => $data['status']],
+                ]);
+
+                app(NotificationService::class)->notifyStatusChange($submission->fresh(), Submission::STATUS_REJECTED);
+            }
+        }
+
         AuditLog::create([
             'submission_id' => $appeal->submission_id,
             'actor_id'      => $request->user()->id,
