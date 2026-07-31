@@ -24,6 +24,7 @@ import type {
   Submission, SubmissionStatus, SubmissionAuthor, SubmissionReviewer,
   ActivityEvent, FeedbackItem, Appeal, ReviewProgressStage, SubmissionMeeting,
   DocumentAnnotation, SubmissionMessage, MeetingType, UserMeetingContext,
+  SubmissionEmail, EmailStageTemplate,
 } from '../types/submissions'
 import { STATUS_LABELS, STATUS_COLORS } from '../types/submissions'
 import type { SubmissionTypeAdmin } from '../types/admin'
@@ -471,7 +472,7 @@ function ReviewProgressPanel({
   const user = useAuthStore((s) => s.user)
   const [requestingStageId, setRequestingStageId]   = useState<string | null>(null)
   const [requestingGkMeeting, setRequestingGkMeeting] = useState(false)
-  const [meetingForm, setMeetingForm] = useState({ title: '', description: '', proposed_at: '' })
+  const [meetingForm, setMeetingForm] = useState({ title: '', description: '', proposed_at: '', meeting_link: '' })
 
   const { data, isLoading } = useQuery<{
     data: ReviewProgressStage[]
@@ -501,12 +502,13 @@ function ReviewProgressPanel({
       title: string
       description: string
       proposed_at: string | null
+      meeting_link: string | null
     }) => api.post(`/submissions/${submissionId}/meetings`, payload),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['submission-meetings', submissionId] })
       setRequestingStageId(null)
       setRequestingGkMeeting(false)
-      setMeetingForm({ title: '', description: '', proposed_at: '' })
+      setMeetingForm({ title: '', description: '', proposed_at: '', meeting_link: '' })
     },
   })
 
@@ -562,7 +564,7 @@ function ReviewProgressPanel({
 
   // ── Meeting request form (reused for stage-level meetings) ─────────────────
   const renderMeetingForm = (
-    onSubmit: (form: { title: string; description: string; proposed_at: string | null }) => void,
+    onSubmit: (form: { title: string; description: string; proposed_at: string | null; meeting_link: string | null }) => void,
     onCancel: () => void,
     isPending: boolean,
   ) => (
@@ -580,6 +582,14 @@ function ReviewProgressPanel({
         onChange={e => setMeetingForm(f => ({ ...f, description: e.target.value }))}
       />
       <div>
+        <label className="text-xs text-gray-500 mb-0.5 block">Meeting link (Zoom / Teams, optional)</label>
+        <input type="url"
+          className="w-full border border-gray-300 rounded-lg px-2.5 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500"
+          placeholder="https://zoom.us/j/… or https://teams.microsoft.com/l/…"
+          value={meetingForm.meeting_link}
+          onChange={e => setMeetingForm(f => ({ ...f, meeting_link: e.target.value }))} />
+      </div>
+      <div>
         <label className="text-xs text-gray-500 mb-0.5 block">Proposed date/time (optional)</label>
         <input type="datetime-local"
           className="border border-gray-300 rounded-lg px-2.5 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500"
@@ -592,6 +602,7 @@ function ReviewProgressPanel({
             title: meetingForm.title,
             description: meetingForm.description,
             proposed_at: meetingForm.proposed_at || null,
+            meeting_link: meetingForm.meeting_link.trim() || null,
           })}
           disabled={isPending || !meetingForm.title.trim()}
           className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white text-xs rounded-lg hover:bg-blue-700 disabled:opacity-50">
@@ -677,7 +688,7 @@ function ReviewProgressPanel({
                   stage_id: userMeetingCtx!.gatekeeper_stage_id,
                   ...form,
                 }),
-                () => { setRequestingGkMeeting(false); setMeetingForm({ title: '', description: '', proposed_at: '' }) },
+                () => { setRequestingGkMeeting(false); setMeetingForm({ title: '', description: '', proposed_at: '', meeting_link: '' }) },
                 requestMeetingMutation.isPending,
               )
             : (
@@ -803,7 +814,7 @@ function ReviewProgressPanel({
                           meeting_type: meetingType ?? undefined,
                           ...form,
                         }),
-                        () => { setRequestingStageId(null); setMeetingForm({ title: '', description: '', proposed_at: '' }) },
+                        () => { setRequestingStageId(null); setMeetingForm({ title: '', description: '', proposed_at: '', meeting_link: '' }) },
                         requestMeetingMutation.isPending,
                       )
                     : (
@@ -818,10 +829,184 @@ function ReviewProgressPanel({
                   }
                 </div>
               )}
+
+              {/* Email stage — send email to student + recorded emails */}
+              {stage.is_email_stage && (
+                <EmailStagePanel
+                  submissionId={submissionId}
+                  stageId={stage.id}
+                  canEmail={stage.can_email}
+                />
+              )}
             </li>
           )
         })}
       </ol>
+    </div>
+  )
+}
+
+// ── Email Stage Panel ─────────────────────────────────────────────────────────
+
+function EmailStagePanel({
+  submissionId, stageId, canEmail,
+}: {
+  submissionId: string
+  stageId: string
+  canEmail: boolean
+}) {
+  const qc = useQueryClient()
+  const toast = useToastHelpers()
+  const [composing, setComposing] = useState(false)
+  const [templateId, setTemplateId] = useState('')
+  const [subject, setSubject] = useState('')
+  const [bodyHtml, setBodyHtml] = useState('')
+  const [error, setError] = useState('')
+
+  const { data: emailsData } = useQuery<{ data: SubmissionEmail[] }>({
+    queryKey: ['submission-emails', submissionId],
+    queryFn: () => api.get(`/submissions/${submissionId}/emails`).then(r => r.data),
+  })
+  const emails = emailsData?.data ?? []
+
+  const { data: templatesData } = useQuery<{ data: EmailStageTemplate[] }>({
+    queryKey: ['submission-email-templates', submissionId],
+    queryFn: () => api.get(`/submissions/${submissionId}/email-templates`).then(r => r.data),
+    enabled: canEmail,
+  })
+  const templates = templatesData?.data ?? []
+
+  const applyTemplate = (id: string) => {
+    setTemplateId(id)
+    const t = templates.find(x => x.id === id)
+    if (t) { setSubject(t.subject); setBodyHtml(t.body_html) }
+  }
+
+  const sendMutation = useMutation({
+    mutationFn: () => api.post(`/submissions/${submissionId}/emails`, {
+      template_id: templateId || null,
+      stage_id: stageId,
+      subject,
+      body_html: bodyHtml,
+    }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['submission-emails', submissionId] })
+      setComposing(false); setTemplateId(''); setSubject(''); setBodyHtml(''); setError('')
+      toast.success('Email sent', 'The email was sent to the student and recorded on this submission.')
+    },
+    onError: (e: unknown) => {
+      const msg = (e as { response?: { data?: { message?: string } } })?.response?.data?.message
+        ?? 'Failed to send email.'
+      setError(msg)
+    },
+  })
+
+  const send = () => {
+    if (!subject.trim() || !bodyHtml.trim()) { setError('Subject and message body are required.'); return }
+    setError('')
+    sendMutation.mutate()
+  }
+
+  return (
+    <div className="px-4 py-3 border-t border-gray-100 bg-white space-y-3">
+      {/* Recorded emails */}
+      {emails.length > 0 && (
+        <div className="space-y-2">
+          {emails.map(em => (
+            <div key={em.id} className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2">
+              <div className="flex items-center gap-2 flex-wrap">
+                <MailCheck className={`w-3.5 h-3.5 flex-shrink-0 ${em.status === 'sent' ? 'text-emerald-500' : 'text-red-500'}`} />
+                <span className="text-xs font-medium text-gray-800 truncate">{em.subject}</span>
+                <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${em.status === 'sent' ? 'bg-emerald-50 text-emerald-600' : 'bg-red-50 text-red-600'}`}>
+                  {em.status === 'sent' ? 'Sent' : 'Failed'}
+                </span>
+              </div>
+              <p className="text-[11px] text-gray-400 mt-0.5">
+                To {em.recipient_email}
+                {em.sender?.name && <> · by {em.sender.name}</>}
+                {em.created_at && <> · {new Date(em.created_at).toLocaleString()}</>}
+              </p>
+              <div
+                className="prose prose-sm max-w-none text-xs text-gray-600 mt-1.5 border-t border-gray-100 pt-1.5"
+                dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(em.body_html) }}
+              />
+              {em.status === 'failed' && em.error && (
+                <p className="text-[11px] text-red-500 mt-1">Error: {em.error}</p>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {canEmail && !composing && (
+        <button
+          onClick={() => setComposing(true)}
+          className="flex items-center gap-1.5 text-xs text-blue-600 hover:text-blue-700"
+        >
+          <Send className="w-3.5 h-3.5" /> Send email to student
+        </button>
+      )}
+
+      {!canEmail && emails.length === 0 && (
+        <p className="text-xs text-gray-400 italic">No emails have been sent for this stage yet.</p>
+      )}
+
+      {canEmail && composing && (
+        <div className="rounded-lg border border-blue-100 bg-blue-50/40 p-3 space-y-2.5">
+          <div>
+            <label className="text-xs text-gray-500 mb-0.5 block">Template</label>
+            <select
+              className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-xs bg-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+              value={templateId}
+              onChange={e => applyTemplate(e.target.value)}
+            >
+              <option value="">— Choose a template —</option>
+              {templates.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+            </select>
+            {templates.length === 0 && (
+              <p className="text-[11px] text-gray-400 mt-1">No released templates. An admin can add them under Settings → Email Templates.</p>
+            )}
+          </div>
+          <div>
+            <label className="text-xs text-gray-500 mb-0.5 block">Subject</label>
+            <input
+              className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-xs bg-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+              value={subject}
+              onChange={e => setSubject(e.target.value)}
+              placeholder="Email subject"
+            />
+          </div>
+          <div>
+            <label className="text-xs text-gray-500 mb-0.5 block">Message (HTML)</label>
+            <textarea
+              className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-xs bg-white font-mono focus:outline-none focus:ring-1 focus:ring-blue-500 h-32"
+              value={bodyHtml}
+              onChange={e => setBodyHtml(e.target.value)}
+              placeholder="Email body"
+            />
+            <p className="text-[11px] text-gray-400 mt-1">
+              Variables like {'{{student_name}}'} and {'{{submission_title}}'} are filled in automatically when sent.
+            </p>
+          </div>
+          {error && <p className="text-xs text-red-600">{error}</p>}
+          <div className="flex items-center gap-2">
+            <button
+              onClick={send}
+              disabled={sendMutation.isPending}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white text-xs font-medium rounded-lg hover:bg-blue-700 disabled:opacity-60"
+            >
+              {sendMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
+              Send email
+            </button>
+            <button
+              onClick={() => { setComposing(false); setError('') }}
+              className="px-3 py-1.5 text-xs text-gray-500 hover:text-gray-700"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -4030,9 +4215,10 @@ export default function SubmissionDetailPage() {
   const isTerminal = TERMINAL_STATUSES.includes(sub.status)
 
   const canEdit    = (sub.status === 'DRAFT' || sub.status === 'REVISION_REQUIRED') && !sub.is_locked
-  const canSubmit  = (sub.status === 'DRAFT' || sub.status === 'REVISION_REQUIRED') && !sub.is_locked && sub.versions.length > 0
-  // Student can withdraw any non-terminal submission they own
+  // Only the student who owns the submission may submit it for review
   const isOwner    = user?.id === sub.submitter?.id
+  const canSubmit  = isOwner && (sub.status === 'DRAFT' || sub.status === 'REVISION_REQUIRED') && !sub.is_locked && sub.versions.length > 0
+  // Student can withdraw any non-terminal submission they own
   const canWithdraw = !isTerminal && !sub.is_locked && isOwner && !isAdmin
   // Admin/coordinator can cancel any non-terminal submission
   const canCancel  = !isTerminal && isAdmin
@@ -4318,8 +4504,10 @@ export default function SubmissionDetailPage() {
         </div>
       )}
 
-      {/* Reviewer decision panel — visible to any assigned reviewer, including multi-role users */}
-      {isAssignedReviewer && sub.status === 'IN_REVIEW' && (
+      {/* Reviewer decision panel — only for assigned reviewers who are NOT admins/
+          coordinators. Coordinators manage assignments and must not approve/reject on
+          a reviewer's behalf (doing so left the workflow in a hung state). */}
+      {isAssignedReviewer && !isAdmin && sub.status === 'IN_REVIEW' && (
         <ReviewerDecisionPanel
           submissionId={sub.id}
           submissionStatus={sub.status}

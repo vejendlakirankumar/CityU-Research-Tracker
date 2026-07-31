@@ -62,6 +62,7 @@ class SystemController extends Controller
             'support_email'                  => ['sometimes', 'email', 'nullable'],
             'allow_public_registration'      => ['sometimes', 'boolean'],
             'archive_after_days'             => ['sometimes', 'integer', 'min:1', 'nullable'],
+            'audit_retention_days'           => ['sometimes', 'integer', 'min:1', 'max:3650', 'nullable'],
             // Review deadline / grace period
             'review_grace_period_days'       => ['sometimes', 'integer', 'min:0', 'max:30'],
             'grace_period_consider_holidays' => ['sometimes', 'boolean'],

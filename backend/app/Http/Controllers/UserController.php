@@ -9,6 +9,7 @@ use App\Models\Group;
 use App\Models\PasswordHistory;
 use App\Models\PasswordPolicy;
 use App\Models\User;
+use App\Services\AccountErasureService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
@@ -256,11 +257,30 @@ class UserController extends Controller
     }
 
     /**
-     * DELETE /api/users/{user}/purge
-     * Permanently deletes a user record. Admin-only.
-     * The emergency admin and the acting admin's own account cannot be purged.
+     * GET /api/users/{user}/erasure-preview
+     * Returns the user's full profile plus a summary of every record that
+     * would be permanently removed by a GDPR erasure. Admin-only.
      */
-    public function purge(Request $request, User $user): JsonResponse
+    public function erasurePreview(Request $request, User $user, AccountErasureService $erasure): JsonResponse
+    {
+        $this->authorize('purge', $user);
+
+        if ($user->is_emergency_admin) {
+            return response()->json(['message' => 'The emergency admin account cannot be erased.'], 403);
+        }
+
+        return response()->json($erasure->preview($user));
+    }
+
+    /**
+     * DELETE /api/users/{user}/purge
+     * GDPR right-to-erasure. Permanently and irreversibly deletes the user
+     * together with all of their personal data — profile, settings,
+     * credentials, submissions, documents and cross-submission activity.
+     * Admin-only. The emergency admin and the acting admin's own account
+     * cannot be erased.
+     */
+    public function purge(Request $request, User $user, AccountErasureService $erasure): JsonResponse
     {
         $this->authorize('purge', $user);
 
@@ -272,24 +292,32 @@ class UserController extends Controller
             return response()->json(['message' => 'You cannot delete your own account.'], 403);
         }
 
-        $snapshot = ['email' => $user->email, 'name' => $user->name, 'roles' => $user->roles];
+        $erasedUserId = $user->id;
+        $roles        = $user->roles;
 
-        $user->delete();
+        $deleted = $erasure->erase($user);
 
+        // Record the erasure for accountability without retaining the
+        // subject's directly-identifying personal data.
         AuditLog::create([
-            'actor_id'     => $request->user()->id,
-            'action'       => 'USER_DELETED',
-            'target_type'  => 'user',
-            'target_id'    => $snapshot['email'], // user row is gone; store email as ref
-            'before_state' => $snapshot,
-            'ip_address'   => $request->ip(),
-            'user_agent'   => $request->userAgent(),
-            'request_id'   => $request->header('X-Request-Id'),
+            'actor_id'   => $request->user()->id,
+            'action'     => 'USER_GDPR_ERASED',
+            'data'       => [
+                'erased_user_id' => $erasedUserId,
+                'roles'          => $roles,
+                'deleted'        => $deleted,
+            ],
+            'ip_address' => $request->ip(),
+            'user_agent' => $request->userAgent(),
+            'request_id' => $request->header('X-Request-Id'),
         ]);
 
         User::syncEmergencyAdmin();
 
-        return response()->json(['message' => 'User permanently deleted.']);
+        return response()->json([
+            'message' => 'User and all associated data permanently erased.',
+            'deleted' => $deleted,
+        ]);
     }
 
     /**

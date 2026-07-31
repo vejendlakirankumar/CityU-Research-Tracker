@@ -47,6 +47,7 @@ export interface StageDefinition {
   order: number
   stage_role_label: string
   is_gatekeeper: boolean
+  is_email_stage: boolean
   execution_type: ExecutionType
   approval_strategy: ApprovalStrategy
   min_approvals: number
@@ -76,3 +77,23 @@ export interface WorkflowFormData {
 }
 
 export const DECISION_OPTIONS_DEFAULT = ['APPROVE', 'REQUEST_CHANGES', 'REJECT']
+
+// ── Email Templates (admin-managed, used inside workflow email stages) ────────
+
+export interface EmailTemplate {
+  id: string
+  name: string
+  subject: string
+  body_html: string
+  body_text: string | null
+  is_active: boolean
+  updated_at: string | null
+}
+
+export interface EmailTemplateFormData {
+  name: string
+  subject: string
+  body_html: string
+  body_text: string
+  is_active: boolean
+}

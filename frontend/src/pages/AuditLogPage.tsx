@@ -1,7 +1,9 @@
 import { useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
-import { Shield, ChevronDown, ChevronRight, Search, Filter, X } from 'lucide-react'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { Shield, ChevronDown, ChevronRight, Search, Filter, X, Trash2, Loader2, AlertTriangle } from 'lucide-react'
 import api from '../lib/axios'
+import { useAuthStore } from '../stores/authStore'
+import { useToastHelpers } from '../lib/toast'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -122,9 +124,126 @@ interface Filters {
   date_to: string
 }
 
+// ── Retention management (admin only) ──────────────────────────────────────────
+
+interface AuditStats {
+  retention_days: number | null
+  total: number
+  oldest: string | null
+  newest: string | null
+  eligible_for_deletion: number
+}
+
+function RetentionPanel() {
+  const qc = useQueryClient()
+  const toast = useToastHelpers()
+
+  const { data: stats } = useQuery<AuditStats>({
+    queryKey: ['audit-stats'],
+    queryFn: () => api.get('/admin/audit-logs/stats').then(r => r.data),
+    staleTime: 30_000,
+  })
+
+  const [purgeInput, setPurgeInput] = useState<string>('')
+  const [confirmPurge, setConfirmPurge] = useState(false)
+
+  // Seed the purge input from the configured retention period.
+  const purgeValue = purgeInput !== '' ? purgeInput
+    : (stats?.retention_days != null ? String(stats.retention_days) : '')
+
+  const purge = useMutation({
+    mutationFn: (days: number) =>
+      api.delete('/admin/audit-logs', { data: { older_than_days: days } }).then(r => r.data),
+    onSuccess: (res: { deleted: number }) => {
+      qc.invalidateQueries({ queryKey: ['audit-stats'] })
+      qc.invalidateQueries({ queryKey: ['audit-log'] })
+      qc.invalidateQueries({ queryKey: ['audit-actions'] })
+      setConfirmPurge(false)
+      toast.success(`${res.deleted.toLocaleString()} audit ${res.deleted === 1 ? 'entry' : 'entries'} deleted.`)
+    },
+    onError: () => { setConfirmPurge(false); toast.error('Failed to delete audit logs.') },
+  })
+
+  function handlePurge() {
+    const days = parseInt(purgeValue, 10)
+    if (!Number.isFinite(days) || days < 1) {
+      toast.error('Enter a positive number of days.')
+      return
+    }
+    purge.mutate(days)
+  }
+
+  const fmtDate = (d: string | null) =>
+    d ? new Date(d).toLocaleDateString('en-HK', { dateStyle: 'medium' }) : '—'
+
+  return (
+    <div className="bg-white rounded-xl border border-gray-200 px-5 py-3 mb-4">
+      <div className="flex items-center gap-x-6 gap-y-3 flex-wrap">
+        {/* Stats */}
+        <div className="flex items-baseline gap-1.5">
+          <span className="text-xs text-gray-500">Total records:</span>
+          <span className="text-sm font-bold text-gray-900">{(stats?.total ?? 0).toLocaleString()}</span>
+        </div>
+        <div className="flex items-baseline gap-1.5">
+          <span className="text-xs text-gray-500">Oldest entry:</span>
+          <span className="text-sm font-semibold text-gray-900">{fmtDate(stats?.oldest ?? null)}</span>
+        </div>
+        <div className="flex items-baseline gap-1.5">
+          <span className="text-xs text-gray-500">Retention policy:</span>
+          <span className="text-sm font-semibold text-gray-900">
+            {stats?.retention_days != null ? `${stats.retention_days} days` : 'Keep forever'}
+          </span>
+        </div>
+
+        {/* Delete old logs */}
+        <div className="flex items-center gap-2 ml-auto">
+          <span className="text-sm text-gray-500">Delete older than</span>
+          <input
+            type="number"
+            min={1}
+            value={purgeValue}
+            onChange={e => setPurgeInput(e.target.value)}
+            className="w-20 border border-gray-200 rounded-lg py-1.5 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-400"
+          />
+          <span className="text-sm text-gray-500">days</span>
+          {!confirmPurge ? (
+            <button
+              onClick={() => setConfirmPurge(true)}
+              title="This permanently deletes matching entries and cannot be undone."
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-red-600 text-white text-sm font-medium rounded-lg hover:bg-red-700 transition-colors"
+            >
+              <Trash2 className="w-3.5 h-3.5" />Delete
+            </button>
+          ) : (
+            <div className="flex items-center gap-1.5">
+              <button
+                onClick={handlePurge}
+                disabled={purge.isPending}
+                title="This permanently deletes matching entries and cannot be undone."
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-red-600 text-white text-sm font-medium rounded-lg hover:bg-red-700 transition-colors disabled:opacity-50"
+              >
+                {purge.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <AlertTriangle className="w-3.5 h-3.5" />}
+                Confirm
+              </button>
+              <button
+                onClick={() => setConfirmPurge(false)}
+                className="px-3 py-1.5 text-sm text-gray-500 hover:text-gray-700 transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function AuditLogPage() {
+  const currentUser = useAuthStore(s => s.user)
+  const isAdmin = currentUser?.roles?.includes('admin') ?? false
   const [page, setPage] = useState(1)
   const [filters, setFilters] = useState<Filters>({ search: '', action: '', date_from: '', date_to: '' })
   const [pending, setPending] = useState<Filters>({ search: '', action: '', date_from: '', date_to: '' })
@@ -176,6 +295,9 @@ export default function AuditLogPage() {
           <p className="text-sm text-gray-500">Track all administrative and system actions</p>
         </div>
       </div>
+
+      {/* Retention management (admin only) */}
+      {isAdmin && <RetentionPanel />}
 
       {/* Filters */}
       <div className="bg-white rounded-xl border border-gray-200 p-4 mb-4">

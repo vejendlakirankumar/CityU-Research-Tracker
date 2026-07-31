@@ -242,6 +242,8 @@ export interface ReviewProgressStage {
   order: number
   role_label: string
   is_gatekeeper: boolean
+  is_email_stage: boolean
+  can_email: boolean
   reviewers_count: number
   completed_count: number
   status: ReviewStageStatus
@@ -259,7 +261,6 @@ export interface ReviewProgressStage {
 }
 
 export type MeetingType = 'gatekeeper_student' | 'gatekeeper_reviewers' | 'reviewer_reviewer' | 'student_gatekeeper'
-
 export interface UserMeetingContext {
   is_submitter: boolean
   is_reviewer: boolean
@@ -307,6 +308,32 @@ export interface SubmissionMessage {
   body_html: string
   sender: { id: string; name: string }
   is_mine: boolean
+  created_at: string
+}
+
+// ── Submission Email (email workflow stage) ───────────────────────────────────
+
+export interface EmailStageTemplate {
+  id: string
+  name: string
+  subject: string
+  body_html: string
+  body_text: string | null
+}
+
+export interface SubmissionEmail {
+  id: string
+  stage_id: string | null
+  template_id: string | null
+  sender: { id: string; name: string } | null
+  recipient_email: string
+  recipient_name: string | null
+  subject: string
+  body_html: string
+  body_text: string | null
+  status: 'sent' | 'failed'
+  error: string | null
+  sent_at: string | null
   created_at: string
 }
 

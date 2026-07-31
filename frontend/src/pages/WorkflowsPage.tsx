@@ -30,7 +30,7 @@ function Toggle({ checked, onChange, label }: { checked: boolean; onChange: (v: 
 
 const DEFAULT_STAGE: Omit<StageDefinition, 'id' | 'workflow_id'> = {
   name: '', order: 1, stage_role_label: 'reviewer',
-  is_gatekeeper: false, execution_type: 'PARALLEL', approval_strategy: 'ALL',
+  is_gatekeeper: false, is_email_stage: false, execution_type: 'PARALLEL', approval_strategy: 'ALL',
   min_approvals: 1, is_anonymous: false, due_days: 7,
   decision_options: DECISION_OPTIONS_DEFAULT, auto_assignment: { strategy: 'MANUAL' },
 }
@@ -88,6 +88,10 @@ function StageEditor({
         <p className="text-xs text-gray-500">
           <span className="font-semibold text-gray-700">Anonymous reviewers:</span>{' '}
           Reviewer identities are hidden from the submitter and from each other. Only admins and coordinators can see who reviewed.
+        </p>
+        <p className="text-xs text-gray-500">
+          <span className="font-semibold text-gray-700">Email stage:</span>{' '}
+          The assigned person sends an email to the student using an admin-created template. The sent email is recorded on the submission. Reviewer approval controls are not used on an email stage.
         </p>
       </div>
 
@@ -191,6 +195,11 @@ function StageEditor({
                 <input type="checkbox" checked={s.is_anonymous}
                   onChange={(e) => update(i, { is_anonymous: e.target.checked })} className="rounded" />
                 Anonymous reviewers
+              </label>
+              <label className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer">
+                <input type="checkbox" checked={s.is_email_stage}
+                  onChange={(e) => update(i, { is_email_stage: e.target.checked })} className="rounded" />
+                <span className={s.is_email_stage ? 'text-blue-700 font-medium' : ''}>Email stage</span>
               </label>
             </div>
           </div>

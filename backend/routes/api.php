@@ -15,11 +15,13 @@ use App\Http\Controllers\ProgramController;
 use App\Http\Controllers\SsoAuthController;
 use App\Http\Controllers\ReviewerPoolController;
 use App\Http\Controllers\DocumentAnnotationController;
+use App\Http\Controllers\EmailTemplateController;
 use App\Http\Controllers\SubmissionController;
 use App\Http\Controllers\SubmissionAuthorController;
 use App\Http\Controllers\SubmissionMessageController;
 use App\Http\Controllers\SubmissionReviewerController;
 use App\Http\Controllers\SubmissionMeetingController;
+use App\Http\Controllers\SubmissionEmailController;
 use App\Http\Controllers\SubmissionTypeController;
 use App\Http\Controllers\SystemController;
 use App\Http\Controllers\UserController;
@@ -85,6 +87,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/{user}',                    [UserController::class, 'show']);
         Route::patch('/{user}',                  [UserController::class, 'update']);
         Route::delete('/{user}',                 [UserController::class, 'destroy']);
+        Route::get('/{user}/erasure-preview',    [UserController::class, 'erasurePreview']);
         Route::delete('/{user}/purge',           [UserController::class, 'purge']);
         Route::post('/{user}/activate',          [UserController::class, 'activate']);
         Route::post('/{user}/unlock',            [UserController::class, 'unlock']);
@@ -201,6 +204,14 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::patch('workflows/{id}/stages/{stageId}',  [WorkflowController::class, 'updateStage']);
         Route::delete('workflows/{id}/stages/{stageId}', [WorkflowController::class, 'deleteStage']);
 
+        // Email templates (admin-only) — usable inside workflow email stages
+        Route::middleware('role:admin')->group(function () {
+            Route::get('email-templates',                    [EmailTemplateController::class, 'index']);
+            Route::post('email-templates',                   [EmailTemplateController::class, 'store']);
+            Route::patch('email-templates/{email_template}', [EmailTemplateController::class, 'update']);
+            Route::delete('email-templates/{email_template}',[EmailTemplateController::class, 'destroy']);
+        });
+
         // Reviewer pool (pre-assignment of reviewers to categories)
         Route::get('reviewer-pools',          [ReviewerPoolController::class, 'index']);
         Route::post('reviewer-pools',         [ReviewerPoolController::class, 'store']);
@@ -209,6 +220,12 @@ Route::middleware('auth:sanctum')->group(function () {
         // Audit logs
         Route::get('audit-logs',         [AuditLogController::class, 'index']);
         Route::get('audit-logs/actions', [AuditLogController::class, 'actions']);
+        Route::get('audit-logs/stats',   [AuditLogController::class, 'stats']);
+        // Retention config + purge are admin-only.
+        Route::middleware('role:admin')->group(function () {
+            Route::patch('audit-logs/retention', [AuditLogController::class, 'setRetention']);
+            Route::delete('audit-logs',          [AuditLogController::class, 'purge']);
+        });
 
         // Analytics
         Route::get('analytics/overview',         [AnalyticsController::class, 'overview']);
@@ -332,6 +349,11 @@ Route::middleware('auth:sanctum')->group(function () {
         // Similarity check (uses Turnitin if configured, otherwise local)
         Route::get('/{id}/similarity',  [SimilarityController::class, 'result']);
         Route::post('/{id}/similarity', [SimilarityController::class, 'run']);
+
+        // Email stage — send email to submitter using an admin template + record it
+        Route::get('/{id}/email-templates', [SubmissionEmailController::class, 'templates']);
+        Route::get('/{id}/emails',          [SubmissionEmailController::class, 'index']);
+        Route::post('/{id}/emails',         [SubmissionEmailController::class, 'store'])->middleware('throttle:20,1');
 
     }); // end prefix('submissions')
 

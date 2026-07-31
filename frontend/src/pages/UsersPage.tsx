@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Plus, Search, Edit2, Trash2, UserCheck, UserX, Key, Users, FolderOpen, X, Check, Lock, Unlock, RefreshCw, Eye, EyeOff, Copy, CheckCheck, Layers, ShieldAlert } from 'lucide-react'
+import { Plus, Search, Edit2, Trash2, UserCheck, UserX, Key, Users, FolderOpen, X, Check, Lock, Unlock, RefreshCw, Eye, EyeOff, Copy, CheckCheck, Layers, ShieldAlert, FileText, Loader2 } from 'lucide-react'
 import { clsx } from 'clsx'
 import api from '../lib/axios'
 import { useToastHelpers } from '../lib/toast'
@@ -672,6 +672,162 @@ function ResetPasswordModal({ user, onClose }: { user: User; onClose: () => void
   )
 }
 
+// ── GDPR erasure modal ────────────────────────────────────────────────────────
+
+interface ErasurePreview {
+  user: {
+    id: string; name: string; email: string
+    first_name?: string | null; last_name?: string | null
+    organization?: string | null; org_role?: string | null
+    roles: Role[]; is_active: boolean
+    created_at?: string | null; last_login_at?: string | null
+  }
+  submissions: { id: string; title: string; status: string; created_at?: string | null }[]
+  counts: Record<string, number>
+}
+
+const COUNT_LABELS: Record<string, string> = {
+  submissions:          'Submissions',
+  submission_versions:  'Document versions',
+  documents:            'Uploaded files',
+  reviews_by_user:      'Review assignments',
+  review_decisions:     'Review decisions',
+  messages:             'Messages',
+  annotations:          'Annotations',
+  authorships:          'Authorship records',
+  meetings:             'Meeting requests',
+  appeals:              'Appeals',
+  emails:               'Recorded emails',
+  notifications:        'Notifications',
+  audit_entries:        'Audit entries',
+  group_memberships:    'Group memberships',
+}
+
+function DeleteUserModal({ user, onClose, onDeleted }: { user: User; onClose: () => void; onDeleted: (u: User) => void }) {
+  const toast = useToastHelpers()
+  const [confirmText, setConfirmText] = useState('')
+
+  const { data: preview, isLoading, isError } = useQuery({
+    queryKey: ['erasure-preview', user.id],
+    queryFn: async () => {
+      const res = await api.get<ErasurePreview>(`/users/${user.id}/erasure-preview`)
+      return res.data
+    },
+  })
+
+  const purge = useMutation({
+    mutationFn: () => api.delete(`/users/${user.id}/purge`),
+    onSuccess: () => onDeleted(user),
+    onError: () => toast.error('Erasure failed.'),
+  })
+
+  const confirmed = confirmText.trim().toLowerCase() === user.email.trim().toLowerCase()
+  const counts = preview?.counts ?? {}
+  const activeCounts = Object.entries(counts).filter(([, n]) => n > 0)
+
+  return (
+    <Modal title="Erase User & All Data (GDPR)" onClose={onClose} size="lg">
+      <div className="space-y-4">
+        <div className="flex items-start gap-3 bg-red-50 border border-red-200 rounded-lg px-4 py-3">
+          <ShieldAlert className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
+          <div className="text-sm text-red-700">
+            <p className="font-semibold">This permanently erases the account and every record containing this person's data.</p>
+            <p className="mt-0.5 text-red-600">This satisfies a right-to-erasure request and <span className="font-semibold">cannot be undone</span>.</p>
+          </div>
+        </div>
+
+        {/* Profile */}
+        <div className="bg-gray-50 rounded-lg px-4 py-3">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-full bg-brand-800 text-white flex items-center justify-center text-sm font-semibold flex-shrink-0">
+              {user.name.charAt(0).toUpperCase()}
+            </div>
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-gray-900 truncate">{user.name}</p>
+              <p className="text-xs text-gray-500 truncate">{user.email}</p>
+              <div className="flex flex-wrap gap-1 mt-1">{user.roles.map(r => <RoleBadge key={r} role={r} />)}</div>
+            </div>
+          </div>
+          {(preview?.user.organization || preview?.user.org_role) && (
+            <p className="text-xs text-gray-500 mt-2">
+              {preview?.user.organization}{preview?.user.org_role ? ` · ${preview.user.org_role}` : ''}
+            </p>
+          )}
+        </div>
+
+        {/* Data footprint */}
+        {isLoading ? (
+          <div className="flex items-center justify-center gap-2 py-8 text-sm text-gray-400">
+            <Loader2 className="w-4 h-4 animate-spin" /> Loading data footprint…
+          </div>
+        ) : isError ? (
+          <p className="text-sm text-red-600 bg-red-50 rounded px-3 py-2">Could not load the user's data footprint.</p>
+        ) : (
+          <>
+            <div>
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Data to be deleted</p>
+              {activeCounts.length === 0 ? (
+                <p className="text-sm text-gray-500">No associated records — only the account itself will be removed.</p>
+              ) : (
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                  {activeCounts.map(([key, n]) => (
+                    <div key={key} className="flex items-baseline justify-between bg-white border border-gray-200 rounded-lg px-3 py-2">
+                      <span className="text-xs text-gray-600">{COUNT_LABELS[key] ?? key}</span>
+                      <span className="text-sm font-semibold text-gray-900">{n}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {(preview?.submissions.length ?? 0) > 0 && (
+              <div>
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">
+                  Submissions ({preview!.submissions.length})
+                </p>
+                <div className="max-h-40 overflow-y-auto border border-gray-200 rounded-lg divide-y divide-gray-100">
+                  {preview!.submissions.map(s => (
+                    <div key={s.id} className="flex items-center gap-2 px-3 py-2">
+                      <FileText className="w-4 h-4 text-gray-400 flex-shrink-0" />
+                      <span className="text-sm text-gray-800 truncate flex-1">{s.title}</span>
+                      <span className="text-xs text-gray-400 flex-shrink-0">{s.status}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </>
+        )}
+
+        {/* Typed confirmation */}
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">
+            Type <span className="font-mono text-red-600">{user.email}</span> to confirm
+          </label>
+          <input
+            className={inputCls}
+            value={confirmText}
+            onChange={e => setConfirmText(e.target.value)}
+            placeholder={user.email}
+            autoComplete="off"
+          />
+        </div>
+
+        <div className="flex items-center justify-end gap-3 pt-1">
+          <button className="px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50" onClick={onClose}>Cancel</button>
+          <button
+            className="inline-flex items-center gap-2 px-4 py-2 text-sm bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50"
+            disabled={!confirmed || purge.isPending || isLoading}
+            onClick={() => purge.mutate()}
+          >
+            {purge.isPending ? <><Loader2 className="w-4 h-4 animate-spin" /> Erasing…</> : <><Trash2 className="w-4 h-4" /> Erase Permanently</>}
+          </button>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
 // ── Users tab ─────────────────────────────────────────────────────────────────
 
 function UsersTab() {
@@ -711,16 +867,6 @@ function UsersTab() {
     mutationFn: (user: User) => api.post(`/users/${user.id}/unlock`),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['users'] }); toast.success('Account unlocked.') },
     onError: () => toast.error('Unlock failed.'),
-  })
-
-  const purgeUser = useMutation({
-    mutationFn: (user: User) => api.delete(`/users/${user.id}/purge`),
-    onSuccess: (_r, user) => {
-      qc.invalidateQueries({ queryKey: ['users'] })
-      toast.success(`${user.name} has been permanently deleted.`)
-      setDeleteUser(null)
-    },
-    onError: () => toast.error('Delete failed.'),
   })
 
   const refresh = () => qc.invalidateQueries({ queryKey: ['users'] })
@@ -828,7 +974,7 @@ function UsersTab() {
                             </button>
                           ) : null}
                           {actorIsAdmin && !user.is_emergency_admin && user.id !== actorUser?.id && (
-                            <button title="Delete User" onClick={() => setDeleteUser(user)}
+                            <button title="Erase User & All Data (GDPR)" onClick={() => setDeleteUser(user)}
                               className="p-1.5 rounded hover:bg-red-50 text-gray-400 hover:text-red-600">
                               <Trash2 className="w-4 h-4" />
                             </button>
@@ -858,30 +1004,15 @@ function UsersTab() {
       {editUser   && <UserFormModal initial={editUser} onClose={() => setEditUser(null)} onSaved={refresh} actorIsAdmin={actorIsAdmin} />}
       {resetUser  && <ResetPasswordModal user={resetUser} onClose={() => setResetUser(null)} />}
       {deleteUser && (
-        <Modal title="Delete User" onClose={() => setDeleteUser(null)} size="md">
-          <div className="space-y-4">
-            <p className="text-sm text-gray-700">
-              Are you sure you want to <span className="font-semibold text-red-600">permanently delete</span> the account for:
-            </p>
-            <div className="bg-gray-50 rounded-lg px-4 py-3 text-sm">
-              <p className="font-medium text-gray-900">{deleteUser.name}</p>
-              <p className="text-gray-500">{deleteUser.email}</p>
-            </div>
-            <p className="text-xs text-red-600 font-medium">
-              This action cannot be undone. All data associated with this user will be removed.
-            </p>
-            <div className="flex justify-end gap-3 pt-2">
-              <button className="px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50" onClick={() => setDeleteUser(null)}>Cancel</button>
-              <button
-                className="px-4 py-2 text-sm bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50"
-                disabled={purgeUser.isPending}
-                onClick={() => purgeUser.mutate(deleteUser)}
-              >
-                {purgeUser.isPending ? 'Deleting…' : 'Delete Permanently'}
-              </button>
-            </div>
-          </div>
-        </Modal>
+        <DeleteUserModal
+          user={deleteUser}
+          onClose={() => setDeleteUser(null)}
+          onDeleted={(u) => {
+            qc.invalidateQueries({ queryKey: ['users'] })
+            toast.success(`${u.name} and all associated data have been permanently erased.`)
+            setDeleteUser(null)
+          }}
+        />
       )}
     </div>
   )

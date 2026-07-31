@@ -1161,12 +1161,22 @@ class SubmissionController extends Controller
                 })->values()
                 : null;
 
+            $isEmailStage = (bool) ($stage->is_email_stage ?? false);
+            // Only the reviewer(s) assigned to this stage may send stage emails,
+            // and only once the workflow has actually reached this stage.
+            // Admins/coordinators assign reviewers but do not send emails.
+            $canEmail = $isEmailStage
+                && $submission->current_stage_id === $stage->id
+                && $stageReviewers->contains(fn($r) => $r->user_id === $requestingUser->id);
+
             $stageData->push([
                 'id'              => $stage->id,
                 'name'            => $stage->name,
                 'order'           => $stage->order,
                 'role_label'      => $stage->stage_role_label,
                 'is_gatekeeper'   => (bool) $stage->is_gatekeeper,
+                'is_email_stage'  => $isEmailStage,
+                'can_email'       => $canEmail,
                 'reviewers_count' => $total,
                 'completed_count' => $completed,
                 'status'          => $status,

@@ -94,6 +94,7 @@ class SubmissionMeetingController extends Controller
                 'title'        => ['required', 'string', 'max:255'],
                 'description'  => ['nullable', 'string', 'max:5000'],
                 'proposed_at'  => ['nullable', 'date'],
+                'meeting_link' => ['nullable', 'url', 'max:500'],
             ]);
 
             // Resolve stage_id from meeting type
@@ -121,6 +122,7 @@ class SubmissionMeetingController extends Controller
                 'title'       => ['required', 'string', 'max:255'],
                 'description' => ['nullable', 'string', 'max:5000'],
                 'proposed_at' => ['nullable', 'date'],
+                'meeting_link' => ['nullable', 'url', 'max:500'],
             ]);
             $data['meeting_type'] = null;
         }
@@ -134,6 +136,7 @@ class SubmissionMeetingController extends Controller
             'title'        => $data['title'],
             'description'  => $data['description'] ?? null,
             'proposed_at'  => $data['proposed_at'] ?? null,
+            'meeting_link' => $data['meeting_link'] ?? null,
             'status'       => 'requested',
         ]);
 

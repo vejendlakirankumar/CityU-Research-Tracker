@@ -162,6 +162,22 @@ export default function TopBar() {
                     </button>
                   ))}
                 </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12, paddingTop: 10, borderTop: '1px solid #f3f4f6' }}>
+                  <label htmlFor="custom-accent" style={{ fontSize: '0.72rem', fontWeight: 500, color: '#6b7280', cursor: 'pointer' }}>
+                    Custom
+                  </label>
+                  <input
+                    id="custom-accent"
+                    type="color"
+                    value={accentColor ?? orgInfo?.primary_color ?? '#1E40AF'}
+                    onChange={(e) => setAccentColor(e.target.value)}
+                    title="Pick a custom color"
+                    style={{ width: 30, height: 30, padding: 0, border: '1px solid #e5e7eb', borderRadius: 6, cursor: 'pointer', background: 'none' }}
+                  />
+                  <span style={{ fontSize: '0.7rem', color: '#9ca3af', fontFamily: 'monospace' }}>
+                    {(accentColor ?? orgInfo?.primary_color ?? '#1E40AF').toUpperCase()}
+                  </span>
+                </div>
                 <p style={{ fontSize: '0.68rem', color: '#9ca3af', marginTop: 8 }}>
                   Applies to nav bar color only. Resets to organization default when cleared.
                 </p>

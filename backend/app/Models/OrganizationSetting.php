@@ -18,6 +18,7 @@ class OrganizationSetting extends Model
         'date_format', 'footer_text', 'support_email',
         'allow_public_registration', 'archive_after_days',
         'max_file_size_mb_global', 'backup_retention_days',
+        'audit_retention_days',
         // Review deadline settings
         'review_grace_period_days', 'grace_period_consider_holidays',
         'grace_period_holidays_country', 'max_extension_requests',
@@ -30,6 +31,7 @@ class OrganizationSetting extends Model
             'grace_period_consider_holidays'  => 'boolean',
             'review_grace_period_days'        => 'integer',
             'max_extension_requests'          => 'integer',
+            'audit_retention_days'            => 'integer',
         ];
     }
 

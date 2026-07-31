@@ -14,13 +14,14 @@ class StageDefinition extends Model
         'id', 'workflow_id', 'name', 'order', 'stage_role_label', 'template_id',
         'is_gatekeeper', 'execution_type', 'approval_strategy', 'min_approvals',
         'is_anonymous', 'due_days', 'visibility_config', 'escalation_config',
-        'decision_options', 'skip_condition', 'auto_assignment',
+        'decision_options', 'skip_condition', 'auto_assignment', 'is_email_stage',
     ];
 
     protected function casts(): array
     {
         return [
             'is_gatekeeper'     => 'boolean',
+            'is_email_stage'    => 'boolean',
             'is_anonymous'      => 'boolean',
             'visibility_config' => 'array',
             'escalation_config' => 'array',

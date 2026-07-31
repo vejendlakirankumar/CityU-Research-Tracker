@@ -194,6 +194,15 @@ class SubmissionReviewerController extends Controller
             return response()->json(['message' => 'Only the reviewer can accept or decline.'], 403);
         }
 
+        // Coordinators/admins may reassign reviewers and adjust due dates, but must NOT
+        // submit approve/reject/revise decisions on a reviewer's behalf — doing so left
+        // the workflow in an inconsistent, hung state. Only the assigned reviewer decides.
+        if (isset($data['decision']) && $isCoordinator) {
+            return response()->json([
+                'message' => 'Coordinators cannot approve or reject reviews. Please reassign the review to a reviewer instead.',
+            ], 403);
+        }
+
         // Once the submission has reached a terminal / finalized state, its reviewer
         // decisions are locked and can no longer be accepted, declined, or changed.
         if (isset($data['decision']) || isset($data['status'])) {

@@ -23,6 +23,7 @@ interface OrgSettings {
   support_email: string | null
   allow_public_registration: boolean
   archive_after_days: number | null
+  audit_retention_days: number | null
   logo_url?: string | null
 }
 
@@ -88,7 +89,8 @@ const TABS = [
   { id: 'email',         label: 'Email',               icon: Mail },
   { id: 'sso',           label: 'SSO Providers',        icon: Key },
   { id: 'security',      label: 'Password & Security', icon: Shield },
-  { id: 'notifications', label: 'Notifications',       icon: Bell },
+  { id: 'notifications', label: 'Email Notifications', icon: Bell },
+  { id: 'email_templates', label: 'Email Templates',   icon: Send },
   { id: 'flags',         label: 'Feature Flags',       icon: Sliders },
   { id: 'review',        label: 'Review Settings',     icon: Clock },
   { id: 'integrations',  label: 'Integrations',        icon: Puzzle },
@@ -172,6 +174,7 @@ function OrgTab() {
         support_email: data.support_email,
         allow_public_registration: data.allow_public_registration,
         archive_after_days: data.archive_after_days,
+        audit_retention_days: data.audit_retention_days,
       })
       setData(r.data); setSaved(true)
       setTimeout(() => setSaved(false), 3000)
@@ -243,6 +246,9 @@ function OrgTab() {
         </Field>
         <Field label="Archive submissions after (days)" hint="Leave empty to never auto-archive.">
           <input className={INPUT} type="number" min={1} value={data.archive_after_days ?? ''} onChange={e => set('archive_after_days', e.target.value ? parseInt(e.target.value) : null)} />
+        </Field>
+        <Field label="Retain audit logs for (days)" hint="Leave empty to keep audit logs indefinitely.">
+          <input className={INPUT} type="number" min={1} value={data.audit_retention_days ?? ''} onChange={e => set('audit_retention_days', e.target.value ? parseInt(e.target.value) : null)} />
         </Field>
         <Field label="Allow Public Registration">
           <label className="flex items-center gap-2 mt-1 cursor-pointer">
@@ -742,6 +748,156 @@ function NotificationsTab() {
               </Field>
               <Field label="Plain Text Body" hint="Fallback for email clients that don't render HTML.">
                 <textarea className={INPUT + ' h-20 font-mono text-xs'} value={selected.body_text} onChange={e => setF('body_text', e.target.value)} />
+              </Field>
+            </div>
+
+            <SaveBar saving={saving} saved={saved} onSave={save} />
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ── Email Templates Tab (admin-managed, used inside workflow email stages) ────
+
+interface AdminEmailTemplate {
+  id: string
+  name: string
+  subject: string
+  body_html: string
+  body_text: string | null
+  is_active: boolean
+  updated_at: string | null
+}
+
+const BLANK_EMAIL_TEMPLATE: AdminEmailTemplate = {
+  id: '', name: '', subject: '', body_html: '', body_text: '', is_active: true, updated_at: null,
+}
+
+function EmailTemplatesTab() {
+  const [templates, setTemplates] = useState<AdminEmailTemplate[]>([])
+  const [variables, setVariables] = useState<string[]>([])
+  const [selected, setSelected]   = useState<AdminEmailTemplate | null>(null)
+  const [isNew, setIsNew]         = useState(false)
+  const [saving, setSaving]       = useState(false)
+  const [saved, setSaved]         = useState(false)
+  const [error, setError]         = useState('')
+
+  useEffect(() => {
+    api.get('/admin/email-templates')
+      .then(r => { setTemplates(r.data.data); setVariables(r.data.variables ?? []) })
+      .catch(() => setError('Failed to load templates.'))
+  }, [])
+
+  const pickNew = () => { setSelected({ ...BLANK_EMAIL_TEMPLATE }); setIsNew(true); setError('') }
+  const pick = (t: AdminEmailTemplate) => { setSelected({ ...t, body_text: t.body_text ?? '' }); setIsNew(false); setError('') }
+  const setF = (k: keyof AdminEmailTemplate, v: unknown) => setSelected(prev => prev ? { ...prev, [k]: v } : prev)
+
+  const save = async () => {
+    if (!selected) return
+    if (!selected.name.trim() || !selected.subject.trim() || !selected.body_html.trim()) {
+      setError('Name, subject, and HTML body are required.'); return
+    }
+    setSaving(true); setSaved(false); setError('')
+    const payload = {
+      name: selected.name, subject: selected.subject, body_html: selected.body_html,
+      body_text: selected.body_text || null, is_active: selected.is_active,
+    }
+    try {
+      if (isNew) {
+        const r = await api.post('/admin/email-templates', payload)
+        setTemplates(prev => [...prev, r.data.data].sort((a, b) => a.name.localeCompare(b.name)))
+        setSelected(r.data.data); setIsNew(false)
+      } else {
+        const r = await api.patch(`/admin/email-templates/${selected.id}`, payload)
+        setTemplates(prev => prev.map(t => t.id === selected.id ? r.data.data : t))
+        setSelected(r.data.data)
+      }
+      setSaved(true); setTimeout(() => setSaved(false), 3000)
+    } catch { setError('Save failed.') }
+    finally { setSaving(false) }
+  }
+
+  const remove = async (t: AdminEmailTemplate) => {
+    if (!window.confirm(`Delete template "${t.name}"? This cannot be undone.`)) return
+    try {
+      await api.delete(`/admin/email-templates/${t.id}`)
+      setTemplates(prev => prev.filter(x => x.id !== t.id))
+      if (selected?.id === t.id) { setSelected(null); setIsNew(false) }
+    } catch { setError('Delete failed.') }
+  }
+
+  return (
+    <div className="flex gap-0 -mx-6 -mb-6 min-h-[480px]">
+      {/* Left list */}
+      <div className="w-60 flex-shrink-0 border-r border-gray-200 pt-1">
+        <div className="px-3 py-2 border-b border-gray-100">
+          <button onClick={pickNew}
+            className="w-full flex items-center justify-center gap-1.5 px-3 py-2 bg-blue-600 text-white text-xs font-medium rounded-lg hover:bg-blue-700">
+            <Plus className="w-3.5 h-3.5" /> New Template
+          </button>
+        </div>
+        {error && !selected && <p className="text-xs text-red-600 px-3 py-2">{error}</p>}
+        {templates.length === 0 && <p className="text-xs text-gray-400 italic px-4 py-3">No templates yet.</p>}
+        {templates.map(t => (
+          <div key={t.id}
+            className={`group w-full flex items-center gap-2 px-4 py-3 border-b border-gray-100 hover:bg-gray-50 ${selected?.id === t.id && !isNew ? 'bg-blue-50 border-l-2 border-l-blue-500' : ''}`}>
+            <button onClick={() => pick(t)} className="flex items-center gap-2 flex-1 text-left min-w-0">
+              <span className={`w-2 h-2 rounded-full flex-shrink-0 ${t.is_active ? 'bg-green-500' : 'bg-gray-300'}`} />
+              <span className="text-xs text-gray-700 font-medium truncate">{t.name}</span>
+            </button>
+            <button onClick={() => remove(t)}
+              className="p-1 text-gray-300 hover:text-red-500 opacity-0 group-hover:opacity-100">
+              <Trash2 className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        ))}
+      </div>
+
+      {/* Right editor */}
+      <div className="flex-1 px-6 py-4">
+        {!selected ? (
+          <div className="flex flex-col items-center justify-center h-64 text-gray-400 text-sm">
+            <Send className="w-8 h-8 mb-2 text-gray-200" /> Select a template to edit, or create a new one.
+          </div>
+        ) : (
+          <>
+            <div className="mb-4 flex items-center justify-between">
+              <h3 className="font-medium text-gray-900">{isNew ? 'New email template' : selected.name}</h3>
+              <label className="flex items-center gap-2 text-sm cursor-pointer">
+                <input type="checkbox" checked={selected.is_active} onChange={e => setF('is_active', e.target.checked)} className="w-4 h-4 rounded" />
+                Released (visible in email stages)
+              </label>
+            </div>
+
+            {/* Available variables */}
+            <div className="mb-3">
+              <p className="text-xs text-gray-400 mb-1">Click to copy a variable:</p>
+              <div className="flex flex-wrap gap-1">
+                {variables.map(v => (
+                  <code key={v} className="text-xs bg-gray-100 px-1.5 py-0.5 rounded text-gray-600 cursor-pointer hover:bg-gray-200"
+                    onClick={() => navigator.clipboard.writeText(v)}>
+                    {v}
+                  </code>
+                ))}
+              </div>
+            </div>
+
+            {error && <p className="text-xs text-red-600 mb-2">{error}</p>}
+
+            <div className="space-y-4">
+              <Field label="Template name" hint="Shown to the assigned person when choosing a template on an email stage.">
+                <input className={INPUT} value={selected.name} onChange={e => setF('name', e.target.value)} />
+              </Field>
+              <Field label="Subject line">
+                <input className={INPUT} value={selected.subject} onChange={e => setF('subject', e.target.value)} />
+              </Field>
+              <Field label="HTML Body" hint="Full HTML email body. Use variables above.">
+                <textarea className={INPUT + ' h-40 font-mono text-xs'} value={selected.body_html} onChange={e => setF('body_html', e.target.value)} />
+              </Field>
+              <Field label="Plain Text Body" hint="Optional fallback for email clients that don't render HTML.">
+                <textarea className={INPUT + ' h-20 font-mono text-xs'} value={selected.body_text ?? ''} onChange={e => setF('body_text', e.target.value)} />
               </Field>
             </div>
 
@@ -1369,12 +1525,13 @@ export default function SettingsPage() {
         </nav>
 
         {/* Content panel */}
-        <div className={`flex-1 overflow-auto ${tab === 'notifications' ? '' : 'p-6'}`}>
+        <div className={`flex-1 overflow-auto ${tab === 'notifications' || tab === 'email_templates' ? '' : 'p-6'}`}>
           {tab === 'org'           && <OrgTab />}
           {tab === 'email'         && <EmailTab />}
           {tab === 'sso'           && <SsoTab />}
           {tab === 'security'      && <SecurityTab />}
           {tab === 'notifications' && <NotificationsTab />}
+          {tab === 'email_templates' && <EmailTemplatesTab />}
           {tab === 'flags'         && <FlagsTab />}
           {tab === 'review'        && <ReviewTab />}
           {tab === 'integrations'  && <IntegrationsTab />}
