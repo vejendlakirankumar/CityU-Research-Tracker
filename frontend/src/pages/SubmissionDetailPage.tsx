@@ -1019,6 +1019,12 @@ function AuthorsPanel({ submissionId, canEdit }: { submissionId: string; canEdit
   const [form, setForm] = useState({ name: '', email: '', affiliation: '' })
   const [formError, setFormError] = useState('')
 
+  // Author search (pick from existing accounts for consistent names)
+  const [authorQuery, setAuthorQuery] = useState('')
+  const [authorResults, setAuthorResults] = useState<{ id: string; name: string; email: string; affiliation: string | null }[]>([])
+  const [searchingAuthors, setSearchingAuthors] = useState(false)
+  const [linkedAccount, setLinkedAccount] = useState(false)
+
   const { data, isLoading } = useQuery<{ data: SubmissionAuthor[] }>({
     queryKey: ['submission-authors', submissionId],
     queryFn: () => api.get(`/submissions/${submissionId}/authors`).then(r => r.data),
@@ -1034,9 +1040,52 @@ function AuthorsPanel({ submissionId, canEdit }: { submissionId: string; canEdit
       setForm({ name: '', email: '', affiliation: '' })
       setShowForm(false)
       setFormError('')
+      setLinkedAccount(false)
+      setAuthorQuery('')
+      setAuthorResults([])
     },
     onError: (e: any) => setFormError(e?.response?.data?.message ?? 'Failed to add author.'),
   })
+
+  // Debounced author search
+  useEffect(() => {
+    const q = authorQuery.trim()
+    if (q.length < 2) { setAuthorResults([]); setSearchingAuthors(false); return }
+    setSearchingAuthors(true)
+    const t = setTimeout(async () => {
+      try {
+        const res = await api.get('/author-search', { params: { q } })
+        setAuthorResults(res.data.data ?? [])
+      } catch {
+        setAuthorResults([])
+      } finally {
+        setSearchingAuthors(false)
+      }
+    }, 300)
+    return () => clearTimeout(t)
+  }, [authorQuery])
+
+  const selectSearchedAuthor = (r: { id: string; name: string; email: string; affiliation: string | null }) => {
+    setForm({ name: r.name, email: r.email, affiliation: r.affiliation ?? '' })
+    setLinkedAccount(true)
+    setAuthorQuery('')
+    setAuthorResults([])
+    setFormError('')
+  }
+
+  const clearLinkedAuthor = () => {
+    setForm({ name: '', email: '', affiliation: '' })
+    setLinkedAccount(false)
+  }
+
+  const openAddForm = () => {
+    setForm({ name: '', email: '', affiliation: '' })
+    setAuthorQuery('')
+    setAuthorResults([])
+    setLinkedAccount(false)
+    setFormError('')
+    setShowForm(true)
+  }
 
   const removeMutation = useMutation({
     mutationFn: (authorId: string) =>
@@ -1084,7 +1133,7 @@ function AuthorsPanel({ submissionId, canEdit }: { submissionId: string; canEdit
           </button>
           {canEdit && (
             <button
-              onClick={() => setShowForm(v => !v)}
+              onClick={() => showForm ? setShowForm(false) : openAddForm()}
               className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-200 rounded-lg text-xs text-gray-600 hover:bg-gray-50"
             >
               <UserPlus className="w-3.5 h-3.5" />
@@ -1097,13 +1146,69 @@ function AuthorsPanel({ submissionId, canEdit }: { submissionId: string; canEdit
       {/* Add form */}
       {showForm && (
         <div className="mb-4 p-4 bg-blue-50 rounded-xl border border-blue-100 space-y-2">
+          {/* Search existing accounts */}
+          <div className="relative">
+            <label className="text-xs font-medium text-gray-600 mb-1 block">Search by name or email</label>
+            <div className="relative">
+              <Search className="w-3.5 h-3.5 text-gray-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+              <input
+                className="w-full border border-gray-300 rounded-lg pl-8 pr-8 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                placeholder="Find a registered author…"
+                value={authorQuery}
+                onChange={e => setAuthorQuery(e.target.value)}
+              />
+              {searchingAuthors && (
+                <Loader2 className="w-3.5 h-3.5 text-gray-400 animate-spin absolute right-2.5 top-1/2 -translate-y-1/2" />
+              )}
+            </div>
+            {authorResults.length > 0 && (
+              <ul className="absolute z-10 left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-56 overflow-auto">
+                {authorResults.map(r => (
+                  <li key={r.id}>
+                    <button
+                      type="button"
+                      onClick={() => selectSearchedAuthor(r)}
+                      className="w-full text-left px-3 py-2 hover:bg-blue-50 flex items-start gap-2"
+                    >
+                      <div className="w-7 h-7 rounded-full bg-blue-100 flex items-center justify-center text-xs font-semibold text-blue-700 flex-shrink-0">
+                        {r.name[0]?.toUpperCase() ?? '?'}
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium text-gray-900 truncate">{r.name}</p>
+                        <p className="text-xs text-gray-500 truncate">{r.email}{r.affiliation ? ` · ${r.affiliation}` : ''}</p>
+                      </div>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {authorQuery.trim().length >= 2 && !searchingAuthors && authorResults.length === 0 && (
+              <p className="text-xs text-gray-400 mt-1">No matching accounts. You can add this person manually below.</p>
+            )}
+          </div>
+
+          {linkedAccount && (
+            <div className="flex items-center gap-2 text-xs text-green-700 bg-green-50 border border-green-100 rounded-lg px-2.5 py-1.5">
+              <Check className="w-3.5 h-3.5" />
+              Linked to an existing account. The registered name will be used.
+              <button
+                type="button"
+                onClick={clearLinkedAuthor}
+                className="ml-auto text-gray-500 hover:text-gray-700 underline"
+              >
+                Clear
+              </button>
+            </div>
+          )}
+
           <div className="grid grid-cols-2 gap-2">
             <div>
               <label className="text-xs font-medium text-gray-600 mb-1 block">Full name *</label>
               <input
-                className="w-full border border-gray-300 rounded-lg px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className={`w-full border border-gray-300 rounded-lg px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 ${linkedAccount ? 'bg-gray-100 text-gray-500' : ''}`}
                 placeholder="Dr. Jane Smith"
                 value={form.name}
+                readOnly={linkedAccount}
                 onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
               />
             </div>
@@ -1111,9 +1216,10 @@ function AuthorsPanel({ submissionId, canEdit }: { submissionId: string; canEdit
               <label className="text-xs font-medium text-gray-600 mb-1 block">Email *</label>
               <input
                 type="email"
-                className="w-full border border-gray-300 rounded-lg px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className={`w-full border border-gray-300 rounded-lg px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 ${linkedAccount ? 'bg-gray-100 text-gray-500' : ''}`}
                 placeholder="jane@university.edu"
                 value={form.email}
+                readOnly={linkedAccount}
                 onChange={e => setForm(f => ({ ...f, email: e.target.value }))}
               />
             </div>
@@ -1138,7 +1244,7 @@ function AuthorsPanel({ submissionId, canEdit }: { submissionId: string; canEdit
               Add Author
             </button>
             <button
-              onClick={() => { setShowForm(false); setFormError('') }}
+              onClick={() => { setShowForm(false); setFormError(''); clearLinkedAuthor(); setAuthorQuery(''); setAuthorResults([]) }}
               className="px-3 py-1.5 border border-gray-200 text-xs rounded-lg text-gray-600 hover:bg-gray-50"
             >
               Cancel

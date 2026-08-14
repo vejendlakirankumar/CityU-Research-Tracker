@@ -4,6 +4,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   ChevronLeft, ChevronRight, CheckCircle2, Upload,
   X, FileText, Loader2, AlertCircle, UserPlus, Download,
+  Search, Check,
 } from 'lucide-react'
 import api from '../lib/axios'
 import { useAuthStore } from '../stores/authStore'
@@ -141,6 +142,13 @@ interface ResearchTemplateLite {
   size_bytes: number
 }
 
+interface AuthorSearchResult {
+  id: string
+  name: string
+  email: string
+  affiliation: string | null
+}
+
 export default function NewSubmissionPage() {
   const navigate = useNavigate()
   const qc = useQueryClient()
@@ -166,6 +174,12 @@ export default function NewSubmissionPage() {
   const [showCoAuthorForm, setShowCoAuthorForm] = useState(false)
   const [coAuthorForm, setCoAuthorForm] = useState<PendingAuthor>({ name: '', email: '', affiliation: '' })
   const [coAuthorError, setCoAuthorError] = useState('')
+
+  // Author search (pick from existing accounts for consistent names)
+  const [authorQuery, setAuthorQuery] = useState('')
+  const [authorResults, setAuthorResults] = useState<AuthorSearchResult[]>([])
+  const [searchingAuthors, setSearchingAuthors] = useState(false)
+  const [linkedAccount, setLinkedAccount] = useState(false)
 
   // Fetch submission types
   const { data: typesData } = useQuery<{ data: SubmissionType[] }>({
@@ -198,6 +212,46 @@ export default function NewSubmissionPage() {
     } catch {
       setError('Failed to download template.')
     }
+  }
+
+  // Debounced author search by name/email
+  useEffect(() => {
+    const q = authorQuery.trim()
+    if (q.length < 2) { setAuthorResults([]); setSearchingAuthors(false); return }
+    setSearchingAuthors(true)
+    const t = setTimeout(async () => {
+      try {
+        const res = await api.get('/author-search', { params: { q } })
+        setAuthorResults(res.data.data ?? [])
+      } catch {
+        setAuthorResults([])
+      } finally {
+        setSearchingAuthors(false)
+      }
+    }, 300)
+    return () => clearTimeout(t)
+  }, [authorQuery])
+
+  const selectSearchedAuthor = (r: AuthorSearchResult) => {
+    setCoAuthorForm({ name: r.name, email: r.email, affiliation: r.affiliation ?? '' })
+    setLinkedAccount(true)
+    setAuthorQuery('')
+    setAuthorResults([])
+    setCoAuthorError('')
+  }
+
+  const clearLinkedAuthor = () => {
+    setCoAuthorForm({ name: '', email: '', affiliation: '' })
+    setLinkedAccount(false)
+  }
+
+  const openCoAuthorForm = () => {
+    setCoAuthorForm({ name: '', email: '', affiliation: '' })
+    setAuthorQuery('')
+    setAuthorResults([])
+    setLinkedAccount(false)
+    setCoAuthorError('')
+    setShowCoAuthorForm(true)
   }
 
   // Mutations
@@ -244,6 +298,9 @@ export default function NewSubmissionPage() {
     setCoAuthors((prev) => [...prev, { name, email, affiliation }])
     setCoAuthorForm({ name: '', email: '', affiliation: '' })
     setShowCoAuthorForm(false)
+    setLinkedAccount(false)
+    setAuthorQuery('')
+    setAuthorResults([])
   }
 
   const removeCoAuthor = (email: string) => {
@@ -442,7 +499,8 @@ export default function NewSubmissionPage() {
             <div>
               <h3 className="text-sm font-semibold text-gray-700">Co-Authors <span className="text-gray-400 font-normal">(optional)</span></h3>
               <p className="text-xs text-gray-500 mt-0.5 mb-3">
-                Add co-authors who contributed to this submission. They will receive an email invitation to create an account.
+                Search for co-authors by name or email to link their existing account, or add them manually.
+                People without an account will receive an email invitation.
               </p>
 
               {/* Added co-authors list */}
@@ -469,7 +527,7 @@ export default function NewSubmissionPage() {
               {/* Toggle add form */}
               {!showCoAuthorForm ? (
                 <button
-                  onClick={() => setShowCoAuthorForm(true)}
+                  onClick={openCoAuthorForm}
                   className="flex items-center gap-1.5 text-sm text-blue-600 hover:text-blue-700 font-medium"
                 >
                   <UserPlus className="w-4 h-4" />
@@ -477,13 +535,69 @@ export default function NewSubmissionPage() {
                 </button>
               ) : (
                 <div className="border border-gray-200 rounded-xl p-4 space-y-3">
+                  {/* Search existing accounts */}
+                  <div className="relative">
+                    <label className="text-xs font-medium text-gray-600 mb-1 block">Search by name or email</label>
+                    <div className="relative">
+                      <Search className="w-4 h-4 text-gray-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                      <input
+                        className="w-full border border-gray-200 rounded-lg pl-8 pr-8 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        placeholder="Start typing to find a registered author…"
+                        value={authorQuery}
+                        onChange={(e) => setAuthorQuery(e.target.value)}
+                      />
+                      {searchingAuthors && (
+                        <Loader2 className="w-4 h-4 text-gray-400 animate-spin absolute right-2.5 top-1/2 -translate-y-1/2" />
+                      )}
+                    </div>
+                    {authorResults.length > 0 && (
+                      <ul className="absolute z-10 left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-56 overflow-auto">
+                        {authorResults.map((r) => (
+                          <li key={r.id}>
+                            <button
+                              type="button"
+                              onClick={() => selectSearchedAuthor(r)}
+                              className="w-full text-left px-3 py-2 hover:bg-blue-50 flex items-start gap-2"
+                            >
+                              <div className="w-7 h-7 rounded-full bg-blue-100 flex items-center justify-center text-xs font-semibold text-blue-700 flex-shrink-0">
+                                {r.name[0]?.toUpperCase() ?? '?'}
+                              </div>
+                              <div className="min-w-0">
+                                <p className="text-sm font-medium text-gray-900 truncate">{r.name}</p>
+                                <p className="text-xs text-gray-500 truncate">{r.email}{r.affiliation ? ` · ${r.affiliation}` : ''}</p>
+                              </div>
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                    {authorQuery.trim().length >= 2 && !searchingAuthors && authorResults.length === 0 && (
+                      <p className="text-xs text-gray-400 mt-1">No matching accounts. You can add this person manually below.</p>
+                    )}
+                  </div>
+
+                  {linkedAccount && (
+                    <div className="flex items-center gap-2 text-xs text-green-700 bg-green-50 border border-green-100 rounded-lg px-2.5 py-1.5">
+                      <Check className="w-3.5 h-3.5" />
+                      Linked to an existing account. The registered name will be used.
+                      <button
+                        type="button"
+                        onClick={clearLinkedAuthor}
+                        className="ml-auto text-gray-500 hover:text-gray-700 underline"
+                      >
+                        Clear
+                      </button>
+                    </div>
+                  )}
+
                   <div className="grid grid-cols-2 gap-3">
                     <div>
                       <label className="text-xs font-medium text-gray-600 mb-1 block">Full Name *</label>
                       <input
-                        className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        className={`w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 ${linkedAccount ? 'bg-gray-50 text-gray-500' : ''}`}
                         placeholder="e.g. Jane Smith"
                         value={coAuthorForm.name}
+                        readOnly={linkedAccount}
                         onChange={(e) => setCoAuthorForm((f) => ({ ...f, name: e.target.value }))}
                       />
                     </div>
@@ -491,9 +605,10 @@ export default function NewSubmissionPage() {
                       <label className="text-xs font-medium text-gray-600 mb-1 block">Email *</label>
                       <input
                         type="email"
-                        className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        className={`w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 ${linkedAccount ? 'bg-gray-50 text-gray-500' : ''}`}
                         placeholder="e.g. jane@example.com"
                         value={coAuthorForm.email}
+                        readOnly={linkedAccount}
                         onChange={(e) => setCoAuthorForm((f) => ({ ...f, email: e.target.value }))}
                       />
                     </div>
@@ -518,7 +633,7 @@ export default function NewSubmissionPage() {
                       Add
                     </button>
                     <button
-                      onClick={() => { setShowCoAuthorForm(false); setCoAuthorError('') }}
+                      onClick={() => { setShowCoAuthorForm(false); setCoAuthorError(''); clearLinkedAuthor(); setAuthorQuery(''); setAuthorResults([]) }}
                       className="px-3 py-1.5 border border-gray-200 text-gray-600 text-xs rounded-lg hover:bg-gray-50"
                     >
                       Cancel

@@ -204,6 +204,43 @@ class SubmissionAuthorController extends Controller
     // ── Private helpers ───────────────────────────────────────────────────────
 
     /**
+     * GET /api/author-search?q=...
+     *
+     * Lightweight lookup of existing users by name or email, so researchers can
+     * pick co-authors from registered accounts (ensuring consistent names).
+     * Returns a small, limited set of public-safe fields.
+     */
+    public function searchUsers(Request $request): JsonResponse
+    {
+        $q = trim((string) $request->query('q', ''));
+
+        if (mb_strlen($q) < 2) {
+            return response()->json(['data' => []]);
+        }
+
+        $like = '%' . strtolower($q) . '%';
+
+        $users = User::query()
+            ->where('is_active', true)
+            ->where(function ($w) use ($like) {
+                $w->whereRaw('LOWER(email) LIKE ?', [$like])
+                  ->orWhereRaw('LOWER(name) LIKE ?', [$like]);
+            })
+            ->orderBy('name')
+            ->limit(8)
+            ->get(['id', 'name', 'email', 'organization']);
+
+        return response()->json([
+            'data' => $users->map(fn ($u) => [
+                'id'          => $u->id,
+                'name'        => $u->name,
+                'email'       => $u->email,
+                'affiliation' => $u->organization,
+            ]),
+        ]);
+    }
+
+    /**
      * PATCH /api/submissions/{submissionId}/authors/reorder
      *
      * Accepts an ordered array of author IDs and updates author_order accordingly.

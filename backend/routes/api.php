@@ -78,6 +78,9 @@ Route::middleware('auth:sanctum')->group(function () {
     // ── APA7 Reference resolver (any authenticated user) ───────────────────────
     Route::post('references/resolve', [ReferenceController::class, 'resolve'])->middleware('throttle:30,1');
 
+    // ── Author lookup (pick co-authors from existing accounts) ─────────────────
+    Route::get('author-search', [SubmissionAuthorController::class, 'searchUsers'])->middleware('throttle:60,1');
+
     // ── Dashboard ─────────────────────────────────────────────────────────────
     Route::get('dashboard/stats', [DashboardController::class, 'stats']);
 
