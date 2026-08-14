@@ -16,6 +16,7 @@ interface Appeal {
   created_at: string
   submission: { id: string; title: string; status: string } | null
   submitter: { id: string; name: string; email: string } | null
+  resolver: { id: string; name: string } | null
 }
 
 interface AppealsResponse {
@@ -40,13 +41,35 @@ function AppealBadge({ status }: { status: string }) {
   )
 }
 
+// Plain-language explanation of what each decision does.
+const DECISION_OPTIONS = [
+  {
+    value: 'UNDER_REVIEW',
+    label: 'Under Review',
+    hint: 'You are still considering the appeal. The submission outcome does not change yet.',
+  },
+  {
+    value: 'UPHELD',
+    label: 'Uphold — appeal succeeds',
+    hint: 'You agree with the student. The rejection is overturned and the submission is reopened for re-review.',
+  },
+  {
+    value: 'DISMISSED',
+    label: 'Dismiss — appeal fails',
+    hint: 'You disagree with the student. The original rejection stands and the submission remains rejected.',
+  },
+]
+
 // ── Resolution modal ──────────────────────────────────────────────────────────
 
 function ResolveModal({ appeal, onClose }: { appeal: Appeal; onClose: () => void }) {
   const qc = useQueryClient()
   const toast = useToastHelpers()
+  const isResolved = appeal.status === 'UPHELD' || appeal.status === 'DISMISSED'
   const [status, setStatus]         = useState<string>(appeal.status === 'PENDING' ? 'UNDER_REVIEW' : appeal.status)
   const [resolution, setResolution] = useState(appeal.resolution_note ?? '')
+
+  const selectedHint = DECISION_OPTIONS.find(o => o.value === status)?.hint
 
   const mut = useMutation({
     mutationFn: (body: object) => api.patch(`/admin/appeals/${appeal.id}`, body),
@@ -63,7 +86,7 @@ function ResolveModal({ appeal, onClose }: { appeal: Appeal; onClose: () => void
       <div className="bg-white rounded-xl shadow-xl w-full max-w-lg">
         {/* Header */}
         <div className="flex items-center justify-between p-5 border-b">
-          <h2 className="text-lg font-semibold text-gray-900">Review Appeal</h2>
+          <h2 className="text-lg font-semibold text-gray-900">{isResolved ? 'Appeal Decision' : 'Review Appeal'}</h2>
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><X className="h-5 w-5" /></button>
         </div>
 
@@ -80,44 +103,85 @@ function ResolveModal({ appeal, onClose }: { appeal: Appeal; onClose: () => void
             <p className="text-sm text-gray-700 bg-gray-50 rounded-lg p-3 whitespace-pre-wrap">{appeal.grounds}</p>
           </div>
 
-          {/* Status */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Update Status</label>
-            <select
-              value={status}
-              onChange={e => setStatus(e.target.value)}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-            >
-              <option value="UNDER_REVIEW">Under Review</option>
-              <option value="UPHELD">Upheld</option>
-              <option value="DISMISSED">Dismissed</option>
-            </select>
-          </div>
+          {isResolved ? (
+            /* Read-only final decision — cannot be changed once resolved */
+            <div className="space-y-3">
+              <div className="rounded-lg border border-gray-200 p-3">
+                <div className="flex items-center gap-2">
+                  <AppealBadge status={appeal.status} />
+                  <span className="text-sm font-medium text-gray-800">
+                    {appeal.status === 'UPHELD' ? 'Appeal upheld' : 'Appeal dismissed'}
+                  </span>
+                </div>
+                <p className="text-xs text-gray-500 mt-1.5">
+                  {appeal.status === 'UPHELD'
+                    ? 'The rejection was overturned and the submission was reopened for re-review.'
+                    : 'The original rejection stands.'}
+                </p>
+                {(appeal.resolver?.name || appeal.reviewed_at) && (
+                  <p className="text-xs text-gray-500 mt-1">
+                    Decided{appeal.resolver?.name ? ` by ${appeal.resolver.name}` : ''}
+                    {appeal.reviewed_at ? ` on ${new Date(appeal.reviewed_at).toLocaleString()}` : ''}.
+                  </p>
+                )}
+              </div>
+              {appeal.resolution_note && (
+                <div>
+                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Resolution note</label>
+                  <p className="text-sm text-gray-700 bg-gray-50 rounded-lg p-3 whitespace-pre-wrap">{appeal.resolution_note}</p>
+                </div>
+              )}
+              <div className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-700">
+                This appeal has been resolved and its decision can no longer be changed.
+              </div>
+            </div>
+          ) : (
+            <>
+              {/* Status */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Decision</label>
+                <select
+                  value={status}
+                  onChange={e => setStatus(e.target.value)}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                >
+                  {DECISION_OPTIONS.map(o => (
+                    <option key={o.value} value={o.value}>{o.label}</option>
+                  ))}
+                </select>
+                {selectedHint && (
+                  <p className="text-xs text-gray-500 mt-1.5">{selectedHint}</p>
+                )}
+              </div>
 
-          {/* Resolution note */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Resolution Note <span className="text-gray-400">(optional)</span></label>
-            <textarea
-              value={resolution}
-              onChange={e => setResolution(e.target.value)}
-              rows={3}
-              placeholder="Explain the decision to the submitter…"
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-indigo-500"
-            />
-          </div>
+              {/* Resolution note */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Resolution Note <span className="text-gray-400">(optional)</span></label>
+                <textarea
+                  value={resolution}
+                  onChange={e => setResolution(e.target.value)}
+                  rows={3}
+                  placeholder="Explain the decision to the submitter…"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+            </>
+          )}
         </div>
 
         <div className="flex justify-end gap-3 px-5 pb-5">
           <button onClick={onClose} className="px-4 py-2 text-sm border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50">
-            Cancel
+            {isResolved ? 'Close' : 'Cancel'}
           </button>
-          <button
-            onClick={() => mut.mutate({ status, resolution_note: resolution || undefined })}
-            disabled={mut.isPending}
-            className="px-4 py-2 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50"
-          >
-            {mut.isPending ? 'Saving…' : 'Save'}
-          </button>
+          {!isResolved && (
+            <button
+              onClick={() => mut.mutate({ status, resolution_note: resolution || undefined })}
+              disabled={mut.isPending}
+              className="px-4 py-2 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50"
+            >
+              {mut.isPending ? 'Saving…' : 'Save'}
+            </button>
+          )}
         </div>
       </div>
     </div>

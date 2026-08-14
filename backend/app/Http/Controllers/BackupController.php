@@ -37,41 +37,89 @@ class BackupController extends Controller
     {
         $user = $request->user();
 
-        // Build dump filename
-        $ts       = now()->format('Y-m-d_H-i-s');
-        $filename = "rrp_backup_{$ts}.sql.gz";
-        $localDir = storage_path('app/backups');
-        $localPath = "{$localDir}/{$filename}";
-
-        if (!is_dir($localDir)) {
-            mkdir($localDir, 0755, true);
+        // A backup encryption key must be configured. The whole archive is encrypted
+        // with it so it can be restored on any instance that holds the same key.
+        $encKey = $this->encryptionKey();
+        if (!$encKey) {
+            return response()->json([
+                'message' => 'No backup encryption key is configured. Set one under Settings → Backup before running a backup.',
+            ], 422);
         }
 
-        // Run pg_dump (connects to the postgres container from within rrp_app)
-        $host  = env('DB_HOST', 'postgres');
+        $ts        = now()->format('Y-m-d_H-i-s');
+        $filename  = "rrp_backup_{$ts}.tar.gz.enc";
+        $localDir  = storage_path('app/backups');
+        $localPath = "{$localDir}/{$filename}";
+        $stageDir  = "{$localDir}/.stage_{$ts}";
+
+        if (!is_dir($localDir)) { mkdir($localDir, 0755, true); }
+        if (!is_dir($stageDir)) { mkdir($stageDir, 0755, true); }
+
+        $host   = env('DB_HOST', 'postgres');
         $dbname = env('DB_DATABASE', 'rrp');
         $dbuser = env('DB_USERNAME', 'rrp_app');
         $dbpass = env('DB_PASSWORD', '');
 
-        $cmd = "PGPASSWORD=" . escapeshellarg($dbpass)
-             . " pg_dump -h " . escapeshellarg($host)
-             . " -U " . escapeshellarg($dbuser)
-             . " " . escapeshellarg($dbname)
-             . " | gzip > " . escapeshellarg($localPath)
-             . " 2>&1";
+        $sqlPath     = "{$stageDir}/database.sql";
+        $docsPath    = "{$stageDir}/documents.tar.gz";
+        $envPath     = "{$stageDir}/application.env";
+        $storageRoot = storage_path();      // .../storage
+        $envSource   = base_path('.env');
 
-        $output = [];
-        $exitCode = 0;
-        exec($cmd, $output, $exitCode);
+        // 1) Database dump — --clean --if-exists so it restores cleanly onto a fresh instance.
+        $dumpCmd = "PGPASSWORD=" . escapeshellarg($dbpass)
+                 . " pg_dump --clean --if-exists -h " . escapeshellarg($host)
+                 . " -U " . escapeshellarg($dbuser)
+                 . " " . escapeshellarg($dbname)
+                 . " > " . escapeshellarg($sqlPath)
+                 . " 2>" . escapeshellarg("{$stageDir}/dump.err");
 
-        if ($exitCode !== 0 || !file_exists($localPath)) {
-            $err = implode("\n", $output);
-            Log::error('Backup pg_dump failed', ['exit' => $exitCode, 'output' => $err]);
-            return response()->json(['message' => 'Backup failed. Check server logs for details.'], 500);
+        // 2) Uploaded documents + storage tree (exclude the backup/archive dirs to avoid recursion).
+        $docsCmd = "tar -czf " . escapeshellarg($docsPath)
+                 . " -C " . escapeshellarg($storageRoot)
+                 . " --exclude=app/backups --exclude=app/archives app"
+                 . " 2>/dev/null";
+
+        // 4) Pack DB dump + documents + application config and encrypt with AES-256.
+        $packCmd = "tar -czf - -C " . escapeshellarg($stageDir)
+                 . " database.sql documents.tar.gz application.env"
+                 . " | openssl enc -aes-256-cbc -pbkdf2 -salt -pass " . escapeshellarg("pass:{$encKey}")
+                 . " -out " . escapeshellarg($localPath)
+                 . " 2>" . escapeshellarg("{$stageDir}/enc.err");
+
+        $ok = true; $errMsg = '';
+
+        exec($dumpCmd, $o1, $c1);
+        if ($c1 !== 0 || !file_exists($sqlPath)) { $ok = false; $errMsg = 'database dump'; }
+
+        // 3) Application config — copied so the archive is self-contained for disaster recovery.
+        if ($ok) {
+            if (is_file($envSource)) { @copy($envSource, $envPath); }
+            else { @file_put_contents($envPath, ''); }
+        }
+
+        if ($ok) {
+            exec($docsCmd, $o2, $c2);
+            if ($c2 !== 0 || !file_exists($docsPath)) { $ok = false; $errMsg = 'document archive'; }
+        }
+
+        if ($ok) {
+            exec($packCmd, $o3, $c3);
+            if ($c3 !== 0 || !file_exists($localPath)) { $ok = false; $errMsg = 'encryption'; }
+        }
+
+        if (!$ok) {
+            Log::error('Backup failed', ['stage' => $errMsg, 'dir' => $stageDir]);
+            $this->rrmdir($stageDir);
+            @unlink($localPath);
+            return response()->json(['message' => "Backup failed ({$errMsg}). Check server logs for details."], 500);
         }
 
         $sizeBytes = filesize($localPath);
         $checksum  = hash_file('sha256', $localPath);
+
+        // Wipe the staging dir — it holds the plaintext dump and config.
+        $this->rrmdir($stageDir);
 
         // Create catalog entry (local first)
         $catalog = BackupCatalog::create([
@@ -81,6 +129,7 @@ class BackupController extends Controller
             'size_bytes'      => $sizeBytes,
             'checksum_sha256' => $checksum,
             'status'          => 'completed',
+            'notes'           => 'Encrypted (AES-256): database, uploaded documents, application config',
             'created_by'      => $user->id,
             'created_at'      => now(),
         ]);
@@ -198,30 +247,69 @@ class BackupController extends Controller
             return response()->json(['message' => 'Backup file checksum mismatch — file may be corrupted.'], 422);
         }
 
+        $encKey = $this->encryptionKey();
+        if (!$encKey) {
+            if (isset($tmp) && file_exists($tmp)) unlink($tmp);
+            return response()->json(['message' => 'No backup encryption key is configured; cannot decrypt this backup.'], 422);
+        }
+
         $host   = env('DB_HOST', 'postgres');
         $dbname = env('DB_DATABASE', 'rrp');
         $dbuser = env('DB_USERNAME', 'rrp_app');
         $dbpass = env('DB_PASSWORD', '');
 
-        $cmd = "zcat " . escapeshellarg($localPath)
-             . " | PGPASSWORD=" . escapeshellarg($dbpass)
-             . " psql -h " . escapeshellarg($host)
-             . " -U " . escapeshellarg($dbuser)
-             . " " . escapeshellarg($dbname)
-             . " 2>&1";
+        $work = storage_path('app/backups/.restore_' . now()->format('Y-m-d_H-i-s'));
+        @mkdir($work, 0755, true);
 
+        // 1) Decrypt + unpack the archive.
+        $decCmd = "openssl enc -d -aes-256-cbc -pbkdf2 -pass " . escapeshellarg("pass:{$encKey}")
+                . " -in " . escapeshellarg($localPath)
+                . " | tar -xzf - -C " . escapeshellarg($work)
+                . " 2>" . escapeshellarg("{$work}/dec.err");
+        exec($decCmd, $od, $cd);
+
+        $sqlFile  = "{$work}/database.sql";
+        $docsFile = "{$work}/documents.tar.gz";
+
+        if ($cd !== 0 || !is_file($sqlFile)) {
+            $this->rrmdir($work);
+            if (isset($tmp) && file_exists($tmp)) unlink($tmp);
+            return response()->json([
+                'message' => 'Could not decrypt the backup — the encryption key may be wrong or the file is corrupted.',
+            ], 422);
+        }
+
+        // 2) Restore the database (dump uses --clean --if-exists so it is idempotent).
+        $restoreCmd = "PGPASSWORD=" . escapeshellarg($dbpass)
+                    . " psql -h " . escapeshellarg($host)
+                    . " -U " . escapeshellarg($dbuser)
+                    . " " . escapeshellarg($dbname)
+                    . " < " . escapeshellarg($sqlFile)
+                    . " 2>" . escapeshellarg("{$work}/psql.err");
         $output   = [];
         $exitCode = 0;
-        exec($cmd, $output, $exitCode);
+        exec($restoreCmd, $output, $exitCode);
 
-        // Clean up temp file
+        // 3) Restore uploaded documents / storage tree.
+        if ($exitCode === 0 && is_file($docsFile)) {
+            $storageRoot = storage_path();
+            $docRestore  = "tar -xzf " . escapeshellarg($docsFile)
+                         . " -C " . escapeshellarg($storageRoot) . " 2>/dev/null";
+            exec($docRestore, $ox, $cx);
+        }
+
+        // NOTE: application.env is bundled in the archive for disaster recovery but is NOT
+        // auto-applied here — overwriting the live .env could break the running instance.
+        // Administrators can extract it manually from a decrypted archive when rebuilding.
+
+        // Clean up temp files
+        $this->rrmdir($work);
         if (isset($tmp) && file_exists($tmp)) {
             unlink($tmp);
         }
 
         if ($exitCode !== 0) {
-            $err = implode("\n", $output);
-            Log::error('Backup restore failed', ['exit' => $exitCode, 'output' => $err]);
+            Log::error('Backup restore failed', ['exit' => $exitCode, 'output' => implode("\n", $output)]);
             return response()->json(['message' => 'Restore failed. Check server logs for details.'], 500);
         }
 
@@ -230,7 +318,7 @@ class BackupController extends Controller
             'restored_by' => $user->id,
         ]);
 
-        return response()->json(['message' => 'Database restored successfully from backup: ' . $catalog->filename]);
+        return response()->json(['message' => 'Restored successfully from backup: ' . $catalog->filename]);
     }
 
     // ── Delete ────────────────────────────────────────────────────────────────
@@ -305,7 +393,80 @@ class BackupController extends Controller
         return response()->json(['data' => $result]);
     }
 
+    // ── Encryption key management ─────────────────────────────────────────────
+
+    /**
+     * GET /api/system/backups/encryption
+     * Reports whether a backup encryption key is configured (never returns the key itself).
+     */
+    public function encryptionStatus(): JsonResponse
+    {
+        $s   = IntegrationSetting::for('backup_encryption');
+        $key = $s->get('key');
+        $configured = is_string($key) && $key !== '';
+
+        return response()->json([
+            'configured' => $configured,
+            'algorithm'  => 'aes-256-cbc',
+            'key_hint'   => $configured ? ('••••••' . substr($key, -4)) : null,
+            'updated_at' => $s->updated_at?->toIso8601String(),
+        ]);
+    }
+
+    /**
+     * POST /api/system/backups/encryption
+     * Configures (or rotates) the backup encryption key. If no key is supplied, a strong
+     * random one is generated. The key is returned in the response ONCE so the administrator
+     * can store it safely — it is required to restore backups on any instance.
+     */
+    public function setEncryptionKey(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'key' => ['sometimes', 'nullable', 'string', 'min:16', 'max:512'],
+        ]);
+
+        $s        = IntegrationSetting::for('backup_encryption');
+        $existing = $s->get('key');
+        $key      = !empty($data['key']) ? $data['key'] : base64_encode(random_bytes(32));
+
+        $s->settings   = array_merge($s->settings ?? [], ['key' => $key, 'algorithm' => 'aes-256-cbc']);
+        $s->is_enabled = true;
+        $s->updated_at = now();
+        $s->save();
+
+        return response()->json([
+            'message' => $existing
+                ? 'Encryption key rotated. Backups created with the previous key can only be restored with that previous key.'
+                : 'Backup encryption key configured.',
+            'key'     => $key,          // shown once — the client must warn the admin to save it
+            'rotated' => (bool) $existing,
+        ]);
+    }
+
     // ── Private helpers ───────────────────────────────────────────────────────
+
+    /** Returns the configured backup encryption key, or null if none is set. */
+    private function encryptionKey(): ?string
+    {
+        $key = IntegrationSetting::for('backup_encryption')->get('key');
+        return (is_string($key) && $key !== '') ? $key : null;
+    }
+
+    /** Recursively remove a directory and its contents. */
+    private function rrmdir(string $dir): void
+    {
+        if (!is_dir($dir)) {
+            return;
+        }
+        $items = new \RecursiveIteratorIterator(
+            new \RecursiveDirectoryIterator($dir, \FilesystemIterator::SKIP_DOTS),
+            \RecursiveIteratorIterator::CHILD_FIRST
+        );
+        foreach ($items as $item) {
+            $item->isDir() ? @rmdir($item->getPathname()) : @unlink($item->getPathname());
+        }
+        @rmdir($dir);
+    }
 
     private function toResource(BackupCatalog $b): array
     {

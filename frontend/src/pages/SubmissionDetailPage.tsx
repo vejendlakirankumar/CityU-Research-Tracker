@@ -12,7 +12,7 @@ import {
   Gavel, CircleAlert, Info, ListChecks,
   Calendar, EyeOff, ExternalLink, Eye, Printer, Plus, Send,
   ChevronUp, ChevronDown,
-  CalendarDays, Ban,
+  CalendarDays, Ban, ShieldCheck,
 } from 'lucide-react'
 import { renderAsync } from 'docx-preview'
 import * as pdfjsLib from 'pdfjs-dist'
@@ -2526,11 +2526,12 @@ function DocCompareViewer({
 
 // ── Documents Tab ─────────────────────────────────────────────────────────────
 
-function DocumentsTab({ sub, canEdit }: { sub: Submission; canEdit: boolean }) {
+function DocumentsTab({ sub, canEdit, canRunSimilarity }: { sub: Submission; canEdit: boolean; canRunSimilarity?: boolean }) {
   const qc = useQueryClient()
   const toast = useToastHelpers()
   const [viewingDoc, setViewingDoc] = useState<ViewingDoc | null>(null)
   const [showCompare, setShowCompare] = useState(false)
+  const [showSimilarity, setShowSimilarity] = useState(false)
   const [showUploadForm, setShowUploadForm] = useState(false)
   const [uploadFiles, setUploadFiles] = useState<File[]>([])
   const [changeSummary, setChangeSummary] = useState('')
@@ -2631,6 +2632,27 @@ function DocumentsTab({ sub, canEdit }: { sub: Submission; canEdit: boolean }) {
           onClose={() => setShowCompare(false)}
         />
       )}
+      {showSimilarity && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setShowSimilarity(false)}>
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-2xl max-h-[85vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between p-5 border-b">
+              <div className="flex items-center gap-2">
+                <ShieldCheck className="w-4 h-4 text-gray-500" />
+                <h2 className="text-base font-semibold text-gray-900">Similarity Check</h2>
+              </div>
+              <button onClick={() => setShowSimilarity(false)} className="text-gray-400 hover:text-gray-600">
+                <XCircle className="h-5 w-5" />
+              </button>
+            </div>
+            <div className="p-5">
+              <p className="text-xs text-gray-500">
+                Compares this submission's content against other submissions in the system.
+              </p>
+              <SimilarityCheckPanel submissionId={sub.id} />
+            </div>
+          </div>
+        </div>
+      )}
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-2">
@@ -2639,6 +2661,15 @@ function DocumentsTab({ sub, canEdit }: { sub: Submission; canEdit: boolean }) {
             <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">{sub.versions.length} version{sub.versions.length !== 1 ? 's' : ''}</span>
           </div>
           <div className="flex items-center gap-2">
+            {canRunSimilarity && (
+              <button
+                onClick={() => setShowSimilarity(true)}
+                className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-200 rounded-lg text-sm text-gray-600 hover:bg-gray-50"
+              >
+                <ShieldCheck className="w-4 h-4" />
+                Similarity Check
+              </button>
+            )}
             {canCompare && (
               <button
                 onClick={() => setShowCompare(true)}
@@ -3125,11 +3156,12 @@ function GatedReleasePanel({
 }
 
 function FeedbackTab({
-  submissionId, submissionStatus, isAdmin, isGatedReview, isGatekeeper, pendingGatekeeperStage,
+  submissionId, submissionStatus, isAdmin, isOwner, isGatedReview, isGatekeeper, pendingGatekeeperStage,
 }: {
   submissionId: string
   submissionStatus: SubmissionStatus
   isAdmin: boolean
+  isOwner?: boolean
   isGatedReview?: boolean
   isGatekeeper?: boolean
   pendingGatekeeperStage?: { name: string | null; outcome: string | null } | null
@@ -3294,8 +3326,8 @@ function FeedbackTab({
         </div>
       )}
 
-      {/* Appeal section */}
-      {(submissionStatus === 'REJECTED' || submissionStatus === 'APPEAL_PENDING') && !isAdmin && (
+      {/* Appeal section — only the submission owner may see/raise an appeal */}
+      {(submissionStatus === 'REJECTED' || submissionStatus === 'APPEAL_PENDING') && !isAdmin && isOwner && (
         <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5">
           <div className="flex items-center gap-2 mb-3">
             <Gavel className="w-4 h-4 text-orange-500" />
@@ -3319,6 +3351,12 @@ function FeedbackTab({
                   <p className="text-xs font-medium text-blue-700 mb-1">Coordinator response:</p>
                   <p className="text-sm text-blue-800 whitespace-pre-wrap">{appeal.resolution_note}</p>
                 </div>
+              )}
+              {(appeal.reviewed_by_name || appeal.reviewed_at) && (
+                <p className="text-xs text-gray-500">
+                  Decided{appeal.reviewed_by_name ? ` by ${appeal.reviewed_by_name}` : ''}
+                  {appeal.reviewed_at ? ` on ${new Date(appeal.reviewed_at).toLocaleString()}` : ''}.
+                </p>
               )}
             </div>
           ) : (
@@ -4461,7 +4499,7 @@ export default function SubmissionDetailPage() {
         </div>
       )}
 
-      {sub.status === 'REVISION_REQUIRED' && (
+      {sub.status === 'REVISION_REQUIRED' && isOwner && (
         <div className="mb-5 p-4 bg-orange-50 border border-orange-200 rounded-xl flex items-start gap-3">
           <AlertTriangle className="w-5 h-5 text-orange-500 mt-0.5 flex-shrink-0" />
           <div className="flex-1">
@@ -4491,27 +4529,17 @@ export default function SubmissionDetailPage() {
         </div>
       )}
 
-      {sub.status === 'REJECTED' && (
+      {sub.status === 'REJECTED' && isOwner && (
         <div className="mb-5 p-4 bg-red-50 border border-red-200 rounded-xl flex items-start gap-3">
           <CircleAlert className="w-5 h-5 text-red-500 mt-0.5 flex-shrink-0" />
           <div className="flex-1">
             <p className="text-sm font-semibold text-red-800">Submission Rejected</p>
             <p className="text-sm text-red-700 mt-0.5">
-              Your submission was not approved.{' '}
+              Submission was rejected.{' '}
               <button onClick={() => setTab('feedback')} className="underline font-medium">View feedback and appeal options →</button>
             </p>
           </div>
         </div>
-      )}
-
-      {/* Reviewer decision panel — only for assigned reviewers who are NOT admins/
-          coordinators. Coordinators manage assignments and must not approve/reject on
-          a reviewer's behalf (doing so left the workflow in a hung state). */}
-      {isAssignedReviewer && !isAdmin && sub.status === 'IN_REVIEW' && (
-        <ReviewerDecisionPanel
-          submissionId={sub.id}
-          submissionStatus={sub.status}
-        />
       )}
 
       {/* Tab bar */}
@@ -4546,9 +4574,6 @@ export default function SubmissionDetailPage() {
               setTimeout(() => reviewersRef.current?.scrollIntoView({ behavior: 'smooth' }), 50)
             } : undefined}
           />
-          {isAdmin && (
-            <SimilarityCheckPanel submissionId={sub.id} />
-          )}
           {isAdmin && sub.submission_type && (
             <div ref={reviewersRef}>
               <ReviewersPanel submissionId={sub.id} submissionTypeId={sub.submission_type.id} />
@@ -4558,18 +4583,33 @@ export default function SubmissionDetailPage() {
       )}
 
       {tab === 'documents' && (
-        <DocumentsTab sub={sub} canEdit={canEdit} />
+        <DocumentsTab
+          sub={sub}
+          canEdit={canEdit}
+          canRunSimilarity={!!(isAdmin || isAssignedReviewer || user?.roles?.includes('reviewer'))}
+        />
       )}
 
       {tab === 'feedback' && (
-        <FeedbackTab
-          submissionId={sub.id}
-          submissionStatus={sub.status}
-          isAdmin={!!isAdmin}
-          isGatedReview={isGatedReview}
-          isGatekeeper={isGatekeeper}
-          pendingGatekeeperStage={pendingGatekeeperStage}
-        />
+        <div className="space-y-5">
+          {/* Reviewer decision panel — assigned reviewers (not admins/coordinators) act here,
+              after they have reviewed the documents rather than before. */}
+          {isAssignedReviewer && !isAdmin && sub.status === 'IN_REVIEW' && (
+            <ReviewerDecisionPanel
+              submissionId={sub.id}
+              submissionStatus={sub.status}
+            />
+          )}
+          <FeedbackTab
+            submissionId={sub.id}
+            submissionStatus={sub.status}
+            isAdmin={!!isAdmin}
+            isOwner={isOwner}
+            isGatedReview={isGatedReview}
+            isGatekeeper={isGatekeeper}
+            pendingGatekeeperStage={pendingGatekeeperStage}
+          />
+        </div>
       )}
 
       {tab === 'activity' && (

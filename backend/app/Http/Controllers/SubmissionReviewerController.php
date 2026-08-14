@@ -556,7 +556,7 @@ class SubmissionReviewerController extends Controller
             ]);
 
             if ($data['action'] === 'approved' && $reviewer->extension_requested_days) {
-                $newDue = ($reviewer->due_at ? $reviewer->due_at : now()->toDate())
+                $newDue = ($reviewer->due_at ? $reviewer->due_at->copy() : now())
                     ->addDays($reviewer->extension_requested_days);
                 $reviewer->update(['due_at' => $newDue]);
                 // Note: due_at is stored on submission_reviewers only; no separate stage_instances table exists.

@@ -41,4 +41,9 @@ class AppealRequest extends Model
     {
         return $this->belongsTo(User::class, 'submitter_id');
     }
+
+    public function resolver(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'reviewed_by');
+    }
 }

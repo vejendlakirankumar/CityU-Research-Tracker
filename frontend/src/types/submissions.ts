@@ -225,6 +225,8 @@ export interface Appeal {
   grounds: string
   resolution_note: string | null
   created_at: string
+  reviewed_at?: string | null
+  reviewed_by_name?: string | null
 }
 
 // ── Review Progress ───────────────────────────────────────────────────────────

@@ -5,6 +5,7 @@ import {
   XCircle, Eye, EyeOff, ChevronRight, AlertCircle,
   Upload, Loader2, ToggleLeft, ToggleRight, HardDrive,
   Clock, Puzzle, Archive, Download, RotateCcw,
+  ShieldCheck, Copy,
 } from 'lucide-react'
 import api from '../lib/axios'
 
@@ -1363,6 +1364,12 @@ function BackupTabNew() {
   const [error, setError]       = useState('')
   const [successMsg, setSuccess] = useState('')
 
+  // Encryption key state
+  const [enc, setEnc] = useState<{ configured: boolean; key_hint: string | null; algorithm: string } | null>(null)
+  const [encBusy, setEncBusy] = useState(false)
+  const [newKey, setNewKey]   = useState<string | null>(null)   // shown once after generate/rotate
+  const [keyCopied, setKeyCopied] = useState(false)
+
   const load = () => {
     setLoading(true)
     api.get('/system/backups')
@@ -1371,7 +1378,31 @@ function BackupTabNew() {
       .finally(() => setLoading(false))
   }
 
-  useEffect(load, [])
+  const loadEnc = () => {
+    api.get('/system/backups/encryption')
+      .then(r => setEnc(r.data))
+      .catch(() => setEnc(null))
+  }
+
+  useEffect(() => { load(); loadEnc() }, [])
+
+  const configureKey = async (rotate: boolean) => {
+    if (rotate && !window.confirm(
+      'Rotate the encryption key?\n\nExisting backups can ONLY be restored with the previous key. Make sure you have it saved before continuing.'
+    )) return
+    setEncBusy(true); setError(''); setSuccess(''); setNewKey(null); setKeyCopied(false)
+    try {
+      const r = await api.post('/system/backups/encryption', {})
+      setNewKey(r.data.key)
+      loadEnc()
+    } catch { setError('Could not configure the encryption key.') }
+    finally { setEncBusy(false) }
+  }
+
+  const copyKey = async () => {
+    if (!newKey) return
+    try { await navigator.clipboard.writeText(newKey); setKeyCopied(true) } catch { /* ignore */ }
+  }
 
   const runBackup = async () => {
     setRunning(true); setError(''); setSuccess('')
@@ -1379,20 +1410,41 @@ function BackupTabNew() {
       await api.post('/system/backups', { storage_type: storageType })
       setSuccess('Backup completed successfully.')
       load()
-    } catch { setError('Backup failed. Check server logs.') }
+    } catch (e: any) {
+      setError(e?.response?.data?.message ?? 'Backup failed. Check server logs.')
+    }
     finally { setRunning(false) }
   }
 
   const restore = async (id: string) => {
-    if (!window.confirm('Restore this backup? This will overwrite the current database.')) return
+    if (!window.confirm('Restore this backup? This will overwrite the current database and uploaded documents. The configured encryption key is required to decrypt it.')) return
+    setError(''); setSuccess('')
     try {
       await api.post(`/system/backups/${id}/restore`)
-      setSuccess('Database restored successfully.')
-    } catch { setError('Restore failed.') }
+      setSuccess('Restored successfully from backup.')
+    } catch (e: any) { setError(e?.response?.data?.message ?? 'Restore failed.') }
   }
 
-  const download = (id: string) => {
-    window.open(`/api/system/backups/${id}/download`, '_blank')
+  const download = async (b: BackupCatalogEntry) => {
+    setError('')
+    try {
+      const res = await api.get(`/system/backups/${b.id}/download`, { responseType: 'blob' })
+      const ct = (res.headers['content-type'] as string) || ''
+      // Remote storage (S3/Azure) returns a JSON body with a presigned URL.
+      if (ct.includes('application/json')) {
+        const text = await (res.data as Blob).text()
+        const url = JSON.parse(text)?.download_url
+        if (url) window.open(url, '_blank')
+        else setError('Could not generate a download link.')
+        return
+      }
+      const url = URL.createObjectURL(res.data as Blob)
+      const a = document.createElement('a')
+      a.href = url; a.download = b.filename; a.click()
+      URL.revokeObjectURL(url)
+    } catch {
+      setError('Download failed.')
+    }
   }
 
   const deleteBackup = async (id: string) => {
@@ -1410,11 +1462,69 @@ function BackupTabNew() {
     return `${(bytes / (1024 ** 3)).toFixed(2)} GB`
   }
 
+  const encReady = enc?.configured ?? false
+
   return (
     <div>
-      <SectionHeader title="Database Backups" subtitle="Create and manage database backups. Backups are compressed pg_dump files." />
+      <SectionHeader
+        title="Database Backups"
+        subtitle="Encrypted backups include the database, uploaded documents, and application configuration. The encryption key is required to restore a backup on this or any other instance."
+      />
       {error      && <div className="mb-4 p-3 bg-red-50   border border-red-200   text-red-700   text-sm rounded-lg">{error}</div>}
       {successMsg && <div className="mb-4 p-3 bg-green-50 border border-green-200 text-green-700 text-sm rounded-lg">{successMsg}</div>}
+
+      {/* ── Encryption key card ── */}
+      <div className="mb-6 border border-gray-200 rounded-lg p-4">
+        <div className="flex items-start gap-3">
+          <div className={`p-2 rounded-lg ${encReady ? 'bg-green-50' : 'bg-amber-50'}`}>
+            {encReady ? <ShieldCheck className="w-5 h-5 text-green-600" /> : <Key className="w-5 h-5 text-amber-600" />}
+          </div>
+          <div className="flex-1">
+            <p className="text-sm font-semibold text-gray-900">Backup Encryption</p>
+            {encReady ? (
+              <p className="text-sm text-gray-500 mt-0.5">
+                Enabled · AES-256 · key <span className="font-mono">{enc?.key_hint}</span>
+              </p>
+            ) : (
+              <p className="text-sm text-amber-700 mt-0.5">
+                No encryption key configured. A key must be set before backups can run.
+              </p>
+            )}
+          </div>
+          <button
+            onClick={() => configureKey(encReady)}
+            disabled={encBusy}
+            className="flex items-center gap-2 px-3 py-2 text-sm font-medium border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 disabled:opacity-60"
+          >
+            {encBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Key className="w-4 h-4" />}
+            {encReady ? 'Rotate key' : 'Generate key'}
+          </button>
+        </div>
+
+        {/* Newly generated key — shown once */}
+        {newKey && (
+          <div className="mt-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+            <div className="flex items-start gap-2">
+              <AlertCircle className="w-4 h-4 text-blue-600 mt-0.5 shrink-0" />
+              <div className="flex-1">
+                <p className="text-sm font-semibold text-blue-800">Save this key now — it will not be shown again</p>
+                <p className="text-xs text-blue-700 mt-0.5">
+                  Store it somewhere safe and separate from the backups. You need it to restore backups on this or another instance. Losing it makes existing encrypted backups unrecoverable.
+                </p>
+                <div className="mt-2 flex items-center gap-2">
+                  <code className="flex-1 px-2 py-1.5 bg-white border border-blue-200 rounded text-xs font-mono break-all">{newKey}</code>
+                  <button
+                    onClick={copyKey}
+                    className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-blue-700 border border-blue-300 rounded hover:bg-blue-100 shrink-0"
+                  >
+                    <Copy className="w-3.5 h-3.5" /> {keyCopied ? 'Copied' : 'Copy'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
 
       <div className="flex flex-wrap items-center gap-3 mb-6">
         <label className="text-sm text-gray-600 font-medium">Storage:</label>
@@ -1427,7 +1537,8 @@ function BackupTabNew() {
         <span className="text-xs text-gray-400 ml-2">{backups.length} backup{backups.length !== 1 ? 's' : ''}</span>
         <button
           onClick={runBackup}
-          disabled={running}
+          disabled={running || !encReady}
+          title={!encReady ? 'Configure an encryption key first' : undefined}
           className="ml-auto flex items-center gap-2 px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:opacity-60"
         >
           {running ? <Loader2 className="w-4 h-4 animate-spin" /> : <HardDrive className="w-4 h-4" />}
@@ -1469,7 +1580,7 @@ function BackupTabNew() {
                     </td>
                     <td className="px-4 py-2.5">
                       <div className="flex items-center gap-1 justify-end">
-                        <button onClick={() => download(b.id)} title="Download"
+                        <button onClick={() => download(b)} title="Download"
                           className="p-1 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded">
                           <Download className="w-4 h-4" />
                         </button>

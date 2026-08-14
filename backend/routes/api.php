@@ -150,6 +150,8 @@ Route::middleware('auth:sanctum')->group(function () {
         // Backup catalog (new)
         Route::get('backups',                        [BackupController::class, 'index']);
         Route::post('backups',                       [BackupController::class, 'store']);
+        Route::get('backups/encryption',             [BackupController::class, 'encryptionStatus']);
+        Route::post('backups/encryption',            [BackupController::class, 'setEncryptionKey']);
         Route::get('backups/{id}/download',          [BackupController::class, 'download']);
         Route::post('backups/{id}/restore',          [BackupController::class, 'restore']);
         Route::delete('backups/{id}',                [BackupController::class, 'destroy']);

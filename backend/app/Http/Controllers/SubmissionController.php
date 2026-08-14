@@ -796,7 +796,8 @@ class SubmissionController extends Controller
         if ($isGatedReview && !$showPerReviewerDecisions) {
             $skip[] = 'REVIEWER_DECISION';
         }
-        $auditLogs = AuditLog::where('submission_id', $id)
+        $auditLogs = AuditLog::with('actor:id,name')
+            ->where('submission_id', $id)
             ->whereNotIn('action', $skip)
             ->orderBy('created_at')
             ->get();
@@ -806,6 +807,7 @@ class SubmissionController extends Controller
                 'type'  => 'system',
                 'label' => ucwords(strtolower(str_replace('_', ' ', $log->action))),
                 'date'  => $log->created_at,
+                'actor' => $log->actor?->name,
             ]);
         }
 
@@ -846,12 +848,17 @@ class SubmissionController extends Controller
         ] : null;
 
         $appeal = AppealRequest::where('submission_id', $id)->latest()->first();
+        if ($appeal) {
+            $appeal->load('resolver:id,name');
+        }
         $appealData = $appeal ? [
-            'id'              => $appeal->id,
-            'status'          => $appeal->status,
-            'grounds'         => $appeal->grounds,
-            'resolution_note' => $appeal->resolution_note,
-            'created_at'      => $appeal->created_at,
+            'id'               => $appeal->id,
+            'status'           => $appeal->status,
+            'grounds'          => $appeal->grounds,
+            'resolution_note'  => $appeal->resolution_note,
+            'created_at'       => $appeal->created_at,
+            'reviewed_at'      => $appeal->reviewed_at,
+            'reviewed_by_name' => $appeal->resolver?->name,
         ] : null;
 
         // ── Gated-review visibility rules ────────────────────────────────────
