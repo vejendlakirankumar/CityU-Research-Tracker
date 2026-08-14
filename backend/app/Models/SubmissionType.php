@@ -59,4 +59,18 @@ class SubmissionType extends Model
                     ->withPivot('created_at')
                     ->orderBy('name');
     }
+
+    /**
+     * Research templates attached to this category (available to researchers
+     * when preparing a submission of this type).
+     */
+    public function templates(): BelongsToMany
+    {
+        return $this->belongsToMany(
+            ResearchTemplate::class,
+            'research_template_submission_type',
+            'submission_type_id',
+            'research_template_id'
+        )->withPivot('created_at')->orderBy('name');
+    }
 }

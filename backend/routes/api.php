@@ -23,6 +23,7 @@ use App\Http\Controllers\SubmissionReviewerController;
 use App\Http\Controllers\SubmissionMeetingController;
 use App\Http\Controllers\SubmissionEmailController;
 use App\Http\Controllers\SubmissionTypeController;
+use App\Http\Controllers\ResearchTemplateController;
 use App\Http\Controllers\SystemController;
 use App\Http\Controllers\UserController;
 use App\Http\Controllers\WebhookController;
@@ -181,6 +182,10 @@ Route::middleware('auth:sanctum')->group(function () {
         return app(SubmissionTypeController::class)->index($r->merge(['active_only' => true]));
     });
 
+    // ── Research templates (researcher-facing: view + download) ──────────────
+    Route::get('submission-types/{id}/templates', [ResearchTemplateController::class, 'forSubmissionType']);
+    Route::get('research-templates/{id}/download', [ResearchTemplateController::class, 'download']);
+
     // ── Admin: Submission Categories + Workflows ──────────────────────────────
     Route::middleware('role:admin,coordinator')->prefix('admin')->group(function () {
         // Submission type (categories) CRUD
@@ -212,6 +217,13 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::post('email-templates',                   [EmailTemplateController::class, 'store']);
             Route::patch('email-templates/{email_template}', [EmailTemplateController::class, 'update']);
             Route::delete('email-templates/{email_template}',[EmailTemplateController::class, 'destroy']);
+
+            // Research templates (admin-only) — upload & attach to categories
+            Route::get('research-templates',                          [ResearchTemplateController::class, 'index']);
+            Route::post('research-templates',                         [ResearchTemplateController::class, 'store']);
+            Route::patch('research-templates/{id}',                   [ResearchTemplateController::class, 'update']);
+            Route::delete('research-templates/{id}',                  [ResearchTemplateController::class, 'destroy']);
+            Route::put('research-templates/{id}/submission-types',    [ResearchTemplateController::class, 'syncSubmissionTypes']);
         });
 
         // Reviewer pool (pre-assignment of reviewers to categories)

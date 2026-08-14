@@ -5,7 +5,7 @@ import {
   XCircle, Eye, EyeOff, ChevronRight, AlertCircle,
   Upload, Loader2, ToggleLeft, ToggleRight, HardDrive,
   Clock, Puzzle, Archive, Download, RotateCcw,
-  ShieldCheck, Copy,
+  ShieldCheck, Copy, FileText, Paperclip,
 } from 'lucide-react'
 import api from '../lib/axios'
 
@@ -92,6 +92,7 @@ const TABS = [
   { id: 'security',      label: 'Password & Security', icon: Shield },
   { id: 'notifications', label: 'Email Notifications', icon: Bell },
   { id: 'email_templates', label: 'Email Templates',   icon: Send },
+  { id: 'research_templates', label: 'Research Templates', icon: FileText },
   { id: 'flags',         label: 'Feature Flags',       icon: Sliders },
   { id: 'review',        label: 'Review Settings',     icon: Clock },
   { id: 'integrations',  label: 'Integrations',        icon: Puzzle },
@@ -1605,6 +1606,302 @@ function BackupTabNew() {
   )
 }
 
+// ── Research Templates Tab (admin-only) ───────────────────────────────────────
+
+interface ResearchTemplateItem {
+  id: string
+  name: string
+  description: string | null
+  filename: string
+  size_bytes: number
+  submission_types?: { id: string; label: string; slug: string }[]
+}
+
+function rtFmtBytes(bytes: number): string {
+  if (bytes < 1024)      return `${bytes} B`
+  if (bytes < 1024 ** 2) return `${(bytes / 1024).toFixed(1)} KB`
+  if (bytes < 1024 ** 3) return `${(bytes / (1024 ** 2)).toFixed(1)} MB`
+  return `${(bytes / (1024 ** 3)).toFixed(2)} GB`
+}
+
+function ResearchTemplatesTab() {
+  const [templates, setTemplates] = useState<ResearchTemplateItem[]>([])
+  const [types, setTypes] = useState<{ id: string; label: string }[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+
+  // Upload form
+  const [name, setName] = useState('')
+  const [description, setDescription] = useState('')
+  const [file, setFile] = useState<File | null>(null)
+  const [uploading, setUploading] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
+  // Attach modal
+  const [attachTarget, setAttachTarget] = useState<ResearchTemplateItem | null>(null)
+  const [attachIds, setAttachIds] = useState<string[]>([])
+  const [savingAttach, setSavingAttach] = useState(false)
+
+  const load = async () => {
+    setLoading(true)
+    try {
+      const [tplRes, typeRes] = await Promise.all([
+        api.get('/admin/research-templates'),
+        api.get('/admin/submission-types', { params: { all: true } }),
+      ])
+      setTemplates(tplRes.data.data ?? [])
+      setTypes((typeRes.data.data ?? []).map((t: { id: string; label: string }) => ({ id: t.id, label: t.label })))
+    } catch {
+      setError('Failed to load templates.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => { load() }, [])
+
+  const upload = async () => {
+    setError('')
+    if (!name.trim()) { setError('Template name is required.'); return }
+    if (!file) { setError('Please choose a file to upload.'); return }
+    setUploading(true)
+    try {
+      const fd = new FormData()
+      fd.append('name', name.trim())
+      if (description.trim()) fd.append('description', description.trim())
+      fd.append('file', file)
+      await api.post('/admin/research-templates', fd, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      })
+      setName(''); setDescription(''); setFile(null)
+      if (fileInputRef.current) fileInputRef.current.value = ''
+      await load()
+    } catch (e) {
+      const err = e as { response?: { data?: { message?: string } } }
+      setError(err?.response?.data?.message ?? 'Upload failed. Please try again.')
+    } finally {
+      setUploading(false)
+    }
+  }
+
+  const downloadTemplate = async (t: ResearchTemplateItem) => {
+    try {
+      const res = await api.get(`/research-templates/${t.id}/download`, { responseType: 'blob' })
+      const url = URL.createObjectURL(res.data as Blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = t.filename
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      URL.revokeObjectURL(url)
+    } catch {
+      setError('Download failed.')
+    }
+  }
+
+  const removeTemplate = async (t: ResearchTemplateItem) => {
+    if (!window.confirm(`Delete template "${t.name}"? This cannot be undone.`)) return
+    try {
+      await api.delete(`/admin/research-templates/${t.id}`)
+      await load()
+    } catch {
+      setError('Delete failed.')
+    }
+  }
+
+  const openAttach = (t: ResearchTemplateItem) => {
+    setAttachTarget(t)
+    setAttachIds((t.submission_types ?? []).map((s) => s.id))
+  }
+
+  const toggleAttach = (id: string) => {
+    setAttachIds((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id])
+  }
+
+  const saveAttach = async () => {
+    if (!attachTarget) return
+    setSavingAttach(true)
+    try {
+      await api.put(`/admin/research-templates/${attachTarget.id}/submission-types`, {
+        submission_type_ids: attachIds,
+      })
+      setAttachTarget(null)
+      await load()
+    } catch {
+      setError('Failed to update assignments.')
+    } finally {
+      setSavingAttach(false)
+    }
+  }
+
+  return (
+    <div>
+      <SectionHeader
+        title="Research Templates"
+        subtitle="Upload document templates and attach them to submission categories. Researchers can download the templates when preparing a submission of that category."
+      />
+
+      {error && (
+        <div className="mb-5 p-3 bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg flex gap-2">
+          <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+          {error}
+        </div>
+      )}
+
+      {/* Upload form */}
+      <div className="bg-gray-50 border border-gray-200 rounded-xl p-5 mb-6">
+        <h3 className="text-sm font-semibold text-gray-800 mb-3">Upload a template</h3>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <Field label="Template name">
+            <input
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              placeholder="e.g. Conference Paper Template"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              maxLength={255}
+            />
+          </Field>
+          <Field label="File" hint="PDF, Word, Excel, PowerPoint, TXT, RTF, ODT or ZIP (max 50 MB)">
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.rtf,.odt,.zip"
+              onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+              className="w-full text-sm text-gray-600 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-sm file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
+            />
+          </Field>
+        </div>
+        <Field label="Description" hint="Optional — shown to researchers alongside the template.">
+          <textarea
+            className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+            rows={2}
+            placeholder="Brief note about what this template is for…"
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            maxLength={2000}
+          />
+        </Field>
+        <div className="flex justify-end mt-2">
+          <button
+            onClick={upload}
+            disabled={uploading}
+            className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:opacity-60"
+          >
+            {uploading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+            Upload Template
+          </button>
+        </div>
+      </div>
+
+      {/* Templates list */}
+      {loading ? (
+        <div className="flex items-center gap-2 text-sm text-gray-500 py-8 justify-center">
+          <Loader2 className="w-4 h-4 animate-spin" /> Loading…
+        </div>
+      ) : templates.length === 0 ? (
+        <div className="text-center text-sm text-gray-500 py-10 border border-dashed border-gray-200 rounded-xl">
+          No templates uploaded yet.
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {templates.map((t) => (
+            <div key={t.id} className="border border-gray-200 rounded-xl p-4">
+              <div className="flex items-start gap-3">
+                <div className="w-9 h-9 rounded-lg bg-blue-50 flex items-center justify-center flex-shrink-0">
+                  <FileText className="w-4 h-4 text-blue-600" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-semibold text-gray-900">{t.name}</p>
+                  <p className="text-xs text-gray-500 truncate">{t.filename} · {rtFmtBytes(t.size_bytes)}</p>
+                  {t.description && <p className="text-xs text-gray-500 mt-1">{t.description}</p>}
+                  <div className="flex flex-wrap items-center gap-1.5 mt-2">
+                    {(t.submission_types ?? []).length === 0 ? (
+                      <span className="text-xs text-amber-600">Not assigned to any category</span>
+                    ) : (
+                      (t.submission_types ?? []).map((s) => (
+                        <span key={s.id} className="inline-flex items-center px-2 py-0.5 rounded-full text-xs bg-gray-100 text-gray-700">
+                          {s.label}
+                        </span>
+                      ))
+                    )}
+                  </div>
+                </div>
+                <div className="flex items-center gap-1 flex-shrink-0">
+                  <button
+                    onClick={() => openAttach(t)}
+                    className="flex items-center gap-1.5 px-2.5 py-1.5 border border-gray-200 rounded-lg text-xs text-gray-600 hover:bg-gray-50"
+                    title="Assign to categories"
+                  >
+                    <Paperclip className="w-3.5 h-3.5" /> Assign
+                  </button>
+                  <button
+                    onClick={() => downloadTemplate(t)}
+                    className="p-1.5 text-gray-400 hover:text-blue-600"
+                    title="Download"
+                  >
+                    <Download className="w-4 h-4" />
+                  </button>
+                  <button
+                    onClick={() => removeTemplate(t)}
+                    className="p-1.5 text-gray-400 hover:text-red-500"
+                    title="Delete"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Assign modal */}
+      {attachTarget && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md max-h-[80vh] flex flex-col">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200">
+              <h3 className="text-sm font-semibold text-gray-900">Assign “{attachTarget.name}” to categories</h3>
+              <button onClick={() => setAttachTarget(null)} className="text-gray-400 hover:text-gray-600">
+                <XCircle className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-5 overflow-auto flex-1">
+              {types.length === 0 ? (
+                <p className="text-sm text-gray-500">No submission categories exist yet.</p>
+              ) : (
+                <div className="space-y-1.5">
+                  {types.map((ty) => (
+                    <label key={ty.id} className="flex items-center gap-2.5 px-3 py-2 rounded-lg hover:bg-gray-50 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={attachIds.includes(ty.id)}
+                        onChange={() => toggleAttach(ty.id)}
+                      />
+                      <span className="text-sm text-gray-800">{ty.label}</span>
+                    </label>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div className="flex items-center justify-end gap-3 px-5 py-4 border-t border-gray-200">
+              <button onClick={() => setAttachTarget(null)} className="px-3 py-2 text-sm text-gray-600 hover:text-gray-900">Cancel</button>
+              <button
+                onClick={saveAttach}
+                disabled={savingAttach}
+                className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:opacity-60"
+              >
+                {savingAttach ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function SettingsPage() {
   const [tab, setTab] = useState<TabId>('org')
 
@@ -1643,6 +1940,7 @@ export default function SettingsPage() {
           {tab === 'security'      && <SecurityTab />}
           {tab === 'notifications' && <NotificationsTab />}
           {tab === 'email_templates' && <EmailTemplatesTab />}
+          {tab === 'research_templates' && <ResearchTemplatesTab />}
           {tab === 'flags'         && <FlagsTab />}
           {tab === 'review'        && <ReviewTab />}
           {tab === 'integrations'  && <IntegrationsTab />}

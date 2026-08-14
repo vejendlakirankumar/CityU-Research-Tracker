@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   ChevronLeft, ChevronRight, CheckCircle2, Upload,
-  X, FileText, Loader2, AlertCircle, UserPlus,
+  X, FileText, Loader2, AlertCircle, UserPlus, Download,
 } from 'lucide-react'
 import api from '../lib/axios'
 import { useAuthStore } from '../stores/authStore'
@@ -133,6 +133,14 @@ interface FormState {
   change_summary: string
 }
 
+interface ResearchTemplateLite {
+  id: string
+  name: string
+  description: string | null
+  filename: string
+  size_bytes: number
+}
+
 export default function NewSubmissionPage() {
   const navigate = useNavigate()
   const qc = useQueryClient()
@@ -167,6 +175,30 @@ export default function NewSubmissionPage() {
 
   const types = typesData?.data ?? []
   const selectedType = types.find((t) => t.id === form.submission_type_id)
+
+  // Templates attached to the selected category
+  const { data: templatesData } = useQuery<{ data: ResearchTemplateLite[] }>({
+    queryKey: ['submission-type-templates', form.submission_type_id],
+    queryFn: () => api.get(`/submission-types/${form.submission_type_id}/templates`).then((r) => r.data),
+    enabled: !!form.submission_type_id,
+  })
+  const templates = templatesData?.data ?? []
+
+  const downloadTemplate = async (t: ResearchTemplateLite) => {
+    try {
+      const res = await api.get(`/research-templates/${t.id}/download`, { responseType: 'blob' })
+      const url = URL.createObjectURL(res.data as Blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = t.filename
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      URL.revokeObjectURL(url)
+    } catch {
+      setError('Failed to download template.')
+    }
+  }
 
   // Mutations
   const saveDraftMutation = useMutation({
@@ -339,6 +371,40 @@ export default function NewSubmissionPage() {
                 ))}
               </div>
             </div>
+
+            {/* Templates attached to the selected category */}
+            {selectedType && templates.length > 0 && (
+              <div className="border border-blue-100 bg-blue-50/50 rounded-xl p-4">
+                <div className="flex items-center gap-2 mb-1">
+                  <FileText className="w-4 h-4 text-blue-600" />
+                  <p className="text-sm font-semibold text-gray-800">Templates for {selectedType.label}</p>
+                </div>
+                <p className="text-xs text-gray-500 mb-3">
+                  Download and use these templates when preparing your submission.
+                </p>
+                <ul className="space-y-2">
+                  {templates.map((t) => (
+                    <li key={t.id} className="flex items-center gap-3 bg-white border border-gray-200 rounded-lg px-3 py-2">
+                      <FileText className="w-4 h-4 text-gray-400 flex-shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium text-gray-900 truncate">{t.name}</p>
+                        <p className="text-xs text-gray-500 truncate">
+                          {t.filename}
+                          {t.description ? ` · ${t.description}` : ''}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => downloadTemplate(t)}
+                        className="flex items-center gap-1.5 px-2.5 py-1.5 border border-gray-200 rounded-lg text-xs text-blue-600 hover:bg-blue-50 flex-shrink-0"
+                      >
+                        <Download className="w-3.5 h-3.5" /> Download
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
           </div>
         )}
 
