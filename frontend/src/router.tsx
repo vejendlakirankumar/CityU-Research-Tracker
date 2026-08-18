@@ -13,6 +13,7 @@ import UsersPage from './pages/UsersPage'
 import ReportsPage from './pages/ReportsPage'
 import NotificationsPage from './pages/NotificationsPage'
 import SettingsPage from './pages/SettingsPage'
+import ResearchTemplatesPage from './pages/ResearchTemplatesPage'
 import NewSubmissionPage from './pages/NewSubmissionPage'
 import SubmissionDetailPage from './pages/SubmissionDetailPage'
 import SubmissionCategoriesPage from './pages/SubmissionCategoriesPage'
@@ -119,6 +120,14 @@ export const router = createBrowserRouter(
           element: (
             <RoleRoute allowedRoles={['admin']}>
               <SettingsPage />
+            </RoleRoute>
+          ),
+        },
+        {
+          path: '/research-templates',
+          element: (
+            <RoleRoute allowedRoles={['admin', 'coordinator']}>
+              <ResearchTemplatesPage />
             </RoleRoute>
           ),
         },

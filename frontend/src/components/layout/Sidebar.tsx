@@ -176,6 +176,12 @@ const navSections: NavSection[] = [
         roles: ['admin', 'coordinator'],
       },
       {
+        label: 'Research Templates',
+        to: '/research-templates',
+        icon: FileText,
+        roles: ['admin', 'coordinator'],
+      },
+      {
         label: 'Settings',
         to: '/settings',
         icon: Settings,

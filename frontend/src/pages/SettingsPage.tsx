@@ -92,7 +92,6 @@ const TABS = [
   { id: 'security',      label: 'Password & Security', icon: Shield },
   { id: 'notifications', label: 'Email Notifications', icon: Bell },
   { id: 'email_templates', label: 'Email Templates',   icon: Send },
-  { id: 'research_templates', label: 'Research Templates', icon: FileText },
   { id: 'flags',         label: 'Feature Flags',       icon: Sliders },
   { id: 'review',        label: 'Review Settings',     icon: Clock },
   { id: 'integrations',  label: 'Integrations',        icon: Puzzle },
@@ -1624,7 +1623,7 @@ function rtFmtBytes(bytes: number): string {
   return `${(bytes / (1024 ** 3)).toFixed(2)} GB`
 }
 
-function ResearchTemplatesTab() {
+export function ResearchTemplatesTab() {
   const [templates, setTemplates] = useState<ResearchTemplateItem[]>([])
   const [types, setTypes] = useState<{ id: string; label: string }[]>([])
   const [loading, setLoading] = useState(true)
@@ -1737,11 +1736,6 @@ function ResearchTemplatesTab() {
 
   return (
     <div>
-      <SectionHeader
-        title="Research Templates"
-        subtitle="Upload document templates and attach them to submission categories. Researchers can download the templates when preparing a submission of that category."
-      />
-
       {error && (
         <div className="mb-5 p-3 bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg flex gap-2">
           <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
@@ -1940,7 +1934,6 @@ export default function SettingsPage() {
           {tab === 'security'      && <SecurityTab />}
           {tab === 'notifications' && <NotificationsTab />}
           {tab === 'email_templates' && <EmailTemplatesTab />}
-          {tab === 'research_templates' && <ResearchTemplatesTab />}
           {tab === 'flags'         && <FlagsTab />}
           {tab === 'review'        && <ReviewTab />}
           {tab === 'integrations'  && <IntegrationsTab />}

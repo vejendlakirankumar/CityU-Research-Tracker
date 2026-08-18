@@ -220,14 +220,14 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::post('email-templates',                   [EmailTemplateController::class, 'store']);
             Route::patch('email-templates/{email_template}', [EmailTemplateController::class, 'update']);
             Route::delete('email-templates/{email_template}',[EmailTemplateController::class, 'destroy']);
-
-            // Research templates (admin-only) — upload & attach to categories
-            Route::get('research-templates',                          [ResearchTemplateController::class, 'index']);
-            Route::post('research-templates',                         [ResearchTemplateController::class, 'store']);
-            Route::patch('research-templates/{id}',                   [ResearchTemplateController::class, 'update']);
-            Route::delete('research-templates/{id}',                  [ResearchTemplateController::class, 'destroy']);
-            Route::put('research-templates/{id}/submission-types',    [ResearchTemplateController::class, 'syncSubmissionTypes']);
         });
+
+        // Research templates (admin + coordinator) — upload & attach to categories
+        Route::get('research-templates',                          [ResearchTemplateController::class, 'index']);
+        Route::post('research-templates',                         [ResearchTemplateController::class, 'store']);
+        Route::patch('research-templates/{id}',                   [ResearchTemplateController::class, 'update']);
+        Route::delete('research-templates/{id}',                  [ResearchTemplateController::class, 'destroy']);
+        Route::put('research-templates/{id}/submission-types',    [ResearchTemplateController::class, 'syncSubmissionTypes']);
 
         // Reviewer pool (pre-assignment of reviewers to categories)
         Route::get('reviewer-pools',          [ReviewerPoolController::class, 'index']);
