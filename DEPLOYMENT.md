@@ -699,10 +699,15 @@ sudo bash deploy/install.sh --domain rrp.cityu.edu --skip-ssl
 
 #### Step 2 — Point the app at the public HTTPS URL
 
-Because users arrive over HTTPS but the container receives HTTP, the app must be told
-its canonical URL is HTTPS. Edit `.env` on the VM:
+**Required for both Docker and bare-metal.** Because users arrive over HTTPS but the
+app receives HTTP from the gateway, it must be told its canonical URL is HTTPS. Edit
+the `.env` file — for Docker it is the repo-root `.env`; for a bare-metal
+`deploy/install.sh` deployment it is **`/var/www/rrp/backend/.env`** (there,
+`SESSION_DOMAIN` and `SANCTUM_STATEFUL_DOMAINS` are already correct, and only `APP_URL`
+— written as `http://…` by `--skip-ssl` — actually needs flipping):
 
 ```bash
+# Docker: run from the repo root. Bare-metal: cd /var/www/rrp/backend first.
 sed -i 's|^APP_URL=.*|APP_URL=https://rrp.cityu.edu|'                 .env
 sed -i 's/^SESSION_DOMAIN=.*/SESSION_DOMAIN=rrp.cityu.edu/'           .env
 sed -i 's/^SANCTUM_STATEFUL_DOMAINS=.*/SANCTUM_STATEFUL_DOMAINS=rrp.cityu.edu/' .env
@@ -713,9 +718,9 @@ grep -q '^SESSION_SECURE_COOKIE=' .env \
   || echo 'SESSION_SECURE_COOKIE=true' >> .env
 
 # Reload configuration
-docker exec -w /var/www/html rrp_app php artisan config:cache   # Docker
+docker exec -w /var/www/html rrp_app php artisan config:cache        # Docker
 # or, bare-metal:
-# cd /var/www/rrp/backend && php artisan config:cache
+# cd /var/www/rrp/backend && sudo -u rrp php artisan config:cache
 ```
 
 The backend already trusts the proxy's `X-Forwarded-Proto` / `X-Forwarded-Host` /
