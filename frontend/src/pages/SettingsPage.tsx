@@ -611,12 +611,17 @@ function SecurityTab() {
 
   const save = async () => {
     if (!data) return
-    setSaving(true); setSaved(false)
+    setSaving(true); setSaved(false); setError('')
     try {
       const r = await api.patch('/system/password-policy', data)
       setData(r.data); setSaved(true)
       setTimeout(() => setSaved(false), 3000)
-    } catch { setError('Save failed.') }
+    } catch (e: any) {
+      const msg = e?.response?.data?.message
+        || (e?.response?.data?.errors && Object.values(e.response.data.errors).flat()[0])
+        || 'Save failed.'
+      setError(msg as string)
+    }
     finally { setSaving(false) }
   }
 

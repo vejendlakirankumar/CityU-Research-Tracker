@@ -135,18 +135,40 @@ class SystemController extends Controller
             'require_uppercase'        => ['sometimes', 'boolean'],
             'require_number'           => ['sometimes', 'boolean'],
             'require_special'          => ['sometimes', 'boolean'],
-            'expiry_days'              => ['sometimes', 'integer', 'min:0', 'nullable'],
-            'history_count'            => ['sometimes', 'integer', 'min:0', 'max:24'],
-            'max_login_attempts'       => ['sometimes', 'integer', 'min:1', 'max:20'],
-            'lockout_duration_minutes' => ['sometimes', 'integer', 'min:1'],
-            'session_timeout_minutes'  => ['sometimes', 'integer', 'min:5'],
+            'expiry_days'              => ['sometimes', 'nullable', 'integer', 'min:0'],
+            'history_count'            => ['sometimes', 'nullable', 'integer', 'min:0', 'max:24'],
+            'max_login_attempts'       => ['sometimes', 'nullable', 'integer', 'min:1', 'max:20'],
+            'lockout_duration_minutes' => ['sometimes', 'nullable', 'integer', 'min:1'],
+            'session_timeout_minutes'  => ['sometimes', 'nullable', 'integer', 'min:5'],
             'require_2fa'              => ['sometimes', 'boolean'],
         ]);
 
-        $policy = PasswordPolicy::find(1);
-        $policy->update($data);
+        // The policy is a single row (id = 1). It is created by the seeder, but on
+        // installations that were never seeded the row may be missing — create it
+        // on demand instead of crashing on a null model.
+        $policy = PasswordPolicy::firstOrNew(['id' => 1]);
+        $policy->id = 1;
 
-        return response()->json($policy);
+        // These columns are NOT NULL in the schema. When the form leaves them blank
+        // the frontend sends null; skip those so the existing value (or the DB
+        // default on first creation) is preserved rather than violating the
+        // NOT NULL constraint.
+        $notNullable = [
+            'min_length', 'require_uppercase', 'require_number', 'require_special',
+            'max_login_attempts', 'lockout_duration_minutes', 'session_timeout_minutes',
+            'require_2fa',
+        ];
+
+        foreach ($data as $key => $value) {
+            if ($value === null && in_array($key, $notNullable, true)) {
+                continue;
+            }
+            $policy->{$key} = $value;
+        }
+
+        $policy->save();
+
+        return response()->json($policy->fresh());
     }
 
     // ── Email settings ────────────────────────────────────────────────────────
