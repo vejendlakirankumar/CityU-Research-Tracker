@@ -3,6 +3,7 @@
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
+use Illuminate\Http\Request;
 
 return Application::configure(basePath: dirname(__DIR__))
     ->withRouting(
@@ -11,6 +12,21 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware) {
+        // Trust the upstream reverse proxy / load balancer that terminates TLS
+        // (e.g. Azure Application Gateway, an external nginx SSL terminator).
+        // This makes Laravel honour X-Forwarded-Proto/Host/Port so it treats
+        // requests as HTTPS and generates correct https:// URLs (SSO redirect
+        // URIs, e-mail links, secure cookies) even though the container itself
+        // receives plain HTTP from the proxy.
+        // SECURITY: the VM must only be reachable through the proxy — lock the
+        // NSG / firewall so the app port is not exposed to the public directly.
+        $middleware->trustProxies(at: '*', headers:
+            Request::HEADER_X_FORWARDED_FOR |
+            Request::HEADER_X_FORWARDED_HOST |
+            Request::HEADER_X_FORWARDED_PORT |
+            Request::HEADER_X_FORWARDED_PROTO
+        );
+
         // Custom role middleware alias
         $middleware->alias([
             'auth' => \App\Http\Middleware\Authenticate::class,

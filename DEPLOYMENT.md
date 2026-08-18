@@ -50,6 +50,7 @@ After deployment the portal is available at the URL printed at the end of the sc
 6. [Option D — Local Development](#6-option-d--local-development)
 7. [Environment Variables](#7-environment-variables)
 8. [SSL / HTTPS](#8-ssl--https)
+   - [8.1 Behind Azure Application Gateway (external TLS termination)](#81-behind-azure-application-gateway-external-tls-termination)
 9. [First-Time Configuration](#9-first-time-configuration)
 10. [CI/CD with GitHub Actions](#10-cicd-with-github-actions)
 11. [Updating the Application](#11-updating-the-application)
@@ -658,6 +659,108 @@ client_max_body_size 100M;
 ```
 
 Then: `sudo systemctl reload nginx`
+
+---
+
+### 8.1 Behind Azure Application Gateway (external TLS termination)
+
+Use this section when TLS is terminated **at an Azure Application Gateway** (or any
+external L7 load balancer / WAF) and the public DNS record points at the gateway —
+for example `https://rrp.cityu.edu` resolves to the Application Gateway, which then
+forwards traffic to the VM over the private network.
+
+> **Key difference:** The VM does **not** terminate TLS. The Let's Encrypt / host-nginx
+> steps in Section 8 above **do not apply** — do **not** pass `--https` and do **not**
+> run `deploy/ssl-setup.sh`. The certificate lives on the Application Gateway.
+
+#### Traffic flow
+
+```
+Browser ── HTTPS ──▶ Azure Application Gateway ── HTTP ──▶ VM (Docker/host:80 or 8080)
+   https://rrp.cityu.edu   (TLS terminates here)     private IP, plain HTTP
+```
+
+#### Step 1 — Deploy the stack on plain HTTP (no VM SSL)
+
+Docker Compose:
+
+```bash
+cd ~/CityU-Research-Tracker
+# NO --https flag. Bind to port 80 (default) or 8080 — must match the
+# Application Gateway backend HTTP setting port you configure in Step 3.
+bash deploy/quick-start-docker.sh --domain rrp.cityu.edu --no-seed
+```
+
+Bare-metal:
+
+```bash
+sudo bash deploy/install.sh --domain rrp.cityu.edu --skip-ssl
+```
+
+#### Step 2 — Point the app at the public HTTPS URL
+
+Because users arrive over HTTPS but the container receives HTTP, the app must be told
+its canonical URL is HTTPS. Edit `.env` on the VM:
+
+```bash
+sed -i 's|^APP_URL=.*|APP_URL=https://rrp.cityu.edu|'                 .env
+sed -i 's/^SESSION_DOMAIN=.*/SESSION_DOMAIN=rrp.cityu.edu/'           .env
+sed -i 's/^SANCTUM_STATEFUL_DOMAINS=.*/SANCTUM_STATEFUL_DOMAINS=rrp.cityu.edu/' .env
+
+# Recommended: only send the session cookie over HTTPS
+grep -q '^SESSION_SECURE_COOKIE=' .env \
+  && sed -i 's/^SESSION_SECURE_COOKIE=.*/SESSION_SECURE_COOKIE=true/' .env \
+  || echo 'SESSION_SECURE_COOKIE=true' >> .env
+
+# Reload configuration
+docker exec -w /var/www/html rrp_app php artisan config:cache   # Docker
+# or, bare-metal:
+# cd /var/www/rrp/backend && php artisan config:cache
+```
+
+The backend already trusts the proxy's `X-Forwarded-Proto` / `X-Forwarded-Host` /
+`X-Forwarded-For` headers (configured in `backend/bootstrap/app.php`), so with the
+settings above it correctly generates `https://` links, records real client IPs for
+rate-limiting/audit logs, and reports `$request->secure() === true`.
+
+#### Step 3 — Configure the Azure Application Gateway
+
+| Component | Setting |
+|---|---|
+| **Listener** | HTTPS on port 443 with the certificate for `rrp.cityu.edu` (uploaded PFX or referenced from Azure Key Vault). |
+| **Backend pool** | The VM's **private** IP address (or its NIC / VMSS). |
+| **Backend HTTP setting** | Protocol **HTTP**, port **80** (or **8080** if you deployed with `--port 8080`). Request timeout **≥ 120s** to allow large file uploads. Cookie-based affinity is **not required** (the API is stateless Bearer-token auth). |
+| **Health probe** | Protocol **HTTP**, path **`/api/system/public`**, expected status codes **200–399**. Set the probe host to `rrp.cityu.edu` (or "pick host name from backend HTTP settings"). |
+| **Redirect** | Add an HTTP (port 80) listener + redirect rule to force HTTP → HTTPS at the gateway. |
+| **Max request body size** (WAF SKU only) | Raise the request body / file-upload limit to **≥ 50 MB** so document uploads are not blocked. Review WAF logs for false positives on multipart uploads. |
+
+#### Step 4 — Lock down the VM network (important)
+
+The VM must be reachable **only** through the Application Gateway:
+
+- In the VM's **Network Security Group**, allow inbound HTTP (port 80 / 8080) **only from
+  the Application Gateway subnet**, and deny it from the public Internet.
+- Keep SSH (22) restricted to your admin IPs.
+- Do **not** open 443 on the VM — TLS terminates at the gateway.
+
+Because the backend trusts `X-Forwarded-*` from any proxy (`at: '*'`), this NSG
+restriction is what guarantees a client cannot spoof those headers by reaching the VM
+directly.
+
+#### Step 5 — Validate
+
+```bash
+# From the internet — should return HTTP 200 and JSON
+curl -I https://rrp.cityu.edu/api/system/public
+
+# On the VM — confirm the app sees HTTPS (scheme) and the real client IP
+docker exec -w /var/www/html rrp_app php artisan tinker --execute \
+  'echo url("/"), PHP_EOL;'   # should print https://rrp.cityu.edu
+```
+
+Confirm login works from `https://rrp.cityu.edu`, that redirects/links stay on HTTPS
+(no mixed-content warnings), and — if you use SSO — that the OAuth redirect URI
+registered with the identity provider is `https://rrp.cityu.edu/...`.
 
 ---
 
