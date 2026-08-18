@@ -132,7 +132,7 @@ Use `deploy/quick-start-docker.sh` -- it handles everything: generates `.env`, b
 ### Step 1 -- Clone the repository
 
 ```bash
-git clone https://github.com/cityuseattle/CityU-Research-Tracker.git
+git clone https://github.com/vejendlakirankumar/CityU-Research-Tracker.git
 cd CityU-Research-Tracker
 ```
 
@@ -245,7 +245,7 @@ Run the installer directly on the server. No Docker required -- installs PHP, Po
 
 ```bash
 # Clone the repo onto the server
-git clone https://github.com/cityuseattle/CityU-Research-Tracker.git /opt/rrp
+git clone https://github.com/vejendlakirankumar/CityU-Research-Tracker.git /opt/rrp
 cd /opt/rrp
 
 # Run the installer (requires root)
@@ -327,7 +327,7 @@ Deploy to any cloud provider (Azure, AWS, GCP, DigitalOcean, Hetzner, etc.) from
 
 ```bash
 # Clone the repo locally first
-git clone https://github.com/cityuseattle/CityU-Research-Tracker.git
+git clone https://github.com/vejendlakirankumar/CityU-Research-Tracker.git
 cd CityU-Research-Tracker
 
 # IMPORTANT: this script is Bash. On Windows, run it from WSL or Git Bash.
@@ -420,7 +420,7 @@ bash deploy/install-remote.sh --domain portal.myorg.com --email your-email@examp
 Run the portal on `localhost` with no domain or SSL required.
 
 ```bash
-git clone https://github.com/cityuseattle/CityU-Research-Tracker.git
+git clone https://github.com/vejendlakirankumar/CityU-Research-Tracker.git
 cd CityU-Research-Tracker
 
 # Start on http://localhost:8080
@@ -463,7 +463,7 @@ If you only need to deploy to a remote Linux VM (and not run containers locally 
 ssh azureadmin@your-vm-hostname
 
 # On the VM shell
-git clone https://github.com/cityuseattle/CityU-Research-Tracker.git /opt/rrp-v2
+git clone https://github.com/vejendlakirankumar/CityU-Research-Tracker.git /opt/rrp-v2
 cd /opt/rrp-v2
 sudo bash deploy/quick-start-docker.sh --domain portal.myorg.com --no-seed
 
