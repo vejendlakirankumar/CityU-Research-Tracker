@@ -51,6 +51,7 @@ After deployment the portal is available at the URL printed at the end of the sc
 7. [Environment Variables](#7-environment-variables)
 8. [SSL / HTTPS](#8-ssl--https)
    - [8.1 Behind Azure Application Gateway (external TLS termination)](#81-behind-azure-application-gateway-external-tls-termination)
+   - [Bare-metal VM bring-up checklist & troubleshooting](#step-6--bring-up-checklist--troubleshooting-bare-metal-vm)
 9. [First-Time Configuration](#9-first-time-configuration)
 10. [CI/CD with GitHub Actions](#10-cicd-with-github-actions)
 11. [Updating the Application](#11-updating-the-application)
@@ -766,6 +767,136 @@ docker exec -w /var/www/html rrp_app php artisan tinker --execute \
 Confirm login works from `https://rrp.cityu.edu`, that redirects/links stay on HTTPS
 (no mixed-content warnings), and — if you use SSO — that the OAuth redirect URI
 registered with the identity provider is `https://rrp.cityu.edu/...`.
+
+#### Step 6 — Bring-up checklist & troubleshooting (bare-metal VM)
+
+On a bare-metal VM the app is served by the **host nginx** proxying to **PHP-FPM**, with
+the SPA served from `/var/www/rrp/frontend-dist`. If a fresh VM shows the wrong response
+through the gateway, work through this table — every row is a real issue seen during a
+first deployment. All commands run on the VM as root (or with `sudo`).
+
+| Symptom (via gateway or `curl http://localhost/...`) | Cause | Fix |
+|---|---|---|
+| `GET /` returns the **nginx welcome page** (615 bytes) and `GET /api/...` returns an **nginx 404** | The app vhost is not enabled — only the stock `default` site is active | Enable the app vhost (Fix A below) |
+| `GET /api/system/public` returns a **Laravel 500** (styled "Server Error") | Database not migrated — `migrate:status` says *"Migration table not found"* | Run migrations + seed (Fix B) |
+| Browser shows the **nginx welcome page** instead of the app UI | Frontend was never built — `/var/www/rrp/frontend-dist` is missing/empty | Build the SPA (Fix C) |
+| API works but `Access-Control-Allow-Origin` header is **`http://…`** | `APP_URL` is still `http://` (the `--skip-ssl` default) | Flip `APP_URL` to HTTPS (Step 2 above) |
+
+**Verify what's wrong first:**
+
+```bash
+ls -l /etc/nginx/sites-enabled/                                   # expect 'rrp', NOT 'default'
+curl -i http://localhost/api/system/public                       # 404=vhost, 500=DB, 200=OK
+cd /var/www/rrp/backend && sudo -u rrp php artisan migrate:status # "table not found" = not migrated
+ls -la /var/www/rrp/frontend-dist/                               # must contain index.html + assets/
+```
+
+**Fix A — Create and enable the nginx vhost + PHP-FPM pool**
+
+```bash
+# Dedicated PHP-FPM pool running as the app user 'rrp' (correct file permissions)
+if [ ! -S /run/php/php8.4-fpm-rrp.sock ]; then
+  tee /etc/php/8.4/fpm/pool.d/rrp.conf >/dev/null <<'EOF'
+[rrp]
+user = rrp
+group = rrp
+listen = /run/php/php8.4-fpm-rrp.sock
+listen.owner = www-data
+listen.group = www-data
+pm = dynamic
+pm.max_children = 10
+pm.start_servers = 2
+pm.min_spare_servers = 1
+pm.max_spare_servers = 5
+pm.max_requests = 500
+EOF
+  systemctl restart php8.4-fpm
+fi
+SOCK=/run/php/php8.4-fpm-rrp.sock
+
+tee /etc/nginx/sites-available/rrp >/dev/null <<EOF
+server {
+    listen 80 default_server;
+    server_name rrp.cityu.edu;
+
+    root /var/www/rrp/backend/public;
+    index index.php;
+    client_max_body_size 50M;
+
+    location / {
+        root /var/www/rrp/frontend-dist;
+        index index.html;
+        try_files \$uri \$uri/ /index.html;
+        add_header Cache-Control "no-store, no-cache, must-revalidate" always;
+        expires 0;
+    }
+    location /assets/ {
+        alias /var/www/rrp/frontend-dist/assets/;
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+    }
+    location = /favicon.ico { alias /var/www/rrp/frontend-dist/favicon.ico; }
+
+    location /api/     { try_files \$uri \$uri/ /index.php?\$query_string; }
+    location /sanctum/ { try_files \$uri \$uri/ /index.php?\$query_string; }
+    location /sso/     { try_files \$uri \$uri/ /index.php?\$query_string; }
+
+    location /storage/ {
+        alias /var/www/rrp/backend/storage/app/public/;
+        expires 30d;
+    }
+
+    location ~ \.php\$ {
+        fastcgi_pass unix:$SOCK;
+        fastcgi_index index.php;
+        include fastcgi_params;
+        fastcgi_param SCRIPT_FILENAME \$realpath_root\$fastcgi_script_name;
+    }
+    location ~ /\.ht { deny all; }
+}
+EOF
+
+ln -sf /etc/nginx/sites-available/rrp /etc/nginx/sites-enabled/rrp
+rm -f /etc/nginx/sites-enabled/default
+nginx -t && systemctl reload nginx
+```
+
+> `listen 80 default_server` makes the vhost answer regardless of the `Host` header the
+> gateway sends (its health probe may not send `rrp.cityu.edu`).
+
+**Fix B — Run database migrations (and seed)**
+
+```bash
+cd /var/www/rrp/backend
+# Ensure Laravel can write logs/cache
+chown -R rrp:rrp storage bootstrap/cache
+sudo -u rrp php artisan migrate --force
+sudo -u rrp php artisan db:seed --force     # seed accounts + org settings; omit for a clean prod DB
+sudo -u rrp php artisan config:cache
+curl -i http://localhost/api/system/public  # expect HTTP 200 + JSON
+```
+
+**Fix C — Build the frontend on the VM**
+
+The React SPA (`axios` base URL is a same-origin `/api`, so **no build-time env var is
+needed**). Build as **root**, then hand the static output to `rrp`:
+
+```bash
+cd /opt/rrp/source/frontend        # your repo/source path — adjust if different
+npm install                        # use 'npm install', NOT 'npm ci', if package-lock is out of sync
+npm run build
+mkdir -p /var/www/rrp/frontend-dist
+rsync -a --delete dist/ /var/www/rrp/frontend-dist/
+chown -R rrp:rrp /var/www/rrp/frontend-dist
+```
+
+> `npm ci` requires `package-lock.json` to exactly match `package.json`; if it errors with
+> *"Missing: … from lock file"*, use `npm install` (it reconciles the lock and installs
+> devDependencies such as `tsc`, which `npm run build` needs).
+
+After Fixes A–C and the Step 2 `APP_URL` flip, `curl -i http://localhost/api/system/public`
+should return `200` with `Access-Control-Allow-Origin: https://rrp.cityu.edu`, and
+`https://rrp.cityu.edu` should serve the login UI.
 
 ---
 

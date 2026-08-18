@@ -17,6 +17,7 @@ import {
 import { renderAsync } from 'docx-preview'
 import * as pdfjsLib from 'pdfjs-dist'
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
+import type { AxiosResponse } from 'axios'
 import api from '../lib/axios'
 import { useAuthStore } from '../stores/authStore'
 import { useToastHelpers } from '../lib/toast'
@@ -3831,7 +3832,7 @@ function ReviewerDecisionPanel({
 
   const myAssignment = reviewersData?.data?.find(r => r.user_id === user?.id) ?? null
 
-  const decisionMutation = useMutation({
+  const decisionMutation = useMutation<AxiosResponse>({
     mutationFn: () => {
       if (annotatedFile) {
         const fd = new FormData()

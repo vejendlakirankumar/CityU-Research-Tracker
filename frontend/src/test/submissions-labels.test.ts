@@ -13,6 +13,7 @@ import {
 const ALL_STATUSES: SubmissionStatus[] = [
   'DRAFT',
   'SUBMITTED',
+  'RESUBMITTED',
   'AWAITING_REVIEWERS',
   'IN_REVIEW',
   'REVISION_REQUIRED',
