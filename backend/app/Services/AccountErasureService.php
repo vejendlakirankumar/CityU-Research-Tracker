@@ -192,15 +192,21 @@ class AccountErasureService
                     ->where('tokenable_type', User::class)
                     ->where('tokenable_id', $userId)
                     ->delete();
+
+                // Remove the user while the immutable rules are still DISABLED.
+                // audit_logs.actor_id is ON DELETE SET NULL, so deleting the user
+                // makes PostgreSQL run an internal UPDATE on audit_logs to null the
+                // reference. If the no_update_audit rule were active it would rewrite
+                // that referential-integrity query to "DO INSTEAD NOTHING" and the
+                // delete would fail with "referential integrity query on users ...
+                // gave unexpected result". Remaining nullable FKs (announcements,
+                // custom_roles, email_templates, config_overrides, programs, etc.)
+                // are set to NULL automatically by their ON DELETE SET NULL rules.
+                $deleted['users'] = DB::table('users')->where('id', $userId)->delete();
             } finally {
                 // Always restore the immutability guarantees.
                 $this->toggleImmutableRules(true);
             }
-
-            // Finally remove the user. Remaining nullable FKs (announcements,
-            // custom_roles, email_templates, config_overrides, programs, etc.)
-            // are set to NULL automatically by their ON DELETE SET NULL rules.
-            $deleted['users'] = DB::table('users')->where('id', $userId)->delete();
         });
 
         // Purge uploaded documents only after the DB transaction has committed.
