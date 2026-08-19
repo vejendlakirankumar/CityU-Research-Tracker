@@ -17,7 +17,7 @@ use Illuminate\Support\Facades\Mail;
  * then sends escalation notifications to admins/coordinators and an email to
  * the reviewer (CC coordinator).
  *
- * Schedule: run daily via cron (see app/Console/Kernel.php → $schedule->daily())
+ * Schedule: run daily via the scheduler (see bootstrap/app.php → withSchedule())
  */
 class CheckOverdueReviewers extends Command
 {
