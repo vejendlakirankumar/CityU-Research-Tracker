@@ -13,12 +13,13 @@ class EmailSetting extends Model
     protected $keyType = 'int';
 
     /** Columns stored encrypted at rest (AES via Laravel Crypt). */
-    private const ENCRYPTED = ['password_enc', 'ses_key_enc', 'ses_secret_enc'];
+    private const ENCRYPTED = ['password_enc', 'ses_key_enc', 'ses_secret_enc', 'graph_client_secret_enc'];
 
     protected $fillable = [
         'driver', 'host', 'port', 'encryption', 'username',
         'password_enc', 'from_address', 'from_name', 'reply_to',
         'is_verified', 'ses_key_enc', 'ses_secret_enc', 'ses_region',
+        'graph_tenant_id', 'graph_client_id', 'graph_client_secret_enc',
     ];
 
     protected function casts(): array
@@ -62,6 +63,13 @@ class EmailSetting extends Model
         }
     }
 
+    public function setGraphClientSecretEncAttribute(?string $value): void
+    {
+        if ($value !== null && $value !== '' && $value !== '••••••••') {
+            $this->attributes['graph_client_secret_enc'] = Crypt::encryptString($value);
+        }
+    }
+
     /**
      * Build a PHP mail config array suitable for dynamic mailer configuration.
      */
@@ -95,11 +103,30 @@ class EmailSetting extends Model
                 'region'    => $this->ses_region ?? 'us-east-1',
             ],
             'graph' => [
-                // Credentials are resolved by the transport from config/services.graph.
-                'transport' => 'graph',
+                'transport'     => 'graph',
+                'tenant_id'     => $this->graph_tenant_id,
+                'client_id'     => $this->graph_client_id,
+                'client_secret' => $this->decryptGraphSecret(),
+                'from_address'  => $this->from_address,
             ],
             default => ['transport' => 'log'],
         };
+    }
+
+    /**
+     * Decrypt the stored Graph client secret (null if unset/undecryptable).
+     */
+    private function decryptGraphSecret(): ?string
+    {
+        $enc = $this->attributes['graph_client_secret_enc'] ?? null;
+        if (empty($enc)) {
+            return null;
+        }
+        try {
+            return Crypt::decryptString($enc);
+        } catch (\Exception) {
+            return null;
+        }
     }
 
     /**
@@ -122,6 +149,9 @@ class EmailSetting extends Model
             'ses_region'   => $this->ses_region,
             'ses_key_set'  => !empty($this->attributes['ses_key_enc']),
             'ses_secret_set' => !empty($this->attributes['ses_secret_enc']),
+            'graph_tenant_id' => $this->graph_tenant_id,
+            'graph_client_id' => $this->graph_client_id,
+            'graph_secret_set' => !empty($this->attributes['graph_client_secret_enc']),
             'updated_at'   => $this->updated_at,
         ];
     }

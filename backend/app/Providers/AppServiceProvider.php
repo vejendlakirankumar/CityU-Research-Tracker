@@ -36,13 +36,14 @@ class AppServiceProvider extends ServiceProvider
         });
 
         // Microsoft Graph outbound mail driver ("graph"). Credentials come from
-        // config/services.php (not raw env(), so they survive config:cache).
+        // the mailer config (admin-editable, stored encrypted in email_settings)
+        // and fall back to config/services.php (env) when not set in the DB.
         Mail::extend('graph', function (array $config) {
             return new GraphTransport(
-                (string) config('services.graph.tenant_id'),
-                (string) config('services.graph.client_id'),
-                (string) config('services.graph.client_secret'),
-                config('services.graph.from_address'),
+                (string) ($config['tenant_id'] ?? config('services.graph.tenant_id')),
+                (string) ($config['client_id'] ?? config('services.graph.client_id')),
+                (string) ($config['client_secret'] ?? config('services.graph.client_secret')),
+                $config['from_address'] ?? config('services.graph.from_address'),
             );
         });
     }

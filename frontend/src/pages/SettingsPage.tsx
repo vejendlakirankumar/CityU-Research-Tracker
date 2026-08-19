@@ -43,6 +43,9 @@ interface EmailSettings {
   ses_region: string | null
   ses_key_set: boolean
   ses_secret_set: boolean
+  graph_tenant_id: string | null
+  graph_client_id: string | null
+  graph_secret_set: boolean
 }
 
 interface PasswordPolicy {
@@ -287,6 +290,7 @@ function OrgTab() {
 function EmailTab() {
   const [data, setData] = useState<EmailSettings | null>(null)
   const [password, setPassword] = useState('')
+  const [graphSecret, setGraphSecret] = useState('')
   const [showPwd, setShowPwd] = useState(false)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
@@ -306,10 +310,12 @@ function EmailTab() {
         encryption: data.encryption, username: data.username,
         from_address: data.from_address, from_name: data.from_name,
         reply_to: data.reply_to, ses_region: data.ses_region,
+        graph_tenant_id: data.graph_tenant_id, graph_client_id: data.graph_client_id,
       }
       if (password) payload['password_enc'] = password
+      if (graphSecret) payload['graph_client_secret_enc'] = graphSecret
       const r = await api.patch('/system/email', payload)
-      setData(r.data); setPassword(''); setSaved(true)
+      setData(r.data); setPassword(''); setGraphSecret(''); setSaved(true)
       setTimeout(() => setSaved(false), 3000)
     } catch { setError('Save failed.') }
     finally { setSaving(false) }
@@ -398,16 +404,36 @@ function EmailTab() {
       )}
 
       {data.driver === 'graph' && (
-        <div className="mt-5 p-4 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-800">
-          <p className="font-medium mb-1">Microsoft 365 (Graph API)</p>
-          <p className="text-blue-700">
-            Credentials are configured on the server via environment variables
-            (<code>GRAPH_TENANT_ID</code>, <code>GRAPH_CLIENT_ID</code>,
-            <code> GRAPH_CLIENT_SECRET</code>, <code>GRAPH_FROM_ADDRESS</code>).
-            The <strong>From Address</strong> above must be a licensed mailbox the
-            app registration is permitted to send as (application permission
-            <code> Mail.Send</code>, admin-consented).
-          </p>
+        <div className="mt-5">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+            <Field label="Directory (Tenant) ID">
+              <input className={INPUT} value={data.graph_tenant_id ?? ''} onChange={e => set('graph_tenant_id', e.target.value)} placeholder="00000000-0000-0000-0000-000000000000" />
+            </Field>
+            <Field label="Application (Client) ID">
+              <input className={INPUT} value={data.graph_client_id ?? ''} onChange={e => set('graph_client_id', e.target.value)} placeholder="00000000-0000-0000-0000-000000000000" />
+            </Field>
+            <Field label="Client Secret" hint={data.graph_secret_set ? 'Leave blank to keep existing secret.' : 'Paste the secret Value (not the Secret ID).'}>
+              <div className="relative">
+                <input
+                  className={INPUT + ' pr-10'}
+                  type={showPwd ? 'text' : 'password'}
+                  value={graphSecret}
+                  onChange={e => setGraphSecret(e.target.value)}
+                  placeholder={data.graph_secret_set ? '••••••••' : 'Enter client secret'}
+                />
+                <button type="button" onClick={() => setShowPwd(p => !p)} className="absolute right-2 top-2 text-gray-400 hover:text-gray-600">
+                  {showPwd ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
+            </Field>
+          </div>
+          <div className="mt-4 p-4 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-800">
+            <p className="text-blue-700">
+              The app registration needs the <strong>application</strong> permission
+              <code> Mail.Send</code> (admin-consented). The <strong>From Address</strong> above
+              must be a licensed mailbox the app is permitted to send as.
+            </p>
+          </div>
         </div>
       )}
 

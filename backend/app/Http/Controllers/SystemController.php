@@ -220,6 +220,9 @@ class SystemController extends Controller
             'ses_region'   => ['sometimes', 'string', 'nullable', 'max:50'],
             'ses_key_enc'  => ['sometimes', 'string', 'nullable'],
             'ses_secret_enc' => ['sometimes', 'string', 'nullable'],
+            'graph_tenant_id' => ['sometimes', 'string', 'nullable', 'max:255'],
+            'graph_client_id' => ['sometimes', 'string', 'nullable', 'max:255'],
+            'graph_client_secret_enc' => ['sometimes', 'string', 'nullable'],
         ]);
 
         $setting = EmailSetting::current();
