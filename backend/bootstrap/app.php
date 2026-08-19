@@ -1,5 +1,6 @@
 <?php
 
+use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
@@ -35,6 +36,12 @@ return Application::configure(basePath: dirname(__DIR__))
 
         // Append security headers to all API responses
         $middleware->appendToGroup('api', \App\Http\Middleware\SecureHeaders::class);
+    })
+    ->withSchedule(function (Schedule $schedule) {
+        // Check for overdue reviewers once per day at 08:00 server time.
+        // NOTE: in Laravel 11 the schedule must be registered here (the legacy
+        // App\Console\Kernel::schedule() method is no longer invoked).
+        $schedule->command('reviews:check-overdue')->dailyAt('08:00');
     })
     ->withExceptions(function (Exceptions $exceptions) {
         $exceptions->render(function (\Illuminate\Auth\AuthenticationException $e, $request) {
