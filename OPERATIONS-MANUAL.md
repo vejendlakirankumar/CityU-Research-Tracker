@@ -738,16 +738,29 @@ print 'Sent';
 
 **Admin → Settings → SSO Providers → + Add Provider**
 
-| Field | Azure AD example |
+| Field | Azure AD / Entra example |
 |---|---|
 | Protocol | `OIDC` |
-| Display name | `Sign in with Microsoft` |
-| Client ID | Application (client) ID from Azure portal app registration |
-| Client Secret | Secret value from Azure portal → Certificates & secrets |
-| Discovery URL | `https://login.microsoftonline.com/{tenant-id}/v2.0/.well-known/openid-configuration` |
-| Scopes | `openid profile email` |
+| Display name | `Cityu_IdP` (internal label for admins) |
+| Button label | `Sign in with CityU Account` (text shown on the login page button) |
+| Tenant ID | Directory (tenant) ID from the Entra app registration |
+| Client ID | Application (client) ID from the Entra app registration |
+| Client Secret | Secret value from Entra → Certificates & secrets (leave blank on edit to keep the existing one) |
+| Scopes | `openid email profile` |
 | Auto-provision users | ✅ (creates accounts on first SSO login) |
 | Default role | `student` |
+| Enabled / Default provider | ✅ so the button appears on the login page |
+
+> The login page renders the **Button label** — not the Display name — and only shows the
+> button when the provider is **Enabled** and the `sso_enabled` feature flag is on.
+
+### Prerequisites for the token exchange to succeed
+
+1. **`APP_URL` must equal the public domain** (e.g. `APP_URL=https://portal.cityu.edu`). The
+   callback / `redirect_uri` is built as `APP_URL + /api/sso/{provider-uuid}/callback`, so a wrong
+   `APP_URL` makes the IdP reject the request. Re-run `php artisan config:cache` after changing it.
+2. **The client secret must actually be stored** — if it was never saved, the token exchange fails
+   with a 401 from the IdP.
 
 ### Callback URL to register in your IdP
 
@@ -755,7 +768,11 @@ print 'Sent';
 https://portal.cityu.edu/api/sso/{provider-uuid}/callback
 ```
 
-The provider UUID is displayed on the saved provider row.
+The provider UUID is displayed on the saved provider row. Fetch it from the CLI with:
+
+```bash
+php artisan tinker --execute="echo \App\Models\SsoProvider::where('is_enabled',true)->value('id');"
+```
 
 ### Disable a provider
 
