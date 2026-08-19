@@ -114,15 +114,20 @@ class SsoAuthController extends Controller
                 return redirect('/app?sso_error=account_not_found');
             }
 
-            $user = User::create([
-                'email'      => $email,
-                'first_name' => $userInfo['given_name'] ?? $userInfo['name'] ?? 'SSO',
-                'last_name'  => $userInfo['family_name'] ?? 'User',
-                'name'       => $userInfo['name'] ?? $email,
-                'roles'      => [$provider->default_role],
-                'status'     => 'active',
-                'password'   => bcrypt(Str::random(32)), // random; user will use SSO
-            ]);
+            try {
+                $user = User::create([
+                    'email'         => $email,
+                    'first_name'    => $userInfo['given_name'] ?? $userInfo['name'] ?? 'SSO',
+                    'last_name'     => $userInfo['family_name'] ?? 'User',
+                    'name'          => $userInfo['name'] ?? $email,
+                    'roles'         => [$provider->default_role ?: 'student'],
+                    'is_active'     => true,
+                    'password_hash' => bcrypt(Str::random(32)), // random; user will use SSO
+                ]);
+            } catch (\Throwable $e) {
+                Log::error('SSO auto-provision failed', ['email' => $email, 'error' => $e->getMessage()]);
+                return redirect('/app?sso_error=provisioning_failed');
+            }
         }
 
         if (!$user->is_active) {
