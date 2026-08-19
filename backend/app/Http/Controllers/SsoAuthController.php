@@ -21,7 +21,7 @@ use Illuminate\Support\Str;
  *   2. IdP redirects to GET /api/sso/{provider}/callback?code=...&state=...
  *      → Validates state, exchanges code for token, fetches userinfo,
  *        finds or provisions the User, issues a Sanctum token, then redirects
- *        to /app?sso_code={one_time_code} — frontend exchanges via POST /api/auth/sso-exchange
+ *        to /?sso_code={one_time_code} — frontend exchanges via POST /api/auth/sso-exchange
  */
 class SsoAuthController extends Controller
 {
@@ -66,25 +66,25 @@ class SsoAuthController extends Controller
             // to prevent phishing-quality content from being displayed to users.
             $rawDesc = $request->query('error_description', $error);
             $safeDesc = preg_replace('/[^a-zA-Z0-9 _.@\-]/', '', substr((string) $rawDesc, 0, 200));
-            return redirect('/app?sso_error=' . urlencode($safeDesc ?: 'sso_error'));
+            return redirect('/?sso_error=' . urlencode($safeDesc ?: 'sso_error'));
         }
 
         // Validate state
         $cacheKey  = "sso_state:{$provider->id}:{$state}";
         $stateData = cache()->pull($cacheKey);
         if (!$stateData) {
-            return redirect('/app?sso_error=invalid_state');
+            return redirect('/?sso_error=invalid_state');
         }
 
         if (!$code) {
-            return redirect('/app?sso_error=no_code');
+            return redirect('/?sso_error=no_code');
         }
 
         try {
             $userInfo = $this->exchangeCodeForUserInfo($provider, $code);
         } catch (\Exception $e) {
             Log::error('SSO token exchange failed', ['error' => $e->getMessage()]);
-            return redirect('/app?sso_error=token_exchange_failed');
+            return redirect('/?sso_error=token_exchange_failed');
         }
 
         $email = $userInfo['email'] ?? $userInfo['upn'] ?? $userInfo['preferred_username'] ?? null;
@@ -98,12 +98,12 @@ class SsoAuthController extends Controller
                     ['provider_id' => $provider->id, 'provider_sub' => $sub],
                     ['user_id' => $userId, 'provider_email' => $email]
                 );
-                return redirect('/app?sso_linked=1');
+                return redirect('/?sso_linked=1');
             }
         }
 
         if (!$email) {
-            return redirect('/app?sso_error=no_email_in_token');
+            return redirect('/?sso_error=no_email_in_token');
         }
 
         // Find or provision user
@@ -111,7 +111,7 @@ class SsoAuthController extends Controller
 
         if (!$user) {
             if (!$provider->auto_provision_users) {
-                return redirect('/app?sso_error=account_not_found');
+                return redirect('/?sso_error=account_not_found');
             }
 
             try {
@@ -126,12 +126,12 @@ class SsoAuthController extends Controller
                 ]);
             } catch (\Throwable $e) {
                 Log::error('SSO auto-provision failed', ['email' => $email, 'error' => $e->getMessage()]);
-                return redirect('/app?sso_error=provisioning_failed');
+                return redirect('/?sso_error=provisioning_failed');
             }
         }
 
         if (!$user->is_active) {
-            return redirect('/app?sso_error=account_inactive');
+            return redirect('/?sso_error=account_inactive');
         }
 
         // Issue Sanctum token
@@ -148,7 +148,7 @@ class SsoAuthController extends Controller
         $code = \Illuminate\Support\Str::random(64);
         cache()->put("sso_exchange:{$code}", $token, 60); // valid for 60 seconds
 
-        return redirect('/app?sso_code=' . urlencode($code));
+        return redirect('/?sso_code=' . urlencode($code));
     }
 
     // ── SSO identity management ───────────────────────────────────────────────
