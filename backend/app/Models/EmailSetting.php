@@ -94,6 +94,10 @@ class EmailSetting extends Model
                     : null,
                 'region'    => $this->ses_region ?? 'us-east-1',
             ],
+            'graph' => [
+                // Credentials are resolved by the transport from config/services.graph.
+                'transport' => 'graph',
+            ],
             default => ['transport' => 'log'],
         };
     }

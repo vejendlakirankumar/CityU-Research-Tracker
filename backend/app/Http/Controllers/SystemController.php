@@ -208,7 +208,7 @@ class SystemController extends Controller
     public function updateEmail(Request $request): JsonResponse
     {
         $data = $request->validate([
-            'driver'       => ['sometimes', 'string', 'in:log,smtp,ses,sendmail'],
+            'driver'       => ['sometimes', 'string', 'in:log,smtp,ses,sendmail,graph'],
             'host'         => ['sometimes', 'string', 'nullable', 'max:255'],
             'port'         => ['sometimes', 'integer', 'min:1', 'max:65535'],
             'encryption'   => ['sometimes', 'string', 'nullable', 'in:tls,ssl,'],

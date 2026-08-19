@@ -30,7 +30,7 @@ interface OrgSettings {
 
 interface EmailSettings {
   id: number
-  driver: 'log' | 'smtp' | 'ses' | 'sendmail'
+  driver: 'log' | 'smtp' | 'ses' | 'sendmail' | 'graph'
   host: string | null
   port: number
   encryption: string | null
@@ -347,6 +347,7 @@ function EmailTab() {
             <option value="log">Log (development only)</option>
             <option value="smtp">SMTP</option>
             <option value="ses">Amazon SES</option>
+            <option value="graph">Microsoft 365 (Graph API)</option>
             <option value="sendmail">Sendmail</option>
           </select>
         </Field>
@@ -393,6 +394,20 @@ function EmailTab() {
               </button>
             </div>
           </Field>
+        </div>
+      )}
+
+      {data.driver === 'graph' && (
+        <div className="mt-5 p-4 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-800">
+          <p className="font-medium mb-1">Microsoft 365 (Graph API)</p>
+          <p className="text-blue-700">
+            Credentials are configured on the server via environment variables
+            (<code>GRAPH_TENANT_ID</code>, <code>GRAPH_CLIENT_ID</code>,
+            <code> GRAPH_CLIENT_SECRET</code>, <code>GRAPH_FROM_ADDRESS</code>).
+            The <strong>From Address</strong> above must be a licensed mailbox the
+            app registration is permitted to send as (application permission
+            <code> Mail.Send</code>, admin-consented).
+          </p>
         </div>
       )}
 
