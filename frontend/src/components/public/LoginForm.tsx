@@ -76,6 +76,26 @@ export default function LoginForm() {
     loginMutation.mutate(data)
   }
 
+  // Begin the SSO login flow for a specific provider. The backend returns the
+  // IdP authorization URL as JSON ({ url }); we then navigate the browser to it.
+  const [ssoLoadingId, setSsoLoadingId] = useState<string | null>(null)
+  const startSso = async (providerId: string) => {
+    setServerError(null)
+    setSsoLoadingId(providerId)
+    try {
+      const { data } = await api.get<{ url: string }>(`/sso/${providerId}/redirect`)
+      if (data?.url) {
+        window.location.href = data.url
+      } else {
+        setServerError('SSO provider is not fully configured.')
+        setSsoLoadingId(null)
+      }
+    } catch {
+      setServerError('Unable to start single sign-on. Please try again or use your password.')
+      setSsoLoadingId(null)
+    }
+  }
+
   const [emailFocused, setEmailFocused] = useState(false)
   const [passFocused, setPassFocused]   = useState(false)
   const logoRef = useRef<HTMLImageElement | null>(null)
@@ -152,25 +172,31 @@ export default function LoginForm() {
         />
       </div>
 
-      {/* â”€â”€ SSO button (shown FIRST if enabled) â”€â”€ */}
-      {org?.sso_enabled && (
-        <div style={{
+      {/* â”€â”€ SSO buttons (shown FIRST if any provider is enabled) â”€â”€ */}
+      {(org?.sso_providers?.length ?? 0) > 0 && org?.sso_providers?.map((provider) => (
+        <div key={provider.id} style={{
           background: '#fff', border: '1px solid #ddd', borderRadius: 4,
-          padding: '10px 14px', marginBottom: '1.25rem',
+          padding: '10px 14px', marginBottom: '0.75rem',
           display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.6rem',
-          cursor: 'pointer', fontSize: '0.95rem', fontWeight: 500, color: '#333',
-          textDecoration: 'none',
+          cursor: ssoLoadingId ? 'wait' : 'pointer', fontSize: '0.95rem', fontWeight: 500, color: '#333',
+          textDecoration: 'none', opacity: ssoLoadingId && ssoLoadingId !== provider.id ? 0.6 : 1,
         }}
-          onClick={() => { window.location.href = '/api/auth/sso/redirect' }}
+          onClick={() => { if (!ssoLoadingId) startSso(provider.id) }}
         >
-          <MsLogo />
-          Sign in with Microsoft
+          {ssoLoadingId === provider.id ? (
+            <Loader2 size={18} className="animate-spin" />
+          ) : provider.button_icon_url ? (
+            <img src={provider.button_icon_url} alt="" width={20} height={20} style={{ display: 'block' }} />
+          ) : (
+            <MsLogo />
+          )}
+          {provider.button_label}
         </div>
-      )}
+      ))}
 
       {/* â”€â”€ Divider â”€â”€ */}
-      {org?.sso_enabled && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1.25rem' }}>
+      {(org?.sso_providers?.length ?? 0) > 0 && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1.25rem', marginTop: '0.5rem' }}>
           <div style={{ flex: 1, height: 1, background: '#ddd' }} />
           <span style={{ fontSize: '0.78rem', color: '#999', whiteSpace: 'nowrap' }}>
             or sign in with username &amp; password

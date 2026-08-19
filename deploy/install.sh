@@ -10,6 +10,7 @@
 #   --email   EMAIL    Admin email for Let's Encrypt + seed account
 #   --skip-ssl         Skip TLS certificate provisioning
 #   --dev              Install in development mode (sqlite, no ssl)
+#   --seed-demo        Also seed demo users/sample data (implied by --dev)
 #
 # Example:
 #   sudo bash install.sh --domain portal.cityu.edu --email admin@cityu.edu
@@ -28,6 +29,7 @@ DOMAIN=""
 ADMIN_EMAIL=""
 SKIP_SSL=false
 DEV_MODE=false
+SEED_DEMO=false
 APP_DIR="/var/www/rrp"
 APP_USER="rrp"
 DB_NAME="rrp_production"
@@ -43,6 +45,7 @@ while [[ $# -gt 0 ]]; do
     --email)    ADMIN_EMAIL="$2";  shift 2 ;;
     --skip-ssl) SKIP_SSL=true;     shift   ;;
     --dev)      DEV_MODE=true;     shift   ;;
+    --seed-demo) SEED_DEMO=true;   shift   ;;
     *) error "Unknown argument: $1" ;;
   esac
 done
@@ -255,9 +258,15 @@ rsync -a dist/ "$APP_DIR/frontend-dist/"
 cd - >/dev/null
 
 # ---------- 8. Database migrations and seed -----------------------------------
-info "Running database migrations and seed..."
+info "Running database migrations..."
 sudo -u "$APP_USER" "$PHP_BIN" "$APP_DIR/backend/artisan" migrate --force
-sudo -u "$APP_USER" "$PHP_BIN" "$APP_DIR/backend/artisan" db:seed --force
+if [[ "$SEED_DEMO" == true || "$DEV_MODE" == true ]]; then
+  info "Seeding full dataset (application config + demo users)..."
+  sudo -u "$APP_USER" "$PHP_BIN" "$APP_DIR/backend/artisan" db:seed --force
+else
+  info "Seeding application configuration (production; no demo users)..."
+  sudo -u "$APP_USER" "$PHP_BIN" "$APP_DIR/backend/artisan" db:seed --class=AppConfigSeeder --force
+fi
 sudo -u "$APP_USER" "$PHP_BIN" "$APP_DIR/backend/artisan" storage:link
 sudo -u "$APP_USER" "$PHP_BIN" "$APP_DIR/backend/artisan" config:cache
 sudo -u "$APP_USER" "$PHP_BIN" "$APP_DIR/backend/artisan" route:cache

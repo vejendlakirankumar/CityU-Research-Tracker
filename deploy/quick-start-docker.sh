@@ -209,8 +209,12 @@ step "Running database migrations"
 docker exec -w /var/www/html rrp_app php artisan migrate --force
 docker exec -w /var/www/html rrp_app php artisan storage:link 2>/dev/null || true
 
+# Always seed application configuration (idempotent, production-safe; no demo users)
+info "Seeding application configuration..."
+docker exec -w /var/www/html rrp_app php artisan db:seed --class=AppConfigSeeder --force
+
 if [[ "$SEED" == true ]]; then
-  info "Seeding default accounts..."
+  info "Seeding demo accounts and sample data..."
   docker exec -w /var/www/html rrp_app php artisan db:seed --force
   echo ""
   warn "Demo accounts created — CHANGE THESE PASSWORDS before production use."

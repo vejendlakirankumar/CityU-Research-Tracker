@@ -132,8 +132,11 @@ docker compose up -d --build
 # 3. Run migrations
 docker exec rrp_app php artisan migrate --force
 
-# 4. (Optional) Seed initial data
-docker exec rrp_app php artisan db:seed --force
+# 4. Seed application configuration (production-safe, idempotent, no demo users)
+docker exec rrp_app php artisan db:seed --class=AppConfigSeeder --force
+
+# 4b. (UAT/demo only) Seed everything incl. demo users
+# docker exec rrp_app php artisan db:seed --force
 ```
 
 ---

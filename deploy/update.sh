@@ -121,6 +121,10 @@ done
 
 if [[ "$NO_MIGRATE" == false && "$FRONTEND_ONLY" == false ]]; then
   \$DOCKER exec -w /var/www/html rrp_app php artisan migrate --force
+  # Idempotently seed application configuration so newly added config tables
+  # (feature flags, notification templates, stage templates, etc.) get
+  # populated on updates. Never touches demo users or operator-edited rows.
+  \$DOCKER exec -w /var/www/html rrp_app php artisan db:seed --class=AppConfigSeeder --force
 fi
 
 if [[ "$FRONTEND_ONLY" == false ]]; then

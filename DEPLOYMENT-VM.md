@@ -442,11 +442,17 @@ sudo bash deploy/install.sh --domain uat.myorg.com --email your-email@example.co
 ```bash
 cd /var/www/rrp/backend
 
-# Seed EVERYTHING (users, programs, submission types, workflows, org settings)
+# PRODUCTION: seed application configuration ONLY (feature flags, notification
+# templates, stage templates, workflows, submission types, programs, org/email/
+# password settings). Idempotent and safe to re-run — never creates demo users
+# and never overwrites values you've edited in the admin UI.
+sudo -u rrp env HOME=/tmp php artisan db:seed --class=AppConfigSeeder --force
+
+# UAT/DEMO ONLY: seed EVERYTHING incl. demo users (admin@cityu.edu, etc.)
 sudo -u rrp env HOME=/tmp php artisan db:seed --force
 
 # …or seed individual datasets
-sudo -u rrp env HOME=/tmp php artisan db:seed --class=UsersSeeder --force      # all users
+sudo -u rrp env HOME=/tmp php artisan db:seed --class=UsersSeeder --force      # demo users (UAT only)
 sudo -u rrp env HOME=/tmp php artisan db:seed --class=ProgramsSeeder --force   # all programs
 sudo -u rrp env HOME=/tmp php artisan db:seed --class=SubmissionTypeSeeder --force
 ```

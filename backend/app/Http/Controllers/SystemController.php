@@ -24,6 +24,24 @@ class SystemController extends Controller
     {
         $org = OrganizationSetting::current();
 
+        // Enabled SSO providers for the login page. Each entry carries the id
+        // (needed to hit GET /api/sso/{id}/redirect) and the operator-configured
+        // button label/icon so the login button matches what was configured.
+        $ssoProviders = FeatureFlag::isEnabled('sso_enabled')
+            ? SsoProvider::query()
+                ->where('is_enabled', true)
+                ->orderByDesc('is_default')
+                ->orderBy('name')
+                ->get(['id', 'name', 'button_label', 'button_icon_url'])
+                ->map(fn (SsoProvider $p) => [
+                    'id'              => $p->id,
+                    'name'            => $p->name,
+                    'button_label'    => $p->button_label ?: 'Sign in with ' . $p->name,
+                    'button_icon_url' => $p->button_icon_url,
+                ])
+                ->values()
+            : collect();
+
         return response()->json([
             'org_name'       => $org->org_name,
             'portal_name'    => $org->portal_name ?? $org->org_name,
@@ -32,7 +50,10 @@ class SystemController extends Controller
                                     ? Storage::url($org->logo_path)
                                     : null,
             'primary_color'  => $org->primary_color,
-            'sso_enabled'    => FeatureFlag::isEnabled('sso_enabled'),
+            // Kept for backward compatibility — true only when the flag is on
+            // AND at least one provider row is actually enabled.
+            'sso_enabled'    => $ssoProviders->isNotEmpty(),
+            'sso_providers'  => $ssoProviders,
         ]);
     }
 

@@ -473,11 +473,17 @@ bash deploy/quick-start-docker.sh --domain uat.myorg.com --https
 ```bash
 cd /opt/rrp-v2
 
-# Seed EVERYTHING (users, programs, submission types, workflows, org settings)
+# PRODUCTION: seed application configuration ONLY (feature flags, notification
+# templates, stage templates, workflows, submission types, programs, org/email/
+# password settings). Idempotent and safe to re-run — never creates demo users
+# and never overwrites values you've edited in the admin UI.
+docker exec rrp_app php artisan db:seed --class=AppConfigSeeder --force
+
+# UAT/DEMO ONLY: seed EVERYTHING incl. demo users (admin@cityu.edu, etc.)
 docker exec rrp_app php artisan db:seed --force
 
 # …or seed individual datasets
-docker exec rrp_app php artisan db:seed --class=UsersSeeder --force      # all users
+docker exec rrp_app php artisan db:seed --class=UsersSeeder --force      # demo users (UAT only)
 docker exec rrp_app php artisan db:seed --class=ProgramsSeeder --force   # all programs
 docker exec rrp_app php artisan db:seed --class=SubmissionTypeSeeder --force
 ```

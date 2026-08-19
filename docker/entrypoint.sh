@@ -82,6 +82,20 @@ if [ "${RUN_MIGRATIONS:-true}" = "true" ]; then
     su -s /bin/sh www-data -c "php artisan migrate --force --no-interaction"
 fi
 
+# Seed application configuration on startup (idempotent, production-safe).
+# Seeds feature flags, notification templates, stage templates, workflows,
+# programs and singleton settings without creating demo users. Set
+# SEED_APP_CONFIG=false to skip, or SEED_DEMO=true to also seed demo users.
+if [ "${SEED_APP_CONFIG:-true}" = "true" ]; then
+    if [ "${SEED_DEMO:-false}" = "true" ]; then
+        echo "Seeding full dataset (application config + demo users)..."
+        su -s /bin/sh www-data -c "php artisan db:seed --force --no-interaction"
+    else
+        echo "Seeding application configuration..."
+        su -s /bin/sh www-data -c "php artisan db:seed --class=AppConfigSeeder --force --no-interaction"
+    fi
+fi
+
 # Generate app key if not set
 if [ -z "$APP_KEY" ] || [ "$APP_KEY" = "" ]; then
     echo "WARNING: APP_KEY is not set. Generating a temporary key (not suitable for production)."

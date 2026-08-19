@@ -35,6 +35,7 @@ SSH_KEY="${SSH_KEY:-}"
 DOMAIN=""
 EMAIL=""
 SKIP_SSL_FLAG=""
+SEED_DEMO=false
 REMOTE_DIR="/opt/rrp-v2"
 APP_SCHEME="https"
 
@@ -44,6 +45,7 @@ while [[ $# -gt 0 ]]; do
     --domain)   DOMAIN="$2"; shift 2 ;;
     --email)    EMAIL="$2";  shift 2 ;;
     --skip-ssl) SKIP_SSL_FLAG="--skip-ssl"; shift ;;
+    --seed-demo) SEED_DEMO=true; shift ;;
     *) error "Unknown argument: $1" ;;
   esac
 done
@@ -126,6 +128,12 @@ info "Copying v2 source to $VM_HOST:$REMOTE_DIR ..."
 
 # ---------- 3. Run install.sh on the VM (Docker mode: delegate to docker compose) --
 info "Running Docker Compose deployment on the VM..."
+# Production seeds application config only; --seed-demo also seeds demo users.
+if [[ "$SEED_DEMO" == true ]]; then
+  SEED_CMD="db:seed --force"
+else
+  SEED_CMD="db:seed --class=AppConfigSeeder --force"
+fi
 "${SSH_CMD[@]}" "$TARGET" bash <<REMOTE_INSTALL
 set -euo pipefail
 cd $REMOTE_DIR
@@ -182,7 +190,7 @@ done
 echo " Ready!"
 
 \$DOCKER exec -w /var/www/html rrp_app php artisan migrate --force
-\$DOCKER exec -w /var/www/html rrp_app php artisan db:seed --force
+\$DOCKER exec -w /var/www/html rrp_app php artisan $SEED_CMD
 \$DOCKER exec -w /var/www/html rrp_app php artisan storage:link || true
 \$DOCKER exec -w /var/www/html rrp_app php artisan config:cache
 \$DOCKER exec -w /var/www/html rrp_app php artisan route:cache

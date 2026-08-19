@@ -1,3 +1,10 @@
+export interface PublicSsoProvider {
+  id: string
+  name: string
+  button_label: string
+  button_icon_url: string | null
+}
+
 export interface PublicOrgInfo {
   org_name: string
   portal_name: string
@@ -5,6 +12,7 @@ export interface PublicOrgInfo {
   logo_url: string | null
   primary_color: string
   sso_enabled: boolean
+  sso_providers: PublicSsoProvider[]
 }
 
 export interface OrganizationSetting {
