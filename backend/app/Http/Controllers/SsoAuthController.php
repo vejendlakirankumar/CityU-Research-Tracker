@@ -130,7 +130,7 @@ class SsoAuthController extends Controller
         }
 
         // Issue Sanctum token
-        $token = $user->createToken('sso-login')->plainTextToken;
+        $token = $user->createToken('sso-login', ['*'], \App\Models\User::tokenExpiresAt())->plainTextToken;
 
         // Store or refresh SSO identity record
         UserSsoIdentity::updateOrCreate(

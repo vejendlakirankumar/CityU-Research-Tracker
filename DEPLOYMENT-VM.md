@@ -173,7 +173,7 @@ sudo systemctl reload php8.4-fpm
 
 ### Cache / Queue / Auth / Email / Storage
 
-Same keys as the Docker guide, except `REDIS_HOST=127.0.0.1`. See [DEPLOYMENT-DOCKER.md §4](DEPLOYMENT-DOCKER.md#4-environment-variables) for the full table (Redis, Sanctum, `SESSION_DOMAIN`, `SESSION_SECURE_COOKIE`, `ENABLE_EMERGENCY_ADMIN`, `MAIL_*`, `FILESYSTEM_DISK`, Azure/S3).
+Same keys as the Docker guide, except `REDIS_HOST=127.0.0.1`. See [DEPLOYMENT-DOCKER.md §4](DEPLOYMENT-DOCKER.md#4-environment-variables) for the full table (Redis, Sanctum, `SESSION_DOMAIN`, `SESSION_SECURE_COOKIE`, `SANCTUM_TOKEN_TTL_MINUTES`, `EMERGENCY_ADMIN_PASSWORD`, `ENABLE_EMERGENCY_ADMIN`, `MAIL_*`, `FILESYSTEM_DISK`, Azure/S3).
 
 ---
 
@@ -461,7 +461,7 @@ Expect non-zero rows in `users`, `programs`, `submission_types`, `workflow_defin
 
 ### Seeded accounts
 
-All seeded users share the password **`admin12345`** — change or disable them before any real use.
+All seeded users share the password **`admin12345`** (override with the `SEED_PASSWORD` env var) — change or disable them before any real use.
 
 | Role | Emails |
 |---|---|

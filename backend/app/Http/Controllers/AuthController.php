@@ -81,8 +81,9 @@ class AuthController extends Controller
             ], 401);
         }
 
-        // Successful login — reset counters and issue token
-        $token = $user->createToken('spa')->plainTextToken;
+        // Successful login — reset counters and issue token (with an expiry so a stolen
+        // bearer token cannot be replayed indefinitely).
+        $token = $user->createToken('spa', ['*'], User::tokenExpiresAt())->plainTextToken;
 
         $user->update([
             'failed_login_attempts'  => 0,

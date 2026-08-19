@@ -21,9 +21,16 @@ class SecureHeaders
         $response->headers->set('Cross-Origin-Opener-Policy', 'same-origin');
         $response->headers->set('Cross-Origin-Resource-Policy', 'same-origin');
         $response->headers->set('Origin-Agent-Cluster', '?1');
+        // style-src keeps 'unsafe-inline' because the SPA (React inline styles + Tailwind
+        // runtime styles) requires it — inline style *attributes* cannot use nonces/hashes.
+        // Everything else is locked to 'self'. form-action, frame-src and
+        // upgrade-insecure-requests harden against form hijacking, framing and mixed content.
         $response->headers->set(
             'Content-Security-Policy',
-            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; object-src 'none'; base-uri 'self'"
+            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+            . "img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; "
+            . "form-action 'self'; frame-src 'none'; frame-ancestors 'none'; "
+            . "object-src 'none'; base-uri 'self'; upgrade-insecure-requests"
         );
         $response->headers->remove('X-Powered-By');
         $response->headers->remove('Server');

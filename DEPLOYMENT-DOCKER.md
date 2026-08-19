@@ -205,6 +205,8 @@ docker exec rrp_app php artisan config:cache
 | `SANCTUM_STATEFUL_DOMAINS` | Yes | Frontend domain(s) — must match the browser URL bar exactly |
 | `SESSION_DOMAIN` | Yes | Cookie domain |
 | `SESSION_SECURE_COOKIE` | No | Set `true` when served over HTTPS |
+| `SANCTUM_TOKEN_TTL_MINUTES` | No | Bearer-token lifetime. Defaults to the admin-configured session timeout, then 480 min. `0` = never expire (not recommended) |
+| `EMERGENCY_ADMIN_PASSWORD` | No | Break-glass admin password. **Unset by default** — the emergency admin ships with a random unusable password until you set this. Set a strong value to enable break-glass login |
 | `ENABLE_EMERGENCY_ADMIN` | No | Break-glass override. `true` forces `emergency.admin@system.local` active. Default unset/`false` |
 
 ### Email
@@ -490,7 +492,7 @@ Expect non-zero rows in `users`, `programs`, `submission_types`, `workflow_defin
 
 ### Seeded accounts
 
-All seeded users share the password **`admin12345`** — change or disable them before any real use.
+All seeded users share the password **`admin12345`** (override with the `SEED_PASSWORD` env var) — change or disable them before any real use.
 
 | Role | Emails |
 |---|---|

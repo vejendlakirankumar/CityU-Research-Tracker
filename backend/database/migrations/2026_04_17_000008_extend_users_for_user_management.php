@@ -41,7 +41,11 @@ return new class extends Migration
                 'name'                 => 'Emergency Admin',
                 'first_name'           => 'Emergency',
                 'last_name'            => 'Admin',
-                'password_hash'        => Hash::make('admin12345'),
+                // Break-glass credential: set EMERGENCY_ADMIN_PASSWORD in the environment
+                // to enable emergency login. If unset we store a random unguessable value
+                // (no known default ships in source), leaving break-glass disabled until an
+                // admin sets a password via User Management.
+                'password_hash'        => Hash::make(env('EMERGENCY_ADMIN_PASSWORD') ?: \Illuminate\Support\Str::random(40)),
                 'roles'                => json_encode(['admin']),
                 'is_active'            => false, // will be activated by sync logic on first check
                 'is_emergency_admin'   => true,

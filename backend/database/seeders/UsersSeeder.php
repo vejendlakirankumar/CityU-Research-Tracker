@@ -113,7 +113,9 @@ class UsersSeeder extends Seeder
                 ['email' => $user['email']],
                 [
                     'name' => $user['name'],
-                    'password_hash' => Hash::make('admin12345'),
+                    // Demo/UAT seed password. Override with SEED_PASSWORD in the environment.
+                    // Seeders are for test/UAT only — never run against production.
+                    'password_hash' => Hash::make(env('SEED_PASSWORD', 'admin12345')),
                     'roles' => $user['roles'],
                     'is_active' => true,
                 ]

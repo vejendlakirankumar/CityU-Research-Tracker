@@ -100,6 +100,20 @@ class User extends Model implements AuthenticatableContract
     public function isLocked(): bool      { return $this->locked_at !== null; }
 
     /**
+     * Access-token lifetime. Ties the Sanctum bearer-token expiry to the admin-configured
+     * session timeout (falls back to SANCTUM_TOKEN_TTL_MINUTES, then 8 hours) so a stolen
+     * token cannot be replayed indefinitely. Returns null only when a non-positive timeout
+     * is configured (never-expire — not recommended).
+     */
+    public static function tokenExpiresAt(): ?\Illuminate\Support\Carbon
+    {
+        $minutes = (int) (\App\Models\PasswordPolicy::find(1)?->session_timeout_minutes
+            ?? env('SANCTUM_TOKEN_TTL_MINUTES', 480));
+
+        return $minutes > 0 ? now()->addMinutes($minutes) : null;
+    }
+
+    /**
      * Sync the emergency admin user's active state:
      * - Active when no other admin exists
      * - Inactive when at least one other active admin exists

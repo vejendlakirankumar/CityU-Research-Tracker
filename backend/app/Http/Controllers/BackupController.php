@@ -81,9 +81,12 @@ class BackupController extends Controller
                  . " 2>/dev/null";
 
         // 4) Pack DB dump + documents + application config and encrypt with AES-256.
+        // Pass the passphrase via a 0600 temp file (never on the command line, so it cannot
+        // be read from the process list / `ps`). The staging dir is wiped below.
+        $encKeyFile = "{$stageDir}/.enckey";
         $packCmd = "tar -czf - -C " . escapeshellarg($stageDir)
                  . " database.sql documents.tar.gz application.env"
-                 . " | openssl enc -aes-256-cbc -pbkdf2 -salt -pass " . escapeshellarg("pass:{$encKey}")
+                 . " | openssl enc -aes-256-cbc -pbkdf2 -salt -pass " . escapeshellarg("file:{$encKeyFile}")
                  . " -out " . escapeshellarg($localPath)
                  . " 2>" . escapeshellarg("{$stageDir}/enc.err");
 
@@ -104,7 +107,10 @@ class BackupController extends Controller
         }
 
         if ($ok) {
+            file_put_contents($encKeyFile, $encKey);
+            @chmod($encKeyFile, 0600);
             exec($packCmd, $o3, $c3);
+            @unlink($encKeyFile);
             if ($c3 !== 0 || !file_exists($localPath)) { $ok = false; $errMsg = 'encryption'; }
         }
 
@@ -261,12 +267,17 @@ class BackupController extends Controller
         $work = storage_path('app/backups/.restore_' . now()->format('Y-m-d_H-i-s'));
         @mkdir($work, 0755, true);
 
-        // 1) Decrypt + unpack the archive.
-        $decCmd = "openssl enc -d -aes-256-cbc -pbkdf2 -pass " . escapeshellarg("pass:{$encKey}")
+        // 1) Decrypt + unpack the archive. Pass the passphrase via a 0600 temp file so it
+        // never appears on the command line / in the process list.
+        $decKeyFile = "{$work}/.enckey";
+        $decCmd = "openssl enc -d -aes-256-cbc -pbkdf2 -pass " . escapeshellarg("file:{$decKeyFile}")
                 . " -in " . escapeshellarg($localPath)
                 . " | tar -xzf - -C " . escapeshellarg($work)
                 . " 2>" . escapeshellarg("{$work}/dec.err");
+        file_put_contents($decKeyFile, $encKey);
+        @chmod($decKeyFile, 0600);
         exec($decCmd, $od, $cd);
+        @unlink($decKeyFile);
 
         $sqlFile  = "{$work}/database.sql";
         $docsFile = "{$work}/documents.tar.gz";
