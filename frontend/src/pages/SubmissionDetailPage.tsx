@@ -19,7 +19,7 @@ import * as pdfjsLib from 'pdfjs-dist'
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 import type { AxiosResponse } from 'axios'
 import api from '../lib/axios'
-import { useAuthStore } from '../stores/authStore'
+import { useActiveRole, useAuthStore } from '../stores/authStore'
 import { useToastHelpers } from '../lib/toast'
 import type {
   Submission, SubmissionStatus, SubmissionAuthor, SubmissionReviewer,
@@ -1642,6 +1642,7 @@ function InlineDocViewer({ doc, onClose }: { doc: ViewingDoc; onClose: () => voi
   const [showDownloadMenu, setShowDownloadMenu] = useState(false)
 
   const { user } = useAuthStore()
+  const annotationActiveRole = useActiveRole()
 
   const apiPath = doc.apiPath ?? `/submissions/${doc.submissionId}/files/${doc.versionNumber}/${encodeURIComponent(doc.filename)}`
 
@@ -2273,7 +2274,7 @@ tbody tr{border-bottom:1px solid #e5e7eb}tbody tr:hover{background:#f9fafb}</sty
                           <ExternalLink className="w-2.5 h-2.5 text-blue-400 flex-shrink-0" />
                         )}
                       </div>
-                      {(ann.is_mine || user?.roles?.includes('admin')) && (
+                      {(ann.is_mine || annotationActiveRole === 'admin') && (
                         <button
                           onClick={(e) => { e.stopPropagation(); deleteAnnotation(ann.id) }}
                           className="opacity-0 group-hover:opacity-100 p-0.5 rounded text-gray-300 hover:text-red-500 transition-opacity flex-shrink-0"
@@ -4228,6 +4229,7 @@ export default function SubmissionDetailPage() {
   const backTo = (location.state as { from?: string } | null)?.from ?? '/submissions'
   const backLabel = backTo === '/reviews' ? 'Back to assignments' : 'Back to submissions'
   const user = useAuthStore((s) => s.user)
+  const activeRole = useActiveRole()
   const qc = useQueryClient()
   const [tab, setTab] = useState<Tab>('overview')
   const [editing, setEditing] = useState(false)
@@ -4238,7 +4240,7 @@ export default function SubmissionDetailPage() {
   const [showCancelConfirm, setShowCancelConfirm] = useState(false)
   const reviewersRef = useRef<HTMLDivElement>(null)
 
-  const isAdmin = user?.roles?.some((r: string) => ['admin', 'coordinator'].includes(r))
+  const isAdmin = activeRole === 'admin' || activeRole === 'coordinator'
 
   const { data, isLoading, isError } = useQuery<{ data: Submission }>({
     queryKey: ['submission', id],
@@ -4693,7 +4695,7 @@ export default function SubmissionDetailPage() {
         <DocumentsTab
           sub={sub}
           canEdit={canEdit}
-          canRunSimilarity={!!(isAdmin || isAssignedReviewer || user?.roles?.includes('reviewer'))}
+          canRunSimilarity={!!(isAdmin || isAssignedReviewer || activeRole === 'reviewer')}
         />
       )}
 

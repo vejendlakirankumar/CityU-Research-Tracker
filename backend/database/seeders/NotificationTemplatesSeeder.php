@@ -56,6 +56,12 @@ class NotificationTemplatesSeeder extends Seeder
                 'body_text'  => "Dear {{user_name}},\n\nYour review of \"{{submission_title}}\" is overdue.",
             ],
             [
+                'event_type' => 'STAGE_DUE_SOON',
+                'subject'    => 'Reminder: Review Due Soon for {{submission_title}}',
+                'body_html'  => '<p>Dear {{user_name}},</p><p>This is a friendly reminder that your review of "<strong>{{submission_title}}</strong>" for stage <strong>{{stage_name}}</strong> is due on <strong>{{due_date}}</strong>. Please submit it before the deadline.</p>',
+                'body_text'  => "Dear {{user_name}},\n\nReminder: your review of \"{{submission_title}}\" (stage {{stage_name}}) is due on {{due_date}}.",
+            ],
+            [
                 'event_type' => 'APPEAL_SUBMITTED',
                 'subject'    => 'Appeal Received for {{submission_title}}',
                 'body_html'  => '<p>An appeal has been submitted for "<strong>{{submission_title}}</strong>" and is awaiting coordinator review.</p>',

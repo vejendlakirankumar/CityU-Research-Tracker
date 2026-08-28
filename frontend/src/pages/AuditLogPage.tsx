@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Shield, ChevronDown, ChevronRight, Search, Filter, X, Trash2, Loader2, AlertTriangle } from 'lucide-react'
 import api from '../lib/axios'
-import { useAuthStore } from '../stores/authStore'
+import { useActiveRole } from '../stores/authStore'
 import { useToastHelpers } from '../lib/toast'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -242,8 +242,8 @@ function RetentionPanel() {
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function AuditLogPage() {
-  const currentUser = useAuthStore(s => s.user)
-  const isAdmin = currentUser?.roles?.includes('admin') ?? false
+  const activeRole = useActiveRole()
+  const isAdmin = activeRole === 'admin'
   const [page, setPage] = useState(1)
   const [filters, setFilters] = useState<Filters>({ search: '', action: '', date_from: '', date_to: '' })
   const [pending, setPending] = useState<Filters>({ search: '', action: '', date_from: '', date_to: '' })

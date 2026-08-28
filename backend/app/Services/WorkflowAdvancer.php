@@ -89,7 +89,13 @@ class WorkflowAdvancer
                 // Move the pointer to the next stage in sequence so later-stage
                 // reviewers only see submissions once their stage is active.
                 $nextStage = $evalStages->first(fn($s) => $s->order > $stage->order);
+                $previousStageId = $submission->current_stage_id;
                 $this->setCurrentStage($submission, $nextStage?->id);
+                // When the active stage actually advances to a new stage, notify
+                // that stage's reviewers that their review can now begin.
+                if ($nextStage && $previousStageId !== $nextStage->id) {
+                    $this->notifyStageReviewers($submission, $nextStage);
+                }
                 // Stage approved — advance to next stage.
                 continue;
             }
@@ -165,6 +171,29 @@ class WorkflowAdvancer
             $submission->update([
                 'current_stage_id' => $stageId,
                 'current_stage_entered_at' => now(),
+            ]);
+        }
+    }
+
+    private function notifyStageReviewers(Submission $submission, $stage): void
+    {
+        $reviewers = SubmissionReviewer::with('user')
+            ->where('submission_id', $submission->id)
+            ->where('stage_id', $stage->id)
+            ->where('status', '!=', 'declined')
+            ->get();
+
+        $svc = app(NotificationService::class);
+
+        foreach ($reviewers as $reviewer) {
+            if (!$reviewer->user) {
+                continue;
+            }
+            $svc->notify($reviewer->user, Notification::TYPE_REVIEWER_ASSIGNED, [
+                'submission_id'    => $submission->id,
+                'submission_title' => $submission->title,
+                'stage_name'       => $stage->name,
+                'due_at'           => $reviewer->due_at?->toDateString(),
             ]);
         }
     }

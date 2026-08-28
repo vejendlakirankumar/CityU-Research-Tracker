@@ -4,7 +4,7 @@ import { Plus, Search, Edit2, Trash2, UserCheck, UserX, Key, Users, FolderOpen, 
 import { clsx } from 'clsx'
 import api from '../lib/axios'
 import { useToastHelpers } from '../lib/toast'
-import { useAuthStore } from '../stores/authStore'
+import { useActiveRole, useAuthStore } from '../stores/authStore'
 import CustomRolesPage from './CustomRolesPage'
 import type {
   User, Group, CreateUserRequest, UpdateUserRequest,
@@ -834,7 +834,8 @@ function UsersTab() {
   const qc = useQueryClient()
   const toast = useToastHelpers()
   const actorUser = useAuthStore(s => s.user)
-  const actorIsAdmin = actorUser?.roles?.includes('admin') ?? false
+  const actorActiveRole = useActiveRole()
+  const actorIsAdmin = actorActiveRole === 'admin'
   const [search, setSearch] = useState('')
   const [roleFilter, setRoleFilter] = useState('')
   const [page, setPage] = useState(1)

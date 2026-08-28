@@ -42,6 +42,8 @@ return Application::configure(basePath: dirname(__DIR__))
         // NOTE: in Laravel 11 the schedule must be registered here (the legacy
         // App\Console\Kernel::schedule() method is no longer invoked).
         $schedule->command('reviews:check-overdue')->dailyAt('08:00');
+        // Remind reviewers whose deadline is approaching (default: 2 days out).
+        $schedule->command('reviews:check-due-soon')->dailyAt('08:00');
     })
     ->withExceptions(function (Exceptions $exceptions) {
         $exceptions->render(function (\Illuminate\Auth\AuthenticationException $e, $request) {

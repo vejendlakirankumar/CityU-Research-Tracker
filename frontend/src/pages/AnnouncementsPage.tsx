@@ -5,7 +5,7 @@ import {
   Info, Bell, X, Edit2, RefreshCw,
 } from 'lucide-react'
 import api from '../lib/axios'
-import { useAuthStore } from '../stores/authStore'
+import { useActiveRole } from '../stores/authStore'
 import { useToastHelpers } from '../lib/toast'
 
 interface Announcement {
@@ -44,7 +44,7 @@ const TARGET_OPTIONS = [
 const EMPTY_FORM: { title: string; body: string; type: 'info' | 'warning' | 'success' | 'danger'; target: string; expires_at: string; broadcast: boolean } = { title: '', body: '', type: 'info', target: 'all', expires_at: '', broadcast: true }
 
 export default function AnnouncementsPage() {
-  const user = useAuthStore((s) => s.user)
+  const activeRole = useActiveRole()
   const qc = useQueryClient()
   const toast = useToastHelpers()
 
@@ -53,7 +53,7 @@ export default function AnnouncementsPage() {
   const [form, setForm] = useState(EMPTY_FORM)
   const [formError, setFormError] = useState('')
 
-  const isAdminOrCoord = user?.roles?.some((r) => r === 'admin' || r === 'coordinator')
+  const isAdminOrCoord = activeRole === 'admin' || activeRole === 'coordinator'
 
   const { data, isLoading } = useQuery<PaginatedAnnouncements>({
     queryKey: ['announcements'],

@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import { FileText, ShieldCheck, Clock, CheckCircle, AlertTriangle, PenLine, Ban, Hourglass, Users, UserCheck } from 'lucide-react'
-import { useAuthStore } from '../stores/authStore'
+import { useActiveRole, useAuthStore } from '../stores/authStore'
 import api from '../lib/axios'
 
 interface StatItem {
@@ -63,6 +63,7 @@ const COLOR_MAP: Record<string, string> = {
 
 export default function DashboardPage() {
   const user    = useAuthStore((s) => s.user)
+  const activeRole = useActiveRole()
   const navigate = useNavigate()
 
   const { data, isLoading } = useQuery<DashboardStats>({
@@ -73,7 +74,7 @@ export default function DashboardPage() {
 
   if (!user) return null
 
-  const primaryRole = user.roles[0] ?? 'student'
+  const primaryRole = activeRole ?? user.roles[0] ?? 'student'
 
   const greeting = (() => {
     const hour = new Date().getHours()

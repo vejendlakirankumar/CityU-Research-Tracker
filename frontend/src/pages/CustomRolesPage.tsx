@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Shield, Plus, Trash2, Edit2, X, Loader2, Info } from 'lucide-react'
 import api from '../lib/axios'
-import { useAuthStore } from '../stores/authStore'
+import { useActiveRole } from '../stores/authStore'
 import { useToastHelpers } from '../lib/toast'
 
 interface CustomRole {
@@ -29,7 +29,7 @@ const SYSTEM_ROLES = [
 const EMPTY_FORM = { name: '', description: '', color: COLOR_PRESETS[0] }
 
 export default function CustomRolesPage() {
-  const user = useAuthStore((s) => s.user)
+  const activeRole = useActiveRole()
   const qc = useQueryClient()
   const toast = useToastHelpers()
 
@@ -38,7 +38,7 @@ export default function CustomRolesPage() {
   const [form, setForm] = useState(EMPTY_FORM)
   const [formError, setFormError] = useState('')
 
-  const isAdminOrCoord = user?.roles?.some((r) => r === 'admin' || r === 'coordinator')
+  const isAdminOrCoord = activeRole === 'admin' || activeRole === 'coordinator'
 
   const { data, isLoading } = useQuery<{ data: CustomRole[] }>({
     queryKey: ['custom-roles'],

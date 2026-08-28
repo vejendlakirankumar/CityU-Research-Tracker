@@ -62,6 +62,7 @@ class Notification extends Model
     const TYPE_SUBMISSION_REJECTED   = 'submission_rejected';
     const TYPE_REVISION_REQUIRED     = 'revision_required';
     const TYPE_SUBMISSION_SUBMITTED  = 'submission_submitted';
+    const TYPE_SUBMISSION_RECEIVED   = 'submission_received';
     const TYPE_REVIEWER_ACCEPTED     = 'reviewer_accepted';
     const TYPE_REVIEWER_DECLINED     = 'reviewer_declined';
     const TYPE_STAGE_COMPLETE        = 'stage_complete';
@@ -70,6 +71,7 @@ class Notification extends Model
     const TYPE_CONFLICT_FLAGGED      = 'conflict_flagged';
     const TYPE_CONFLICT_RESOLVED     = 'conflict_resolved';
     const TYPE_REVIEWER_OVERDUE      = 'reviewer_overdue';
+    const TYPE_STAGE_DUE_SOON        = 'stage_due_soon';
     const TYPE_ARCHIVE_COMPLETE      = 'archive_complete';
     const TYPE_BACKUP_COMPLETE       = 'backup_complete';
     const TYPE_SIMILARITY_READY      = 'similarity_ready';

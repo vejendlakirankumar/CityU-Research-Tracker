@@ -4,7 +4,7 @@ import { Plus, Search, Edit2, Trash2, BookOpen, X, ChevronDown, ChevronUp, Schoo
 import { clsx } from 'clsx'
 import api from '../lib/axios'
 import { useToastHelpers } from '../lib/toast'
-import { useAuthStore } from '../stores/authStore'
+import { useActiveRole } from '../stores/authStore'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -154,8 +154,8 @@ function ProgramFormModal({
 export default function ProgramsPage() {
   const toast = useToastHelpers()
   const qc    = useQueryClient()
-  const user  = useAuthStore(s => s.user)
-  const isAdmin = user?.roles?.includes('admin') ?? false
+  const activeRole = useActiveRole()
+  const isAdmin = activeRole === 'admin'
 
   const [search,      setSearch]      = useState('')
   const [modalOpen,   setModalOpen]   = useState(false)

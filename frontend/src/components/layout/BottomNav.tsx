@@ -1,6 +1,6 @@
 import { NavLink } from 'react-router-dom'
 import { LayoutDashboard, FileText, ShieldCheck, Bell } from 'lucide-react'
-import { useAuthStore } from '../../stores/authStore'
+import { useActiveRole, useAuthStore } from '../../stores/authStore'
 import { useQuery } from '@tanstack/react-query'
 import api from '../../lib/axios'
 import type { NotificationsResponse } from '../../types/notifications'
@@ -18,7 +18,7 @@ const ALL_ITEMS = [
  */
 export default function BottomNav() {
   const user = useAuthStore((s) => s.user)
-  const roles: string[] = user?.roles ?? []
+  const activeRole = useActiveRole()
 
   const { data: notifData } = useQuery<NotificationsResponse>({
     queryKey: ['notifications'],
@@ -30,7 +30,7 @@ export default function BottomNav() {
   const unreadCount = notifData?.unread_count ?? 0
 
   const visible = ALL_ITEMS.filter((item) =>
-    item.roles.some((r) => roles.includes(r))
+    !!activeRole && item.roles.includes(activeRole)
   )
 
   if (visible.length === 0) return null

@@ -26,7 +26,7 @@ import {
   type LucideIcon,
 } from 'lucide-react'
 import { clsx } from 'clsx'
-import { useAuthStore } from '../../stores/authStore'
+import { useActiveRole, useAuthStore } from '../../stores/authStore'
 import type { Role } from '../../types/auth'
 
 interface NavItem {
@@ -193,6 +193,7 @@ const navSections: NavSection[] = [
 
 export default function Sidebar() {
   const user = useAuthStore((s) => s.user)
+  const activeRole = useActiveRole()
   const openProfile = useAuthStore((s) => s.openProfile)
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
 
@@ -207,7 +208,7 @@ export default function Sidebar() {
       <nav className="flex-1 overflow-y-auto px-3 pt-3 pb-4 space-y-4">
         {navSections.map((section) => {
           const visible = section.items.filter((item) =>
-            item.roles.some((r) => user?.roles.includes(r)),
+            !!activeRole && item.roles.includes(activeRole),
           )
           if (visible.length === 0) return null
           const isCollapsed = !!collapsed[section.heading]
@@ -262,7 +263,7 @@ export default function Sidebar() {
             </div>
             <div className="min-w-0 flex-1">
               <p className="text-sm font-medium truncate">{user.name}</p>
-              <p className="text-xs text-brand-300 capitalize">{user.roles[0]}</p>
+              <p className="text-xs text-brand-300 capitalize">{activeRole ?? user.roles[0]}</p>
             </div>
             <svg className="w-3.5 h-3.5 text-brand-400 flex-shrink-0" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" d="M15.232 5.232l3.536 3.536M9 13l6.586-6.586a2 2 0 012.828 2.828L11.828 15.828a4 4 0 01-1.414.94l-3.414.946.946-3.414a4 4 0 01.94-1.414z" />

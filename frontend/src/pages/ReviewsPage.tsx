@@ -8,7 +8,7 @@ import {
   UserX, InboxIcon, Search, RefreshCw,
 } from 'lucide-react'
 import api from '../lib/axios'
-import { useAuthStore } from '../stores/authStore'
+import { useActiveRole } from '../stores/authStore'
 import { useToastHelpers } from '../lib/toast'
 import type { SubmissionStatus } from '../types/submissions'
 
@@ -781,7 +781,7 @@ function ConflictModal({ item, onClose }: { item: ReviewAssignment; onClose: () 
 type TabKey = 'gated' | 'awaiting' | 'upcoming' | 'completed' | 'archived'
 
 export default function ReviewsPage() {
-  const user = useAuthStore((s) => s.user)
+  const activeRole = useActiveRole()
   const navigate = useNavigate()
   const [extensionItem, setExtensionItem] = useState<ReviewAssignment | null>(null)
   const [conflictItem, setConflictItem] = useState<ReviewAssignment | null>(null)
@@ -797,7 +797,7 @@ export default function ReviewsPage() {
   })
   const maxExtensions = reviewSettings?.max_extension_requests ?? 3
 
-  const isAdminOrCoord = user?.roles?.some((r: string) => r === 'admin' || r === 'coordinator')
+  const isAdminOrCoord = activeRole === 'admin' || activeRole === 'coordinator'
 
   const { data: gatedData } = useQuery<{ pending: GatedItem[] }>({    queryKey: ['gated-reviews'],
     queryFn: () => api.get('/admin/gated-reviews').then((r) => r.data),

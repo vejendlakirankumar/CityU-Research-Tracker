@@ -514,6 +514,16 @@ class SubmissionController extends Controller
             ]);
         }
 
+        // Confirm receipt to the submitter (emails SUBMISSION_RECEIVED template).
+        $submission->loadMissing('submitter', 'program');
+        if ($submission->submitter) {
+            app(NotificationService::class)->notify($submission->submitter, Notification::TYPE_SUBMISSION_RECEIVED, [
+                'submission_id'    => $submission->id,
+                'submission_title' => $submission->title,
+                'program_name'     => $submission->program?->name,
+            ]);
+        }
+
         return response()->json(['data' => $this->toDetail($submission->fresh(['submitter', 'submissionType', 'program', 'versions']))]);
     }
 

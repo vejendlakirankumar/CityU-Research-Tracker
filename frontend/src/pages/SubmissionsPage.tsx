@@ -6,7 +6,7 @@ import {
   XCircle, ChevronRight, ShieldCheck, AlertTriangle, Clock, Gavel,
 } from 'lucide-react'
 import api from '../lib/axios'
-import { useAuthStore } from '../stores/authStore'
+import { useActiveRole } from '../stores/authStore'
 import type { SubmissionListItem, SubmissionStatus } from '../types/submissions'
 import { STATUS_LABELS, STATUS_COLORS } from '../types/submissions'
 
@@ -406,18 +406,17 @@ function AdminReviewerQueueSection() {
 
 export default function SubmissionsPage() {
   const navigate = useNavigate()
-  const user = useAuthStore((s) => s.user)
+  const activeRole = useActiveRole()
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
   const [page, setPage] = useState(1)
 
-  const isAdmin = user?.roles?.some((r: string) => ['admin', 'coordinator'].includes(r))
-  const hasReviewerRole = user?.roles?.includes('reviewer') ?? false
-  // A pure reviewer (no admin/coordinator) sees only their review queue.
-  // A multi-role user (e.g. admin + reviewer) stays on the admin view but also
-  // sees a review queue section below (handled by isAssignedReviewer flag).
+  const isAdmin = activeRole === 'admin' || activeRole === 'coordinator'
+  const hasReviewerRole = activeRole === 'reviewer'
+  // The active role decides the view. A user acting as reviewer sees only their
+  // review queue; acting as admin/coordinator shows the full submissions view.
   const isPureReviewer = !isAdmin && hasReviewerRole
-  const canSubmit = user?.roles?.includes('student')
+  const canSubmit = activeRole === 'student'
 
   // Reviewer role: show the review queue instead of own submissions
   if (isPureReviewer) {

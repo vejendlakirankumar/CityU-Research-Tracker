@@ -1,8 +1,8 @@
 import { useNavigate } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState, useRef, useEffect } from 'react'
-import { Bell, Sun, Moon, Palette } from 'lucide-react'
-import { useAuthStore } from '../../stores/authStore'
+import { Bell, Sun, Moon, Palette, ChevronDown } from 'lucide-react'
+import { useActiveRole, useAuthStore } from '../../stores/authStore'
 import { useThemeStore } from '../../stores/themeStore'
 import api from '../../lib/axios'
 import cityuLogo from '../../assets/city-university-logo.svg'
@@ -25,14 +25,18 @@ export default function TopBar() {
   const user = useAuthStore((s) => s.user)
   const clearAuth = useAuthStore((s) => s.clearAuth)
   const openProfile = useAuthStore((s) => s.openProfile)
+  const activeRole = useActiveRole()
+  const setActiveRole = useAuthStore((s) => s.setActiveRole)
   const { isDark, toggleDark, accentColor, setAccentColor } = useThemeStore()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
 
   const [bellOpen, setBellOpen] = useState(false)
   const [paletteOpen, setPaletteOpen] = useState(false)
+  const [roleMenuOpen, setRoleMenuOpen] = useState(false)
   const bellRef = useRef<HTMLDivElement>(null)
   const paletteRef = useRef<HTMLDivElement>(null)
+  const roleMenuRef = useRef<HTMLDivElement>(null)
 
   const { data: orgInfo } = useQuery<PublicOrgInfo>({
     queryKey: ['org-public'],
@@ -68,6 +72,7 @@ export default function TopBar() {
     function handler(e: MouseEvent) {
       if (bellRef.current && !bellRef.current.contains(e.target as Node)) setBellOpen(false)
       if (paletteRef.current && !paletteRef.current.contains(e.target as Node)) setPaletteOpen(false)
+      if (roleMenuRef.current && !roleMenuRef.current.contains(e.target as Node)) setRoleMenuOpen(false)
     }
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
@@ -339,6 +344,63 @@ export default function TopBar() {
               <strong style={{ color: '#fff' }}>{user.name}</strong>
             </span>
           </button>
+          {user.roles.length > 1 && activeRole && (
+            <div ref={roleMenuRef} style={{ position: 'relative' }}>
+              <button
+                onClick={() => setRoleMenuOpen((o) => !o)}
+                style={{
+                  background: 'rgba(255,255,255,0.12)', color: '#fff',
+                  border: '1px solid rgba(255,255,255,0.35)', borderRadius: 4,
+                  padding: '4px 10px', fontSize: '0.78rem', fontWeight: 500,
+                  cursor: 'pointer', whiteSpace: 'nowrap',
+                  display: 'flex', alignItems: 'center', gap: '0.35rem',
+                  textTransform: 'capitalize', transition: 'background 0.15s',
+                }}
+                onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(255,255,255,0.2)')}
+                onMouseLeave={(e) => (e.currentTarget.style.background = 'rgba(255,255,255,0.12)')}
+                title="Switch role"
+              >
+                {activeRole}
+                <ChevronDown size={14} />
+              </button>
+              {roleMenuOpen && (
+                <div
+                  style={{
+                    position: 'absolute', top: 'calc(100% + 6px)', right: 0,
+                    background: '#fff', borderRadius: 6, minWidth: 170, zIndex: 60,
+                    boxShadow: '0 6px 20px rgba(0,0,0,0.18)', border: '1px solid #e5e7eb',
+                    overflow: 'hidden',
+                  }}
+                >
+                  <div style={{ padding: '8px 12px', fontSize: '0.68rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: '#9ca3af', borderBottom: '1px solid #f3f4f6' }}>
+                    Acting as
+                  </div>
+                  {user.roles.map((role) => (
+                    <button
+                      key={role}
+                      onClick={() => {
+                        setActiveRole(role)
+                        setRoleMenuOpen(false)
+                        navigate('/dashboard')
+                      }}
+                      style={{
+                        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                        width: '100%', padding: '8px 12px', border: 'none',
+                        background: role === activeRole ? '#eef2ff' : 'transparent',
+                        color: '#111827', fontSize: '0.82rem', fontWeight: role === activeRole ? 600 : 400,
+                        cursor: 'pointer', textAlign: 'left', textTransform: 'capitalize',
+                      }}
+                      onMouseEnter={(e) => (e.currentTarget.style.background = role === activeRole ? '#eef2ff' : '#f9fafb')}
+                      onMouseLeave={(e) => (e.currentTarget.style.background = role === activeRole ? '#eef2ff' : 'transparent')}
+                    >
+                      {role}
+                      {role === activeRole && <span style={{ color: '#4f46e5', fontSize: '0.9rem' }}>✓</span>}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
           <button
             onClick={() => logoutMutation.mutate()}
             disabled={logoutMutation.isPending}

@@ -1,5 +1,5 @@
 import { Navigate, useLocation } from 'react-router-dom'
-import { useAuthStore } from '../../stores/authStore'
+import { useActiveRole, useAuthStore } from '../../stores/authStore'
 import type { Role } from '../../types/auth'
 
 interface Props {
@@ -9,9 +9,12 @@ interface Props {
 
 export default function RoleRoute({ children, allowedRoles }: Props) {
   const user = useAuthStore((s) => s.user)
+  const activeRole = useActiveRole()
   const location = useLocation()
 
-  const hasAccess = !!user && user.roles.some((role) => allowedRoles.includes(role))
+  // Scope access to the role the user is currently acting as. The real role
+  // list still governs server-side authorization; this only shapes the UI.
+  const hasAccess = !!user && !!activeRole && allowedRoles.includes(activeRole)
 
   if (!hasAccess) {
     return <Navigate to="/dashboard" state={{ from: location }} replace />

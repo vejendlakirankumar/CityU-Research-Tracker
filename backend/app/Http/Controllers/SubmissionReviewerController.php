@@ -118,6 +118,7 @@ class SubmissionReviewerController extends Controller
                 'submission_id'    => $submissionId,
                 'submission_title' => $submission->title,
                 'stage_name'       => $reviewer->stage?->name,
+                'due_at'           => $reviewer->due_at?->toDateString(),
             ]);
         }
 

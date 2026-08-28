@@ -7,7 +7,7 @@ import {
   Search, Check,
 } from 'lucide-react'
 import api from '../lib/axios'
-import { useAuthStore } from '../stores/authStore'
+import { useActiveRole, useAuthStore } from '../stores/authStore'
 import type { SubmissionType } from '../types/submissions'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -153,13 +153,14 @@ export default function NewSubmissionPage() {
   const navigate = useNavigate()
   const qc = useQueryClient()
   const user = useAuthStore((s) => s.user)
+  const activeRole = useActiveRole()
 
-  // Redirect non-students away from this page
+  // Redirect users not acting as a student away from this page
   useEffect(() => {
-    if (user && !user.roles?.includes('student')) {
+    if (user && activeRole !== 'student') {
       navigate('/submissions', { replace: true })
     }
-  }, [user, navigate])
+  }, [user, activeRole, navigate])
 
   const [step, setStep] = useState(1)
   const [form, setForm] = useState<FormState>({
