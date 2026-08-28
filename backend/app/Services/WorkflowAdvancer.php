@@ -189,6 +189,15 @@ class WorkflowAdvancer
             if (!$reviewer->user) {
                 continue;
             }
+            // The stage is now active, so populate the due date (based on the stage
+            // entry time) and mark the reviewer notified before the email goes out.
+            if ($reviewer->due_at === null && $stage->due_days) {
+                $base = $submission->current_stage_entered_at ?? now();
+                $reviewer->due_at = $base->copy()->addDays($stage->due_days);
+            }
+            $reviewer->assignment_notified_at = now();
+            $reviewer->save();
+
             $svc->notify($reviewer->user, Notification::TYPE_REVIEWER_ASSIGNED, [
                 'submission_id'    => $submission->id,
                 'submission_title' => $submission->title,

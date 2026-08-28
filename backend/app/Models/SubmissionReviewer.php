@@ -14,7 +14,7 @@ class SubmissionReviewer extends Model
     protected $fillable = [
         'id', 'submission_id', 'stage_id', 'user_id', 'assigned_by',
         'status', 'due_at', 'decision', 'decision_at', 'comments',
-        'reminder_sent_at',
+        'reminder_sent_at', 'assignment_notified_at',
         // Reviewer-uploaded annotated document
         'annotated_document_path', 'annotated_document_name', 'annotated_document_uploaded_at',
         // Extension request
@@ -30,6 +30,7 @@ class SubmissionReviewer extends Model
             'assigned_at'            => 'datetime',
             'decision_at'            => 'datetime',
             'reminder_sent_at'       => 'datetime',
+            'assignment_notified_at' => 'datetime',
             'extension_requested_at' => 'datetime',
             'extension_resolved_at'  => 'datetime',
             'conflict_flagged_at'    => 'datetime',

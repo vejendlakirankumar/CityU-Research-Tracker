@@ -346,6 +346,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/{id}/reviewers',                            [SubmissionReviewerController::class, 'index']);
         Route::middleware('role:admin,coordinator')->group(function () {
             Route::post('/{id}/reviewers',                       [SubmissionReviewerController::class, 'store']);
+            Route::post('/{id}/reviewers/notify',                [SubmissionReviewerController::class, 'notify']);
             Route::delete('/{id}/reviewers/{reviewerId}',        [SubmissionReviewerController::class, 'destroy']);
             Route::get('/{id}/reviewer-pool-suggestions',        [SubmissionReviewerController::class, 'poolSuggestions']);
         });

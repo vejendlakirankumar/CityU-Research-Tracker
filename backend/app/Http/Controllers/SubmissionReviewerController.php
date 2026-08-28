@@ -81,16 +81,18 @@ class SubmissionReviewerController extends Controller
             ], 422);
         }
 
-        // Auto-calculate due_at from the stage's start time, not today.
-        // If this is the currently-active stage, base the due date on when the submission
-        // entered that stage (current_stage_entered_at).
-        // If this is a future stage, leave due_at null — it will be populated when
-        // the stage activates (first reviewer accepts).
+        // Auto-calculate due_at for the currently-active stage. Base the due date on
+        // when the submission entered that stage (current_stage_entered_at), falling
+        // back to now() if it has no recorded entry time yet.
+        // Future stages are left null — their due date is populated when the stage
+        // activates (see WorkflowAdvancer::notifyStageReviewers) or when the
+        // coordinator finalizes assignments (see notify()).
         $stage = StageDefinition::find($data['stage_id']);
         $dueAt = $data['due_at'] ?? null;
         if ($dueAt === null && $stage && $stage->due_days) {
-            if ($submission->current_stage_id === $stage->id && $submission->current_stage_entered_at) {
-                $dueAt = $submission->current_stage_entered_at->copy()->addDays($stage->due_days)->toDateString();
+            if ($submission->current_stage_id === $stage->id) {
+                $base = $submission->current_stage_entered_at ?? now();
+                $dueAt = $base->copy()->addDays($stage->due_days)->toDateString();
             }
             // Future stage: leave null; populated when stage activates
         }
@@ -111,16 +113,10 @@ class SubmissionReviewerController extends Controller
             'stage:id,name,stage_role_label,order',
         ]);
 
-        // Notify the assigned reviewer
-        $reviewerUser = $reviewer->user;
-        if ($reviewerUser) {
-            app(NotificationService::class)->notify($reviewerUser, Notification::TYPE_REVIEWER_ASSIGNED, [
-                'submission_id'    => $submissionId,
-                'submission_title' => $submission->title,
-                'stage_name'       => $reviewer->stage?->name,
-                'due_at'           => $reviewer->due_at?->toDateString(),
-            ]);
-        }
+        // NOTE: the reviewer is NOT emailed here. Assignment emails are deferred until
+        // the coordinator finalizes the panel (POST .../reviewers/notify, triggered by
+        // the "Done" button), so reviewers are notified once — with a populated due
+        // date — rather than on every individual selection.
 
         // ── DO NOT advance submission's current stage on assignment ─────────
         // current_stage_id is advanced only when a reviewer ACCEPTS (in update()),
@@ -128,6 +124,68 @@ class SubmissionReviewerController extends Controller
         // jumping ahead before anyone has actually started reviewing.
 
         return response()->json(['data' => $this->toResource($reviewer)], 201);
+    }
+
+    /**
+     * POST /api/submissions/{submissionId}/reviewers/notify
+     *
+     * Send the "you have been assigned" email to reviewers of the submission's
+     * currently-active stage who have not been notified yet. Triggered when the
+     * coordinator clicks "Done" in the Reviewer Assignments panel so reviewers are
+     * emailed once assignments are finalized — with a populated due date — instead
+     * of on every individual selection.
+     *
+     * Reviewers on future stages are intentionally not emailed here; they are
+     * notified automatically when the workflow advances into their stage
+     * (see WorkflowAdvancer::notifyStageReviewers).
+     */
+    public function notify(Request $request, string $submissionId): JsonResponse
+    {
+        $submission = Submission::findOrFail($submissionId);
+
+        if (!$submission->current_stage_id) {
+            return response()->json([
+                'notified' => 0,
+                'message'  => 'No active stage yet — reviewers will be notified when the submission enters their stage.',
+            ]);
+        }
+
+        $reviewers = SubmissionReviewer::with([
+            'user:id,name,email,first_name,last_name',
+            'stage:id,name,due_days',
+        ])
+            ->where('submission_id', $submissionId)
+            ->where('stage_id', $submission->current_stage_id)
+            ->where('status', 'pending')
+            ->whereNull('assignment_notified_at')
+            ->get();
+
+        $svc   = app(NotificationService::class);
+        $count = 0;
+
+        foreach ($reviewers as $reviewer) {
+            if (!$reviewer->user) {
+                continue;
+            }
+
+            // Populate the due date before the email goes out so it is never blank.
+            if ($reviewer->due_at === null && $reviewer->stage?->due_days) {
+                $base = $submission->current_stage_entered_at ?? now();
+                $reviewer->due_at = $base->copy()->addDays($reviewer->stage->due_days);
+            }
+            $reviewer->assignment_notified_at = now();
+            $reviewer->save();
+
+            $svc->notify($reviewer->user, Notification::TYPE_REVIEWER_ASSIGNED, [
+                'submission_id'    => $submissionId,
+                'submission_title' => $submission->title,
+                'stage_name'       => $reviewer->stage?->name,
+                'due_at'           => $reviewer->due_at?->toDateString(),
+            ]);
+            $count++;
+        }
+
+        return response()->json(['notified' => $count]);
     }
 
     /**

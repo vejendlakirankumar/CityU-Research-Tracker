@@ -637,9 +637,9 @@ function ReviewProgressPanel({
     !!userMeetingCtx?.gatekeeper_stage_id
 
   return (
-    <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6 mb-5">
+    <div className="bg-white rounded-xl border border-gray-200 border-l-4 border-l-indigo-400 shadow-sm p-6 mb-5">
       <div className="flex items-center gap-2 mb-4">
-        <ListChecks className="w-4 h-4 text-gray-500" />
+        <ListChecks className="w-4 h-4 text-indigo-500" />
         <h2 className="text-base font-semibold text-gray-900">Review Progress</h2>
         {isBlind && (
           <span className="text-xs bg-amber-50 text-amber-700 border border-amber-200 px-2 py-0.5 rounded-full flex items-center gap-1">
@@ -1481,6 +1481,12 @@ function ReviewersPanel({ submissionId, submissionTypeId }: { submissionId: stri
     onSuccess: () => qc.invalidateQueries({ queryKey: ['submission-reviewers', submissionId] }),
   })
 
+  // Sends the assignment email to newly-added reviewers, once the coordinator is done.
+  const notifyMutation = useMutation({
+    mutationFn: () => api.post(`/submissions/${submissionId}/reviewers/notify`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['submission-reviewers', submissionId] }),
+  })
+
   const reviewers = reviewersData?.data ?? []
   const stages = typeData?.data?.workflow?.stages ?? []
 
@@ -1488,18 +1494,21 @@ function ReviewersPanel({ submissionId, submissionTypeId }: { submissionId: stri
   const existingUserIds = (stageId: string) => reviewersByStage(stageId).map(r => r.user_id)
 
   return (
-    <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6 mb-5">
+    <div className="bg-white rounded-xl border border-gray-200 border-l-4 border-l-emerald-400 shadow-sm p-6 mb-5">
       <div className="flex items-center gap-2 mb-4">
-        <UserCheck className="w-4 h-4 text-gray-500" />
+        <UserCheck className="w-4 h-4 text-emerald-500" />
         <h2 className="text-base font-semibold text-gray-900">Reviewer Assignments</h2>
         <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">{reviewers.length} total</span>
         <div className="ml-auto">
           {isEditing ? (
             <button
-              onClick={() => setIsEditing(false)}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white text-xs font-medium rounded-lg hover:bg-blue-700"
+              onClick={() => { notifyMutation.mutate(); setIsEditing(false) }}
+              disabled={notifyMutation.isPending}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white text-xs font-medium rounded-lg hover:bg-blue-700 disabled:opacity-60"
             >
-              <Check className="w-3.5 h-3.5" /> Done
+              {notifyMutation.isPending
+                ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                : <Check className="w-3.5 h-3.5" />} Done
             </button>
           ) : (
             <button
