@@ -59,11 +59,14 @@ BE="$(readlink -f "$APP")/backend"
 # Run artisan/composer as the app user with a stable HOME (matches file ownership)
 asuser() { sudo -u "$APP_USER" env HOME="$(readlink -f "$APP")" "$@"; }
 
+# git wrapper that tolerates running as root against a clone owned by another user
+git_src() { git -C "$SRC" -c safe.directory="$SRC" "$@"; }
+
 # ---------- 1. Pull latest code ----------------------------------------------
 info "Fetching $BRANCH into $SRC ..."
-git -C "$SRC" fetch --prune origin "$BRANCH"
-git -C "$SRC" reset --hard "origin/$BRANCH"
-DEPLOYED_SHA="$(git -C "$SRC" rev-parse --short HEAD)"
+git_src fetch --prune origin "$BRANCH"
+git_src reset --hard "origin/$BRANCH"
+DEPLOYED_SHA="$(git_src rev-parse --short HEAD)"
 info "At commit $DEPLOYED_SHA"
 
 # ---------- 2. Backend --------------------------------------------------------
