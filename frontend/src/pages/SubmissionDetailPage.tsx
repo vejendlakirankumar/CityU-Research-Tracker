@@ -1641,7 +1641,6 @@ function InlineDocViewer({ doc, onClose }: { doc: ViewingDoc; onClose: () => voi
   // Download
   const [showDownloadMenu, setShowDownloadMenu] = useState(false)
 
-  const { user } = useAuthStore()
   const annotationActiveRole = useActiveRole()
 
   const apiPath = doc.apiPath ?? `/submissions/${doc.submissionId}/files/${doc.versionNumber}/${encodeURIComponent(doc.filename)}`
