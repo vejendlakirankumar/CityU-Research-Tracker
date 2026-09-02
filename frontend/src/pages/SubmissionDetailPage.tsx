@@ -462,10 +462,12 @@ function SimilarityCheckPanel({ submissionId }: { submissionId: string }) {
 
 function ReviewProgressPanel({
   submissionId,
+  submissionStatus,
   isAdmin,
   onAssignClick,
 }: {
   submissionId: string
+  submissionStatus: SubmissionStatus
   isAdmin: boolean
   onAssignClick?: () => void
 }) {
@@ -642,6 +644,11 @@ function ReviewProgressPanel({
   // A gatekeeper/finalize stage can close the workflow early; later stages are conditional.
   const finalizeIdx = stages.findIndex(s => s.allows_finalize)
 
+  // Gated reviews have a final gatekeeper release step after all stages complete.
+  // While pending, the bar must not read "100% / all complete".
+  const awaitingRelease = isGatedReview && submissionStatus === 'PENDING_RELEASE'
+  const gatekeeperStage = stages.find(s => s.is_gatekeeper)
+
   // Submitter in a gated review — show gatekeeper meeting section before the stage list
   const showSubmitterGatekeeperSection =
     allowMeetings && isGatedReview && (userMeetingCtx?.is_submitter ?? false) &&
@@ -675,13 +682,19 @@ function ReviewProgressPanel({
       <div className="mb-4">
         <div className="flex items-center justify-between mb-1.5">
           <span className="text-xs font-medium text-gray-600">
-            {completedStages === stages.length
-              ? 'All stages complete'
-              : activeStage
-                ? <>Current: <span className="text-gray-800 font-semibold">{activeStage.name}</span></>
-                : `${completedStages} of ${stages.length} complete`}
+            {awaitingRelease
+              ? <span className="flex items-center gap-1 text-amber-700 font-semibold"><ShieldCheck className="w-3.5 h-3.5" /> Awaiting gatekeeper release</span>
+              : completedStages === stages.length
+                ? 'All stages complete'
+                : activeStage
+                  ? <>Current: <span className="text-gray-800 font-semibold">{activeStage.name}</span></>
+                  : `${completedStages} of ${stages.length} complete`}
           </span>
-          <span className="text-xs text-gray-400 tabular-nums">{completedStages}/{stages.length} stages · {pct}%</span>
+          <span className="text-xs text-gray-400 tabular-nums">
+            {awaitingRelease
+              ? <span className="text-amber-600 font-medium">Release pending</span>
+              : <>{completedStages}/{stages.length} stages · {pct}%</>}
+          </span>
         </div>
         <div className="flex gap-1 items-center">
           {stages.map((s, i) => {
@@ -701,8 +714,23 @@ function ReviewProgressPanel({
               </div>
             )
           })}
+          {awaitingRelease && (
+            <div className="relative flex-1" title="Gatekeeper release decision — pending">
+              <div className="h-2 rounded-full bg-amber-400 animate-pulse" />
+              <span className="absolute -right-1 top-1/2 -translate-y-1/2 z-10 bg-white rounded-full p-0.5 shadow-sm border border-amber-300">
+                <ShieldCheck className="w-2.5 h-2.5 text-amber-600" />
+              </span>
+            </div>
+          )}
         </div>
-        {finalizeIdx !== -1 && (
+        {awaitingRelease ? (
+          <p className="mt-1.5 flex items-center gap-1 text-xs text-amber-700">
+            <ShieldCheck className="w-3 h-3 flex-shrink-0" />
+            <span>
+              {gatekeeperStage ? <span className="font-medium">{gatekeeperStage.name}</span> : 'The gatekeeper'} must issue the release decision before the review can proceed.
+            </span>
+          </p>
+        ) : finalizeIdx !== -1 && (
           <p className="mt-1.5 flex items-center gap-1 text-xs text-green-700">
             <Flag className="w-3 h-3 flex-shrink-0" />
             <span>
@@ -5051,6 +5079,7 @@ export default function SubmissionDetailPage() {
           <AuthorsPanel submissionId={sub.id} canEdit={canEdit} />
           <ReviewProgressPanel
             submissionId={sub.id}
+            submissionStatus={sub.status}
             isAdmin={!!isAdmin}
             onAssignClick={isAdmin ? () => {
               setTimeout(() => reviewersRef.current?.scrollIntoView({ behavior: 'smooth' }), 50)
