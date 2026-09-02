@@ -48,6 +48,7 @@ export interface StageDefinition {
   stage_role_label: string
   is_gatekeeper: boolean
   is_email_stage: boolean
+  allows_finalize: boolean
   execution_type: ExecutionType
   approval_strategy: ApprovalStrategy
   min_approvals: number

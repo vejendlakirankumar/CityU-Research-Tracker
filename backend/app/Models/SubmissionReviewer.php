@@ -13,7 +13,7 @@ class SubmissionReviewer extends Model
 
     protected $fillable = [
         'id', 'submission_id', 'stage_id', 'user_id', 'assigned_by',
-        'status', 'due_at', 'decision', 'decision_at', 'comments',
+        'status', 'due_at', 'decision', 'finalize_workflow', 'decision_at', 'comments',
         'draft_comments', 'draft_decision', 'draft_saved_at',
         'reminder_sent_at', 'assignment_notified_at',
         // Reviewer-uploaded annotated document
@@ -37,6 +37,7 @@ class SubmissionReviewer extends Model
             'conflict_flagged_at'    => 'datetime',
             'annotated_document_uploaded_at' => 'datetime',
             'conflict_flagged'       => 'boolean',
+            'finalize_workflow'      => 'boolean',
             'due_at'                 => 'date',
             'draft_saved_at'         => 'datetime',
         ];

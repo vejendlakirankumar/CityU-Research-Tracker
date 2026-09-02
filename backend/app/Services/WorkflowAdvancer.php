@@ -86,6 +86,15 @@ class WorkflowAdvancer
             }
 
             if ($outcome === 'PASSED') {
+                // Decision-gate stage: the decider chose to end the workflow here
+                // instead of advancing to the remaining stages.
+                if ($stage->allows_finalize && $this->stageChoseFinalize($submission->id, $stage->id)) {
+                    $this->setCurrentStage($submission, null);
+                    $finalStatus = $submission->submissionType?->workflow?->final_status_on_pass
+                        ?? Submission::STATUS_ACCEPTED;
+                    $this->transition($submission, $finalStatus, 'auto_finalized_at_gate');
+                    return;
+                }
                 // Move the pointer to the next stage in sequence so later-stage
                 // reviewers only see submissions once their stage is active.
                 $nextStage = $evalStages->first(fn($s) => $s->order > $stage->order);
@@ -153,6 +162,19 @@ class WorkflowAdvancer
         $finalStatus = $submission->submissionType?->workflow?->final_status_on_pass
             ?? Submission::STATUS_ACCEPTED;
         $this->transition($submission, $finalStatus, 'auto_accepted_all_stages');
+    }
+
+    /**
+     * True when a reviewer on this decision-gate stage approved and chose to
+     * finalize the workflow rather than continue to the next stage.
+     */
+    private function stageChoseFinalize(string $submissionId, string $stageId): bool
+    {
+        return SubmissionReviewer::where('submission_id', $submissionId)
+            ->where('stage_id', $stageId)
+            ->where('decision', 'approve')
+            ->where('finalize_workflow', true)
+            ->exists();
     }
 
     private function setCurrentStage(Submission $submission, ?string $stageId): void

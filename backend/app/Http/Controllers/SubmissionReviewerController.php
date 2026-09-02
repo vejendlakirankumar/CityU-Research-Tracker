@@ -35,7 +35,7 @@ class SubmissionReviewerController extends Controller
         $query = SubmissionReviewer::with([
             'user:id,name,email,first_name,last_name,org_role',
             'assignedBy:id,name',
-            'stage:id,name,stage_role_label,order,is_gatekeeper',
+            'stage:id,name,stage_role_label,order,is_gatekeeper,allows_finalize',
             'documents',
         ])->where('submission_id', $submissionId);
 
@@ -214,6 +214,7 @@ class SubmissionReviewerController extends Controller
             'status'   => ['sometimes', 'in:accepted,declined'],
             'due_at'   => ['sometimes', 'nullable', 'date'],
             'decision' => ['sometimes', 'nullable', 'in:approve,reject,revise,APPROVE,REJECT,REQUEST_CHANGES'],
+            'finalize_workflow' => ['sometimes', 'boolean'],
             'comments' => ['sometimes', 'nullable', 'string', 'max:10000'],
             'annotated_document' => [
                 'sometimes',
@@ -314,6 +315,11 @@ class SubmissionReviewerController extends Controller
             $data['draft_comments'] = null;
             $data['draft_decision'] = null;
             $data['draft_saved_at'] = null;
+            // Honor the finalize-vs-continue choice only on a decision-gate stage approval.
+            $stageAllowsFinalize = (bool) optional(StageDefinition::find($reviewer->stage_id))->allows_finalize;
+            $data['finalize_workflow'] = $stageAllowsFinalize
+                && $data['decision'] === 'approve'
+                && $request->boolean('finalize_workflow');
         }
 
         // Handle an optional annotated document uploaded by the reviewer.
@@ -1026,6 +1032,7 @@ class SubmissionReviewerController extends Controller
                 'stage_role_label' => $r->stage->stage_role_label,
                 'order'            => $r->stage->order,
                 'is_gatekeeper'    => $r->stage->is_gatekeeper ?? false,
+                'allows_finalize'  => $r->stage->allows_finalize ?? false,
             ] : null,
             'user_id'       => $r->user_id,
             'user'          => $r->relationLoaded('user') ? [

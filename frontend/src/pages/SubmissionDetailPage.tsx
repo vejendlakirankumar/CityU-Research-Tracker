@@ -3867,6 +3867,7 @@ function ReviewerDecisionPanel({
   const [comments, setComments] = useState('')
   const [showConfirm, setShowConfirm] = useState(false)
   const [submitError, setSubmitError] = useState('')
+  const [finalizeWorkflow, setFinalizeWorkflow] = useState(false)
 
   // Reviewer feedback documents (multi-file)
   const [annotatedFiles, setAnnotatedFiles] = useState<File[]>([])
@@ -3893,6 +3894,7 @@ function ReviewerDecisionPanel({
   })
 
   const myAssignment = reviewersData?.data?.find(r => r.user_id === user?.id) ?? null
+  const stageAllowsFinalize = !!myAssignment?.stage?.allows_finalize
 
   const decisionMutation = useMutation<AxiosResponse>({
     mutationFn: () => {
@@ -3900,6 +3902,7 @@ function ReviewerDecisionPanel({
         const fd = new FormData()
         fd.append('_method', 'PATCH') // method spoofing so PHP parses the multipart body
         fd.append('decision', selectedDecision ?? '')
+        fd.append('finalize_workflow', finalizeWorkflow ? '1' : '0')
         if (comments.trim()) fd.append('comments', comments.trim())
         annotatedFiles.forEach(f => fd.append('annotated_documents[]', f))
         return api.post(`/submissions/${submissionId}/reviewers/${myAssignment!.id}`, fd, {
@@ -3908,6 +3911,7 @@ function ReviewerDecisionPanel({
       }
       return api.patch(`/submissions/${submissionId}/reviewers/${myAssignment!.id}`, {
         decision: selectedDecision,
+        finalize_workflow: finalizeWorkflow,
         comments: comments.trim() || null,
       })
     },
@@ -4246,22 +4250,43 @@ function ReviewerDecisionPanel({
         {/* Submit + secondary actions */}
         <div className="flex items-center justify-between gap-3 flex-wrap">
           <div className="flex items-center gap-2">
-            <button
-              onClick={() => setShowConfirm(true)}
-              disabled={!selectedDecision}
-              className={`flex items-center gap-2 px-5 py-2.5 text-sm font-semibold rounded-lg disabled:opacity-40 disabled:cursor-not-allowed transition-colors ${
-                selectedDecision === 'approve'
-                  ? 'bg-green-600 hover:bg-green-700 text-white'
-                  : selectedDecision === 'reject'
-                  ? 'bg-red-600 hover:bg-red-700 text-white'
-                  : selectedDecision === 'revise'
-                  ? 'bg-orange-500 hover:bg-orange-600 text-white'
-                  : 'bg-blue-600 hover:bg-blue-700 text-white'
-              }`}
-            >
-              <Gavel className="w-4 h-4" />
-              Submit Decision
-            </button>
+            {stageAllowsFinalize && selectedDecision === 'approve' ? (
+              <>
+                <button
+                  onClick={() => { setFinalizeWorkflow(true); setShowConfirm(true) }}
+                  className="flex items-center gap-2 px-5 py-2.5 text-sm font-semibold rounded-lg bg-green-600 hover:bg-green-700 text-white transition-colors"
+                  title="Approve and finish the workflow now"
+                >
+                  <Gavel className="w-4 h-4" />
+                  Approve &amp; Finalize
+                </button>
+                <button
+                  onClick={() => { setFinalizeWorkflow(false); setShowConfirm(true) }}
+                  className="flex items-center gap-2 px-5 py-2.5 text-sm font-semibold rounded-lg border border-green-600 text-green-700 hover:bg-green-50 transition-colors"
+                  title="Approve and continue to the next stage"
+                >
+                  <Gavel className="w-4 h-4" />
+                  Approve &amp; Continue
+                </button>
+              </>
+            ) : (
+              <button
+                onClick={() => { setFinalizeWorkflow(false); setShowConfirm(true) }}
+                disabled={!selectedDecision}
+                className={`flex items-center gap-2 px-5 py-2.5 text-sm font-semibold rounded-lg disabled:opacity-40 disabled:cursor-not-allowed transition-colors ${
+                  selectedDecision === 'approve'
+                    ? 'bg-green-600 hover:bg-green-700 text-white'
+                    : selectedDecision === 'reject'
+                    ? 'bg-red-600 hover:bg-red-700 text-white'
+                    : selectedDecision === 'revise'
+                    ? 'bg-orange-500 hover:bg-orange-600 text-white'
+                    : 'bg-blue-600 hover:bg-blue-700 text-white'
+                }`}
+              >
+                <Gavel className="w-4 h-4" />
+                Submit Decision
+              </button>
+            )}
             <button
               onClick={() => draftMutation.mutate()}
               disabled={draftMutation.isPending || (!selectedDecision && !comments.trim())}
@@ -4305,9 +4330,15 @@ function ReviewerDecisionPanel({
       {/* Confirm dialog */}
       {showConfirm && selectedOption && (
         <ConfirmModal
-          title={`Confirm: ${selectedOption.label}`}
-          message={`${selectedOption.description} This decision is permanent and cannot be changed after submission.`}
-          confirmLabel={`Yes, ${selectedOption.label}`}
+          title={finalizeWorkflow ? 'Confirm: Approve & Finalize' : `Confirm: ${selectedOption.label}`}
+          message={`${selectedOption.description}${
+            finalizeWorkflow
+              ? ' This will FINALIZE the workflow — the submission is completed now and any later stages are skipped.'
+              : stageAllowsFinalize && selectedDecision === 'approve'
+              ? ' The submission will continue to the next stage.'
+              : ''
+          } This decision is permanent and cannot be changed after submission.`}
+          confirmLabel={finalizeWorkflow ? 'Yes, Finalize' : `Yes, ${selectedOption.label}`}
           confirmClass={
             selectedDecision === 'approve'
               ? 'bg-green-600 hover:bg-green-700'

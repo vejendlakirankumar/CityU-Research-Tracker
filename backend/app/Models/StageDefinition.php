@@ -15,6 +15,7 @@ class StageDefinition extends Model
         'is_gatekeeper', 'execution_type', 'approval_strategy', 'min_approvals',
         'is_anonymous', 'due_days', 'visibility_config', 'escalation_config',
         'decision_options', 'skip_condition', 'auto_assignment', 'is_email_stage',
+        'allows_finalize',
     ];
 
     protected function casts(): array
@@ -22,6 +23,7 @@ class StageDefinition extends Model
         return [
             'is_gatekeeper'     => 'boolean',
             'is_email_stage'    => 'boolean',
+            'allows_finalize'   => 'boolean',
             'is_anonymous'      => 'boolean',
             'visibility_config' => 'array',
             'escalation_config' => 'array',

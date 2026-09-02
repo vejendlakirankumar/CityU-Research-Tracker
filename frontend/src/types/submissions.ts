@@ -104,7 +104,7 @@ export interface SubmissionReviewer {
   id: string
   submission_id: string
   stage_id: string
-  stage: { id: string; name: string; stage_role_label: string; order: number; is_gatekeeper: boolean } | null
+  stage: { id: string; name: string; stage_role_label: string; order: number; is_gatekeeper: boolean; allows_finalize?: boolean } | null
   user_id: string
   user: { id: string; name: string; email: string; org_role: string | null } | null
   assigned_by: string | null

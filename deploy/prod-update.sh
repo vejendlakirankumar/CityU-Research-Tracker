@@ -54,7 +54,7 @@ done
 [[ $EUID -eq 0 ]] || error "Please run as root (sudo)."
 BE="$(readlink -f "$APP")/backend"
 [[ -d "$SRC/.git" ]] || error "No git clone at $SRC"
-[[ -x "$BE/artisan" ]] || error "No Laravel app at $BE"
+[[ -f "$BE/artisan" ]] || error "No Laravel app at $BE (set APP=/path/to/app if the live root differs)"
 
 # Run artisan/composer as the app user with a stable HOME (matches file ownership)
 asuser() { sudo -u "$APP_USER" env HOME="$(readlink -f "$APP")" "$@"; }
