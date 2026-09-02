@@ -7,6 +7,7 @@ use App\Models\Notification;
 use App\Models\Submission;
 use App\Models\SubmissionReviewer;
 use App\Models\User;
+use App\Services\DueDateService;
 use App\Services\NotificationService;
 
 /**
@@ -215,7 +216,7 @@ class WorkflowAdvancer
             // entry time) and mark the reviewer notified before the email goes out.
             if ($reviewer->due_at === null && $stage->due_days) {
                 $base = $submission->current_stage_entered_at ?? now();
-                $reviewer->due_at = $base->copy()->addDays($stage->due_days);
+                $reviewer->due_at = DueDateService::compute($base, $stage->due_days);
             }
             $reviewer->assignment_notified_at = now();
             $reviewer->save();

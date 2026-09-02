@@ -61,6 +61,7 @@ export interface StageDefinition {
 export interface WorkflowDefinition {
   id: string
   name: string
+  description: string | null
   revision_restart_policy: RevisionRestartPolicy
   final_status_on_pass: FinalStatusOnPass
   is_active: boolean
@@ -71,6 +72,7 @@ export interface WorkflowDefinition {
 
 export interface WorkflowFormData {
   name: string
+  description: string
   revision_restart_policy: RevisionRestartPolicy
   final_status_on_pass: FinalStatusOnPass
   is_active: boolean

@@ -9,6 +9,8 @@ use App\Models\StageDefinition;
 use App\Models\Submission;
 use App\Models\SubmissionReviewer;
 use App\Models\SubmissionReviewerDocument;
+use App\Models\SubmissionVersion;
+use App\Services\DueDateService;
 use App\Services\NotificationService;
 use App\Services\WorkflowAdvancer;
 use Illuminate\Http\JsonResponse;
@@ -94,7 +96,7 @@ class SubmissionReviewerController extends Controller
         if ($dueAt === null && $stage && $stage->due_days) {
             if ($submission->current_stage_id === $stage->id) {
                 $base = $submission->current_stage_entered_at ?? now();
-                $dueAt = $base->copy()->addDays($stage->due_days)->toDateString();
+                $dueAt = DueDateService::compute($base, $stage->due_days)->toDateString();
             }
             // Future stage: leave null; populated when stage activates
         }
@@ -173,7 +175,7 @@ class SubmissionReviewerController extends Controller
             // Populate the due date before the email goes out so it is never blank.
             if ($reviewer->due_at === null && $reviewer->stage?->due_days) {
                 $base = $submission->current_stage_entered_at ?? now();
-                $reviewer->due_at = $base->copy()->addDays($reviewer->stage->due_days);
+                $reviewer->due_at = DueDateService::compute($base, $reviewer->stage->due_days);
             }
             $reviewer->assignment_notified_at = now();
             $reviewer->save();
@@ -400,7 +402,7 @@ class SubmissionReviewerController extends Controller
                     // Now that the stage is active, backfill due_at for any reviewers in
                     // this stage that were assigned before the stage started (due_at = null).
                     if ($stageObj->due_days) {
-                        $newDueDate = $stageEnteredAt->copy()->addDays($stageObj->due_days)->toDateString();
+                        $newDueDate = DueDateService::compute($stageEnteredAt, $stageObj->due_days)->toDateString();
                         SubmissionReviewer::where('submission_id', $submissionId)
                             ->where('stage_id', $stageObj->id)
                             ->whereNull('due_at')
@@ -592,6 +594,191 @@ class SubmissionReviewerController extends Controller
         $doc->delete();
 
         return response()->json(['message' => 'Document removed.']);
+    }
+
+    /**
+     * POST /api/submissions/{submissionId}/reviewers/{reviewerId}/documents/{documentId}/promote
+     *
+     * Promote one of the reviewer's own uploaded feedback documents to a new
+     * submission version so later-stage reviewers review the reviewer's edited
+     * copy as the latest document. Only the reviewer who uploaded it may promote.
+     */
+    public function promoteDocument(Request $request, string $submissionId, string $reviewerId, string $documentId): JsonResponse
+    {
+        $reviewer = SubmissionReviewer::with('user:id,name')
+            ->where('submission_id', $submissionId)
+            ->where('id', $reviewerId)
+            ->firstOrFail();
+
+        if ($reviewer->user_id !== $request->user()->id) {
+            return response()->json(['message' => 'Only the reviewer who uploaded this document can promote it.'], 403);
+        }
+        if ($reviewer->conflict_flagged) {
+            return response()->json(['message' => 'You cannot create a version while a conflict of interest is flagged.'], 403);
+        }
+
+        $submission = Submission::findOrFail($submissionId);
+        if (! $this->canCreateReviewerVersion($submission)) {
+            return response()->json(['message' => 'This submission can no longer accept new document versions.'], 422);
+        }
+
+        $doc = SubmissionReviewerDocument::where('submission_reviewer_id', $reviewer->id)
+            ->where('id', $documentId)
+            ->firstOrFail();
+
+        if (! Storage::exists($doc->path)) {
+            return response()->json(['message' => 'The document file could not be found.'], 404);
+        }
+
+        $nextVersion = $submission->versions()->max('version_number') + 1;
+        $safeName = preg_replace('/[^A-Za-z0-9._-]+/', '_', basename($doc->name ?: '')) ?: 'document';
+        $target = "uploads/{$submission->id}/v{$nextVersion}/{$safeName}";
+        Storage::copy($doc->path, $target);
+
+        $version = $this->recordReviewerVersion(
+            $submission,
+            $reviewer,
+            $nextVersion,
+            [$target],
+            $request->input('change_summary'),
+        );
+
+        return response()->json(['data' => $version], 201);
+    }
+
+    /**
+     * POST /api/submissions/{submissionId}/reviewers/{reviewerId}/version
+     *
+     * Upload a freshly edited file directly as a new reviewer-sourced version
+     * (the Documents-tab entry point). Only the assigned reviewer may do this.
+     */
+    public function uploadReviewerVersion(Request $request, string $submissionId, string $reviewerId): JsonResponse
+    {
+        $reviewer = SubmissionReviewer::with('user:id,name')
+            ->where('submission_id', $submissionId)
+            ->where('id', $reviewerId)
+            ->firstOrFail();
+
+        if ($reviewer->user_id !== $request->user()->id) {
+            return response()->json(['message' => 'Only the assigned reviewer can upload a reviewer version.'], 403);
+        }
+        if ($reviewer->conflict_flagged) {
+            return response()->json(['message' => 'You cannot create a version while a conflict of interest is flagged.'], 403);
+        }
+
+        $submission = Submission::with('submissionType')->findOrFail($submissionId);
+        if (! $this->canCreateReviewerVersion($submission)) {
+            return response()->json(['message' => 'This submission can no longer accept new document versions.'], 422);
+        }
+
+        $type        = $submission->submissionType;
+        $maxMb       = $type ? $type->max_file_size_mb : 8;
+        $allowedExts = $type ? $type->allowed_extensions : ['pdf', 'docx'];
+        $maxFiles    = $type ? $type->max_files : 5;
+
+        $request->validate([
+            'files'   => ['required', 'array', 'min:1', "max:{$maxFiles}"],
+            'files.*' => [
+                'file',
+                'max:' . ($maxMb * 1024),
+                function ($attr, $value, $fail) use ($allowedExts) {
+                    $detectedMime = $value->getMimeType() ?? '';
+                    $ext = strtolower($value->getClientOriginalExtension());
+                    if (! in_array($ext, $allowedExts)) {
+                        $fail("File extension '.{$ext}' is not allowed. Allowed: " . implode(', ', $allowedExts));
+                        return;
+                    }
+                    $blockedMimes = [
+                        'application/x-php', 'text/x-php', 'application/php',
+                        'application/x-httpd-php', 'application/x-httpd-php-source',
+                        'text/html', 'application/javascript', 'text/javascript',
+                        'application/x-sh', 'application/x-executable',
+                    ];
+                    if (in_array($detectedMime, $blockedMimes)) {
+                        $fail("File type '{$detectedMime}' is not permitted.");
+                    }
+                },
+            ],
+            'change_summary' => ['nullable', 'string', 'max:2000'],
+        ]);
+
+        $nextVersion = $submission->versions()->max('version_number') + 1;
+        $storedPaths = [];
+        $usedNames = [];
+        foreach ($request->file('files') as $file) {
+            $originalName = basename($file->getClientOriginalName());
+            $safeName = preg_replace('/[^A-Za-z0-9._-]+/', '_', $originalName) ?: '';
+            $extension = strtolower($file->getClientOriginalExtension());
+            if ($safeName === '' || ! str_contains($safeName, '.')) {
+                $safeName = (string) Str::uuid() . ($extension ? ".{$extension}" : '');
+            }
+            $base = pathinfo($safeName, PATHINFO_FILENAME) ?: 'document';
+            $ext = pathinfo($safeName, PATHINFO_EXTENSION);
+            $candidate = $safeName;
+            $index = 2;
+            while (in_array(strtolower($candidate), $usedNames, true)) {
+                $candidate = $base . '-' . $index . ($ext ? ".{$ext}" : '');
+                $index++;
+            }
+            $usedNames[] = strtolower($candidate);
+            $storedPaths[] = $file->storeAs("uploads/{$submission->id}/v{$nextVersion}", $candidate);
+        }
+
+        $version = $this->recordReviewerVersion(
+            $submission,
+            $reviewer,
+            $nextVersion,
+            $storedPaths,
+            $request->change_summary,
+        );
+
+        return response()->json(['data' => $version], 201);
+    }
+
+    /**
+     * Whether the submission can still accept a new reviewer-sourced version.
+     */
+    private function canCreateReviewerVersion(Submission $submission): bool
+    {
+        if ($submission->is_locked) {
+            return false;
+        }
+        return ! in_array($submission->status, ['ACCEPTED', 'REJECTED', 'WITHDRAWN', 'CANCELLED'], true);
+    }
+
+    /**
+     * Create the SubmissionVersion row for a reviewer-sourced version, bump the
+     * submission's current_version pointer, and record an audit entry.
+     */
+    private function recordReviewerVersion(Submission $submission, SubmissionReviewer $reviewer, int $nextVersion, array $paths, ?string $summary): SubmissionVersion
+    {
+        $name = $reviewer->user?->name ?? 'a reviewer';
+
+        $version = SubmissionVersion::create([
+            'submission_id'  => $submission->id,
+            'version_number' => $nextVersion,
+            'document_paths' => $paths,
+            'change_summary' => $summary ?: "Minor edits by {$name} (reviewer)",
+            'submitted_at'   => now(),
+            'created_by'     => $reviewer->user_id,
+            'source'         => 'reviewer',
+        ]);
+
+        $submission->update(['current_version' => $nextVersion]);
+
+        AuditLog::create([
+            'submission_id' => $submission->id,
+            'actor_id'      => $reviewer->user_id,
+            'action'        => 'REVIEWER_PROMOTED_VERSION',
+            'before_state'  => null,
+            'after_state'   => [
+                'version_number' => $nextVersion,
+                'reviewer_id'    => $reviewer->id,
+                'stage_id'       => $reviewer->stage_id,
+            ],
+        ]);
+
+        return $version;
     }
 
     /**

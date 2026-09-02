@@ -1153,19 +1153,20 @@ class SubmissionController extends Controller
 
             if ($stageDueAt === null && $stage->due_days) {
                 if ($previousStageDueAt !== null) {
-                    $stageDueAt = \Carbon\Carbon::parse($previousStageDueAt)
-                        ->addDays((int) $stage->due_days)
-                        ->toDateString();
+                    $stageDueAt = \App\Services\DueDateService::compute(
+                        \Carbon\Carbon::parse($previousStageDueAt),
+                        (int) $stage->due_days
+                    )->toDateString();
                 }
 
                 // Prefer the recorded stage-entry timestamp for accuracy.
                 if ($stageDueAt === null && $stage->id === $submission->current_stage_id && $submission->current_stage_entered_at) {
-                    $stageDueAt = $submission->current_stage_entered_at->copy()->addDays($stage->due_days)->toDateString();
+                    $stageDueAt = \App\Services\DueDateService::compute($submission->current_stage_entered_at, $stage->due_days)->toDateString();
                 } elseif ($stageDueAt === null && $stageReviewers->isNotEmpty()) {
                     // Legacy fallback for records predating this fix: use earliest assigned_at.
                     $earliest = $stageReviewers->min(fn($r) => $r->assigned_at);
                     if ($earliest) {
-                        $stageDueAt = $earliest->copy()->addDays($stage->due_days)->toDateString();
+                        $stageDueAt = \App\Services\DueDateService::compute($earliest, $stage->due_days)->toDateString();
                     }
                 }
             }
@@ -1180,7 +1181,7 @@ class SubmissionController extends Controller
                     $effectiveDue = $r->due_at?->toDateString()
                         ?? $stageDueAt
                         ?? ($stage->due_days
-                            ? $r->assigned_at->copy()->addDays($stage->due_days)->toDateString()
+                            ? \App\Services\DueDateService::compute($r->assigned_at, $stage->due_days)->toDateString()
                             : null);
                     return [
                         'id'     => $r->id,
@@ -1205,6 +1206,7 @@ class SubmissionController extends Controller
                 'order'           => $stage->order,
                 'role_label'      => $stage->stage_role_label,
                 'is_gatekeeper'   => (bool) $stage->is_gatekeeper,
+                'allows_finalize' => (bool) ($stage->allows_finalize ?? false),
                 'is_email_stage'  => $isEmailStage,
                 'can_email'       => $canEmail,
                 'reviewers_count' => $total,
@@ -1416,17 +1418,44 @@ class SubmissionController extends Controller
         }
 
         $base['versions']  = $s->relationLoaded('versions')
-            ? $s->versions->map(fn($v) => [
-                'id'             => $v->id,
-                'version_number' => $v->version_number,
-                'document_paths' => $v->document_paths,
-                'change_summary' => $v->change_summary,
-                'submitted_at'   => $v->submitted_at,
-                'file_count'     => count($v->document_paths),
-            ])->values()
+            ? $s->versions->loadMissing('creator:id,name')->map(function ($v) use ($s) {
+                $isReviewerVersion = ($v->source ?? 'submitter') === 'reviewer';
+                return [
+                    'id'             => $v->id,
+                    'version_number' => $v->version_number,
+                    'document_paths' => $v->document_paths,
+                    'change_summary' => $v->change_summary,
+                    'submitted_at'   => $v->submitted_at,
+                    'file_count'     => count($v->document_paths),
+                    'source'         => $v->source ?? 'submitter',
+                    'uploaded_by'    => ($isReviewerVersion && $this->canRevealVersionAuthor($s) && $v->creator)
+                        ? $v->creator->name
+                        : null,
+                ];
+            })->values()
             : [];
 
         return $base;
+    }
+
+    /**
+     * Whether the current viewer may see the name of a reviewer who promoted a
+     * version. Hidden from the submitter on gated reviews to preserve blindness.
+     */
+    private function canRevealVersionAuthor(Submission $s): bool
+    {
+        $viewer = auth()->user();
+        if (! $viewer) {
+            return false;
+        }
+        $roles = (array) ($viewer->roles ?? []);
+        if (count(array_intersect($roles, ['admin', 'coordinator'])) > 0) {
+            return true;
+        }
+        $isGated = $s->submissionType?->is_gated_review ?? false;
+        // Reviewers (anyone who is not the submitter) may see the name; on gated
+        // reviews the submitter may not.
+        return ! ($isGated && $s->submitter_id === $viewer->id);
     }
 
     /**
@@ -1447,7 +1476,7 @@ class SubmissionController extends Controller
         $effectiveDate = function ($a) {
             if ($a->due_at) return $a->due_at->toDateString();
             if ($a->stage?->due_days && $a->assigned_at) {
-                return $a->assigned_at->copy()->addDays($a->stage->due_days)->toDateString();
+                return \App\Services\DueDateService::compute($a->assigned_at, $a->stage->due_days)->toDateString();
             }
             return null;
         };

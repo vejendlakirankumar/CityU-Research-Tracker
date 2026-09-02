@@ -111,22 +111,24 @@ function StageEditor({
 
       {/* Pipeline preview */}
       {stages.length > 0 && (
-        <div className="mb-3 flex items-center gap-1 overflow-x-auto pb-1">
-          {stages.map((s, i) => (
-            <div key={i} className="flex items-center gap-1 flex-shrink-0">
-              <button type="button" onClick={() => setSelected(i)}
-                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-xs whitespace-nowrap ${
-                  i === selected ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-gray-200 bg-white text-gray-600 hover:bg-gray-50'
-                }`}>
-                <span className="font-bold">{i + 1}</span>
-                <span className="max-w-[8rem] truncate">{s.name || 'Untitled'}</span>
-                {flagsOf(s).map(({ key, Icon, cls, title }) => <Icon key={key} className={`w-3 h-3 ${cls}`} aria-label={title} />)}
-              </button>
-              {i < stages.length - 1 && <ChevronRight className="w-3.5 h-3.5 text-gray-300 flex-shrink-0" />}
-            </div>
-          ))}
-          <ChevronRight className="w-3.5 h-3.5 text-gray-300 flex-shrink-0" />
-          <span className="flex items-center gap-1 px-2 py-1 rounded-lg bg-green-50 text-green-700 text-xs flex-shrink-0"><CheckCircle2 className="w-3 h-3" /> Complete</span>
+        <div className="mb-3 rounded-xl border border-slate-200 bg-gradient-to-r from-slate-50 via-slate-50 to-blue-50/60 px-3 py-2">
+          <div className="flex items-center gap-1 overflow-x-auto pb-0.5">
+            {stages.map((s, i) => (
+              <div key={i} className="flex items-center gap-1 flex-shrink-0">
+                <button type="button" onClick={() => setSelected(i)}
+                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-xs whitespace-nowrap shadow-sm ${
+                    i === selected ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-gray-200 bg-white text-gray-600 hover:bg-gray-50'
+                  }`}>
+                  <span className="font-bold">{i + 1}</span>
+                  <span className="max-w-[8rem] truncate">{s.name || 'Untitled'}</span>
+                  {flagsOf(s).map(({ key, Icon, cls, title }) => <Icon key={key} className={`w-3 h-3 ${cls}`} aria-label={title}><title>{title}</title></Icon>)}
+                </button>
+                {i < stages.length - 1 && <ChevronRight className="w-3.5 h-3.5 text-gray-300 flex-shrink-0" />}
+              </div>
+            ))}
+            <ChevronRight className="w-3.5 h-3.5 text-gray-300 flex-shrink-0" />
+            <span className="flex items-center gap-1 px-2 py-1 rounded-lg border border-green-200 bg-white text-green-700 text-xs flex-shrink-0 shadow-sm"><CheckCircle2 className="w-3 h-3" /> Complete</span>
+          </div>
         </div>
       )}
 
@@ -155,7 +157,7 @@ function StageEditor({
                 <span className={`w-5 h-5 flex items-center justify-center rounded-full text-white text-[10px] font-bold flex-shrink-0 ${i === selected ? 'bg-blue-600' : 'bg-gray-400'}`}>{i + 1}</span>
                 <span className="flex-1 text-xs text-gray-700 truncate">{s.name || <span className="text-gray-400 italic">Untitled</span>}</span>
                 <span className="flex items-center gap-0.5">
-                  {flagsOf(s).map(({ key, Icon, cls, title }) => <Icon key={key} className={`w-3 h-3 ${cls}`} aria-label={title} />)}
+                  {flagsOf(s).map(({ key, Icon, cls, title }) => <Icon key={key} className={`w-3 h-3 ${cls}`} aria-label={title}><title>{title}</title></Icon>)}
                 </span>
                 <button type="button" onClick={(e) => { e.stopPropagation(); moveUp(i) }} disabled={i === 0} className="p-0.5 text-gray-300 hover:text-gray-600 disabled:opacity-0"><ArrowUp className="w-3 h-3" /></button>
                 <button type="button" onClick={(e) => { e.stopPropagation(); moveDown(i) }} disabled={i === stages.length - 1} className="p-0.5 text-gray-300 hover:text-gray-600 disabled:opacity-0"><ArrowDown className="w-3 h-3" /></button>
@@ -235,14 +237,14 @@ function StageEditor({
               {/* Behavior flags as toggle chips */}
               <div className="flex flex-wrap gap-1.5 mb-1">
                 {([
-                  { field: 'is_gatekeeper', Icon: Shield, label: 'Gatekeeper', on: 'bg-purple-100 text-purple-700 border-purple-300' },
-                  { field: 'is_anonymous', Icon: EyeOff, label: 'Anonymous', on: 'bg-yellow-100 text-yellow-700 border-yellow-300' },
-                  { field: 'is_email_stage', Icon: Mail, label: 'Email stage', on: 'bg-blue-100 text-blue-700 border-blue-300' },
-                  { field: 'allows_finalize', Icon: Flag, label: 'Can end workflow', on: 'bg-green-100 text-green-700 border-green-300' },
-                ] as const).map(({ field, Icon, label, on }) => {
+                  { field: 'is_gatekeeper', Icon: Shield, label: 'Gatekeeper', on: 'bg-purple-100 text-purple-700 border-purple-300', tip: 'One reviewer manages submitter communication, consolidates feedback, and makes the final advance-or-return decision. Only one per workflow.' },
+                  { field: 'is_anonymous', Icon: EyeOff, label: 'Anonymous', on: 'bg-yellow-100 text-yellow-700 border-yellow-300', tip: 'Reviewer identities are hidden from the submitter and each other.' },
+                  { field: 'is_email_stage', Icon: Mail, label: 'Email stage', on: 'bg-blue-100 text-blue-700 border-blue-300', tip: 'The assignee sends a templated email to the student; approval controls are not used.' },
+                  { field: 'allows_finalize', Icon: Flag, label: 'Can end workflow', on: 'bg-green-100 text-green-700 border-green-300', tip: 'On approval, the decider may finish the workflow here instead of continuing to later stages.' },
+                ] as const).map(({ field, Icon, label, on, tip }) => {
                   const active = !!sel[field]
                   return (
-                    <button key={field} type="button"
+                    <button key={field} type="button" title={tip}
                       onClick={() => update(selected, { [field]: !active })}
                       className={`flex items-center gap-1 px-2 py-1 rounded-lg border text-xs font-medium ${active ? on : 'bg-white text-gray-500 border-gray-200 hover:bg-gray-100'}`}>
                       <Icon className="w-3 h-3" /> {label}
@@ -274,13 +276,14 @@ function WorkflowModal({
     initial
       ? {
           name: initial.name,
+          description: initial.description ?? '',
           revision_restart_policy: initial.revision_restart_policy,
           final_status_on_pass: initial.final_status_on_pass,
           is_active: initial.is_active,
           stages: initial.stages.map(({ id: _id, workflow_id: _wid, ...rest }) => rest),
         }
       : {
-          name: '', revision_restart_policy: 'FULL_RESTART',
+          name: '', description: '', revision_restart_policy: 'FULL_RESTART',
           final_status_on_pass: 'ACCEPTED', is_active: true, stages: [],
         },
   )
@@ -299,20 +302,18 @@ function WorkflowModal({
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><XCircle className="w-5 h-5" /></button>
         </div>
         <div className="px-6 py-5 space-y-4">
-          {/* Name */}
-          <div>
-            <label className="text-xs font-medium text-gray-600 mb-1 block">Workflow Name *</label>
-            <input
-              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              placeholder="e.g. Standard Dissertation Review"
-              value={form.name}
-              onChange={(e) => setField('name', e.target.value)}
-            />
-          </div>
-
-          {/* Policy */}
-          <div className="grid grid-cols-2 gap-3">
-            <div>
+          {/* Row 1: name, policies, active */}
+          <div className="grid grid-cols-1 md:grid-cols-12 gap-3">
+            <div className="md:col-span-4">
+              <label className="text-xs font-medium text-gray-600 mb-1 block">Workflow Name *</label>
+              <input
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                placeholder="e.g. Standard Dissertation Review"
+                value={form.name}
+                onChange={(e) => setField('name', e.target.value)}
+              />
+            </div>
+            <div className="md:col-span-3">
               <label className="text-xs font-medium text-gray-600 mb-1 block">On Revision Required</label>
               <select
                 className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
@@ -323,7 +324,7 @@ function WorkflowModal({
                 <option value="RESUME_FROM_REVISION">Resume from revision stage</option>
               </select>
             </div>
-            <div>
+            <div className="md:col-span-3">
               <label className="text-xs font-medium text-gray-600 mb-1 block">Final status on pass</label>
               <select
                 className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
@@ -334,9 +335,30 @@ function WorkflowModal({
                 <option value="CONDITIONALLY_ACCEPTED">Conditionally Accepted</option>
               </select>
             </div>
+            <div className="md:col-span-2">
+              <div className="flex items-center gap-1 mb-1">
+                <label className="text-xs font-medium text-gray-600">Active</label>
+                <span className="text-gray-400 cursor-help" title="When on, this workflow is used for new submissions of this category.">
+                  <Info className="w-3 h-3" />
+                </span>
+              </div>
+              <div className="h-[38px] flex items-center">
+                <Toggle checked={form.is_active} onChange={(v) => setField('is_active', v)} label={form.is_active ? 'On' : 'Off'} />
+              </div>
+            </div>
           </div>
 
-          <Toggle checked={form.is_active} onChange={(v) => setField('is_active', v)} label="Active (used for new submissions of this category)" />
+          {/* Row 2: description */}
+          <div>
+            <label className="text-xs font-medium text-gray-600 mb-1 block">Description</label>
+            <textarea
+              rows={2}
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-y"
+              placeholder="Optional summary of what this workflow is for."
+              value={form.description}
+              onChange={(e) => setField('description', e.target.value)}
+            />
+          </div>
 
           {/* Stages */}
           <div className="pt-2 border-t border-gray-100">

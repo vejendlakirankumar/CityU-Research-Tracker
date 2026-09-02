@@ -61,6 +61,7 @@ class WorkflowController extends Controller
     {
         $data = $request->validate([
             'name'                      => ['required', 'string', 'max:255'],
+            'description'               => ['sometimes', 'nullable', 'string', 'max:2000'],
             'revision_restart_policy'   => ['in:FULL_RESTART,RESUME_FROM_REVISION'],
             'final_status_on_pass'      => ['in:ACCEPTED,CONDITIONALLY_ACCEPTED'],
             'is_active'                 => ['boolean'],
@@ -83,6 +84,7 @@ class WorkflowController extends Controller
         $workflow = WorkflowDefinition::create([
             'id'                      => Str::uuid()->toString(),
             'name'                    => $data['name'],
+            'description'             => $data['description'] ?? null,
             'revision_restart_policy' => $data['revision_restart_policy'] ?? 'FULL_RESTART',
             'final_status_on_pass'    => $data['final_status_on_pass'] ?? 'ACCEPTED',
             'is_active'               => $data['is_active'] ?? true,
@@ -106,6 +108,7 @@ class WorkflowController extends Controller
 
         $data = $request->validate([
             'name'                      => ['sometimes', 'string', 'max:255'],
+            'description'               => ['sometimes', 'nullable', 'string', 'max:2000'],
             'revision_restart_policy'   => ['in:FULL_RESTART,RESUME_FROM_REVISION'],
             'final_status_on_pass'      => ['in:ACCEPTED,CONDITIONALLY_ACCEPTED'],
             'is_active'                 => ['boolean'],
@@ -127,7 +130,7 @@ class WorkflowController extends Controller
         ]);
 
         $workflow->update(array_filter(array_intersect_key($data, array_flip([
-            'name', 'revision_restart_policy', 'final_status_on_pass', 'is_active',
+            'name', 'description', 'revision_restart_policy', 'final_status_on_pass', 'is_active',
         ])), fn($v) => $v !== null));
 
         if (array_key_exists('stages', $data)) {

@@ -89,6 +89,8 @@ class SystemController extends Controller
             'grace_period_consider_holidays' => ['sometimes', 'boolean'],
             'grace_period_holidays_country'  => ['sometimes', 'string', 'max:5', 'nullable'],
             'max_extension_requests'         => ['sometimes', 'integer', 'min:0', 'max:20'],
+            'due_date_exclude_weekends'      => ['sometimes', 'boolean'],
+            'due_date_consider_holidays'     => ['sometimes', 'boolean'],
         ]);
 
         $org = OrganizationSetting::current();

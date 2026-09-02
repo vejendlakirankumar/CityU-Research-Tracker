@@ -67,7 +67,7 @@ export default function DashboardPage() {
   const navigate = useNavigate()
 
   const { data, isLoading } = useQuery<DashboardStats>({
-    queryKey: ['dashboard-stats'],
+    queryKey: ['dashboard-stats', activeRole],
     queryFn: () => api.get('/dashboard/stats').then(r => r.data),
     staleTime: 60_000,
   })

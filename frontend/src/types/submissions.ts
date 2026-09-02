@@ -53,6 +53,10 @@ export interface SubmissionVersion {
   change_summary: string | null
   submitted_at: string
   file_count: number
+  /** 'submitter' (default) or 'reviewer' when a reviewer promoted their edited copy. */
+  source?: 'submitter' | 'reviewer'
+  /** Name of the reviewer who promoted this version; null when hidden (blind review). */
+  uploaded_by?: string | null
 }
 
 export interface SubmissionListItem {
@@ -266,6 +270,7 @@ export interface ReviewProgressStage {
   order: number
   role_label: string
   is_gatekeeper: boolean
+  allows_finalize: boolean
   is_email_stage: boolean
   can_email: boolean
   reviewers_count: number

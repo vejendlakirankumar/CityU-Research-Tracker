@@ -355,6 +355,8 @@ Route::middleware(['auth:sanctum', 'active-role'])->group(function () {
         Route::get('/{id}/reviewers/{reviewerId}/annotated-document', [SubmissionReviewerController::class, 'downloadAnnotatedDocument']);
         Route::get('/{id}/reviewers/{reviewerId}/documents/{documentId}',    [SubmissionReviewerController::class, 'downloadDocument']);
         Route::delete('/{id}/reviewers/{reviewerId}/documents/{documentId}', [SubmissionReviewerController::class, 'deleteDocument']);
+        Route::post('/{id}/reviewers/{reviewerId}/documents/{documentId}/promote', [SubmissionReviewerController::class, 'promoteDocument'])->middleware('throttle:10,1');
+        Route::post('/{id}/reviewers/{reviewerId}/version', [SubmissionReviewerController::class, 'uploadReviewerVersion'])->middleware('throttle:10,1');
         Route::post('/{id}/reviewers/{reviewerId}/request-extension', [SubmissionReviewerController::class, 'requestExtension'])->middleware('throttle:10,1');
         Route::post('/{id}/reviewers/{reviewerId}/flag-conflict',      [SubmissionReviewerController::class, 'flagConflict'])->middleware('throttle:10,1');
         Route::post('/{id}/reviewers/{reviewerId}/resolve-conflict',   [SubmissionReviewerController::class, 'resolveConflict'])->middleware('throttle:10,1');

@@ -12,7 +12,7 @@ import {
   Gavel, CircleAlert, Info, ListChecks,
   Calendar, EyeOff, ExternalLink, Eye, Printer, Plus, Send, Save,
   ChevronUp, ChevronDown,
-  CalendarDays, Ban, ShieldCheck,
+  CalendarDays, Ban, ShieldCheck, Flag,
 } from 'lucide-react'
 import { renderAsync } from 'docx-preview'
 import * as pdfjsLib from 'pdfjs-dist'
@@ -631,6 +631,17 @@ function ReviewProgressPanel({
 
   if (stages.length === 0) return null
 
+  // Hide the whole panel until at least one reviewer is assigned so coordinators
+  // use the editable Reviewer Assignments panel first without duplicate confusion.
+  const hasAnyReviewers = stages.some(s => s.reviewers_count > 0)
+  if (!hasAnyReviewers) return null
+
+  const completedStages = stages.filter(s => s.status === 'completed').length
+  const activeStage = stages.find(s => ['assigned', 'in_progress', 'needs_assignment'].includes(s.status))
+  const pct = Math.round((completedStages / stages.length) * 100)
+  // A gatekeeper/finalize stage can close the workflow early; later stages are conditional.
+  const finalizeIdx = stages.findIndex(s => s.allows_finalize)
+
   // Submitter in a gated review — show gatekeeper meeting section before the stage list
   const showSubmitterGatekeeperSection =
     allowMeetings && isGatedReview && (userMeetingCtx?.is_submitter ?? false) &&
@@ -657,6 +668,48 @@ function ReviewProgressPanel({
             <UserPlus className="w-3 h-3" />
             Assign Reviewers
           </button>
+        )}
+      </div>
+
+      {/* Segmented progress bar — visual-first status summary */}
+      <div className="mb-4">
+        <div className="flex items-center justify-between mb-1.5">
+          <span className="text-xs font-medium text-gray-600">
+            {completedStages === stages.length
+              ? 'All stages complete'
+              : activeStage
+                ? <>Current: <span className="text-gray-800 font-semibold">{activeStage.name}</span></>
+                : `${completedStages} of ${stages.length} complete`}
+          </span>
+          <span className="text-xs text-gray-400 tabular-nums">{completedStages}/{stages.length} stages · {pct}%</span>
+        </div>
+        <div className="flex gap-1 items-center">
+          {stages.map((s, i) => {
+            const c = STAGE_STATUS_CONFIG[s.status] ?? STAGE_STATUS_CONFIG.pending
+            const optional = finalizeIdx !== -1 && i > finalizeIdx
+            return (
+              <div key={s.id} className="relative flex-1">
+                <div
+                  title={`${i + 1}. ${s.name} — ${c.label}${s.allows_finalize ? ' · can close workflow' : ''}${optional ? ' · only if not closed earlier' : ''}`}
+                  className={`h-2 rounded-full ${c.numCls.split(' ')[0]} ${optional ? 'opacity-30' : ''}`}
+                />
+                {s.allows_finalize && (
+                  <span className="absolute -right-1 top-1/2 -translate-y-1/2 z-10 bg-white rounded-full p-0.5 shadow-sm border border-green-300" title="Can close the workflow here">
+                    <Flag className="w-2.5 h-2.5 text-green-600" />
+                  </span>
+                )}
+              </div>
+            )
+          })}
+        </div>
+        {finalizeIdx !== -1 && (
+          <p className="mt-1.5 flex items-center gap-1 text-xs text-green-700">
+            <Flag className="w-3 h-3 flex-shrink-0" />
+            <span>
+              <span className="font-medium">{stages[finalizeIdx].name}</span> can close the workflow on approval
+              {finalizeIdx < stages.length - 1 ? ' — later stages run only if it continues' : ''}.
+            </span>
+          </p>
         )}
       </div>
 
@@ -734,12 +787,17 @@ function ReviewProgressPanel({
                     {stage.is_gatekeeper && (
                       <span className="ml-1.5 text-xs text-purple-600 bg-purple-50 px-1.5 py-0.5 rounded-full">Gatekeeper</span>
                     )}
+                    {stage.allows_finalize && (
+                      <span className="ml-1.5 text-xs text-green-700 bg-green-50 px-1.5 py-0.5 rounded-full inline-flex items-center gap-1">
+                        <Flag className="w-3 h-3" /> Can close
+                      </span>
+                    )}
                   </p>
                   <div className="flex items-center gap-3 flex-wrap">
                     {stage.role_label && <span className="text-xs text-gray-400">{stage.role_label}</span>}
                     {stage.due_days ? (
                       <span className="flex items-center gap-1 text-xs text-gray-400">
-                        <Clock className="w-3 h-3" /> {stage.due_days}d review window
+                        <Clock className="w-3 h-3" /> {stage.due_days}d
                       </span>
                     ) : null}
                     {stage.stage_due_at ? (
@@ -2645,10 +2703,12 @@ function DocCompareViewer({
 function DocumentsTab({ sub, canEdit, canRunSimilarity }: { sub: Submission; canEdit: boolean; canRunSimilarity?: boolean }) {
   const qc = useQueryClient()
   const toast = useToastHelpers()
+  const user = useAuthStore((s) => s.user)
   const [viewingDoc, setViewingDoc] = useState<ViewingDoc | null>(null)
   const [showCompare, setShowCompare] = useState(false)
   const [showSimilarity, setShowSimilarity] = useState(false)
   const [showUploadForm, setShowUploadForm] = useState(false)
+  const [uploadMode, setUploadMode] = useState<'submitter' | 'reviewer'>('submitter')
   const [uploadFiles, setUploadFiles] = useState<File[]>([])
   const [changeSummary, setChangeSummary] = useState('')
   const [uploadError, setUploadError] = useState('')
@@ -2659,6 +2719,25 @@ function DocumentsTab({ sub, canEdit, canRunSimilarity }: { sub: Submission; can
   const maxSizeMb   = sub.submission_type?.max_file_size_mb ?? 8
   const maxFiles    = sub.submission_type?.max_files ?? 5
 
+  // A reviewer assigned to this submission may upload their edited copy directly
+  // as a new version (mirrors "Set as new version" in the Feedback tab).
+  const { data: reviewersData } = useQuery<{ data: SubmissionReviewer[] }>({
+    queryKey: ['submission-reviewers', sub.id],
+    queryFn: () => api.get(`/submissions/${sub.id}/reviewers`).then(r => r.data),
+    enabled: !!user,
+  })
+  const myAssignment = reviewersData?.data?.find(r => r.user_id === user?.id && !r.conflict_flagged) ?? null
+  const canReviewerUpload = !!myAssignment && !sub.is_locked &&
+    !['ACCEPTED', 'REJECTED', 'WITHDRAWN', 'CANCELLED'].includes(sub.status)
+
+  const openUploadForm = (mode: 'submitter' | 'reviewer') => {
+    setUploadMode(mode)
+    setUploadFiles([])
+    setChangeSummary('')
+    setUploadError('')
+    setShowUploadForm(true)
+  }
+
   const handleUpload = async () => {
     if (uploadFiles.length === 0) return
     setUploadError('')
@@ -2667,7 +2746,10 @@ function DocumentsTab({ sub, canEdit, canRunSimilarity }: { sub: Submission; can
       const fd = new FormData()
       uploadFiles.forEach(f => fd.append('files[]', f))
       if (changeSummary.trim()) fd.append('change_summary', changeSummary.trim())
-      await api.post(`/submissions/${sub.id}/versions`, fd, {
+      const endpoint = uploadMode === 'reviewer' && myAssignment
+        ? `/submissions/${sub.id}/reviewers/${myAssignment.id}/version`
+        : `/submissions/${sub.id}/versions`
+      await api.post(endpoint, fd, {
         headers: { 'Content-Type': 'multipart/form-data' },
       })
       qc.invalidateQueries({ queryKey: ['submission', sub.id] })
@@ -2797,11 +2879,21 @@ function DocumentsTab({ sub, canEdit, canRunSimilarity }: { sub: Submission; can
             )}
             {canEdit && (
               <button
-                onClick={() => setShowUploadForm(v => !v)}
+                onClick={() => (showUploadForm && uploadMode === 'submitter' ? setShowUploadForm(false) : openUploadForm('submitter'))}
                 className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-200 rounded-lg text-sm text-gray-600 hover:bg-gray-50"
               >
                 <Upload className="w-4 h-4" />
                 Upload New Version
+              </button>
+            )}
+            {!canEdit && canReviewerUpload && (
+              <button
+                onClick={() => (showUploadForm && uploadMode === 'reviewer' ? setShowUploadForm(false) : openUploadForm('reviewer'))}
+                className="flex items-center gap-1.5 px-3 py-1.5 border border-amber-200 text-amber-700 bg-amber-50 rounded-lg text-sm hover:bg-amber-100"
+                title="Upload your edited copy as the latest version for later-stage reviewers"
+              >
+                <UserCheck className="w-4 h-4" />
+                Upload reviewer version
               </button>
             )}
           </div>
@@ -2809,8 +2901,15 @@ function DocumentsTab({ sub, canEdit, canRunSimilarity }: { sub: Submission; can
 
         {/* Inline upload form */}
         {showUploadForm && (
-          <div className="mb-4 p-4 bg-blue-50 rounded-xl border border-blue-100 space-y-3">
-            <p className="text-sm font-semibold text-blue-800">Upload New Version</p>
+          <div className={`mb-4 p-4 rounded-xl border space-y-3 ${uploadMode === 'reviewer' ? 'bg-amber-50 border-amber-100' : 'bg-blue-50 border-blue-100'}`}>
+            <p className={`text-sm font-semibold ${uploadMode === 'reviewer' ? 'text-amber-800' : 'text-blue-800'}`}>
+              {uploadMode === 'reviewer' ? 'Upload reviewer version' : 'Upload New Version'}
+            </p>
+            {uploadMode === 'reviewer' && (
+              <p className="text-xs text-amber-700">
+                This becomes the latest document that later-stage reviewers will review. It will be labelled as uploaded by you.
+              </p>
+            )}
             <div>
               <label className="block text-xs text-gray-600 mb-1">
                 Files * — allowed: {allowedExts.join(', ')} · max {maxSizeMb} MB each · up to {maxFiles} file{maxFiles !== 1 ? 's' : ''}
@@ -2868,7 +2967,7 @@ function DocumentsTab({ sub, canEdit, canRunSimilarity }: { sub: Submission; can
             <p className="text-sm text-gray-500">No files uploaded yet.</p>
             {canEdit && (
               <button
-                onClick={() => setShowUploadForm(true)}
+                onClick={() => openUploadForm('submitter')}
                 className="mt-3 flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700"
               >
                 <Upload className="w-4 h-4" /> Upload Document
@@ -2889,6 +2988,12 @@ function DocumentsTab({ sub, canEdit, canRunSimilarity }: { sub: Submission; can
                         <p className="text-sm font-semibold text-gray-800">
                           {v.version_number === 0 ? 'Original Submission' : `Revision ${v.version_number}`}
                         </p>
+                        {v.source === 'reviewer' && (
+                          <span className="flex items-center gap-1 text-xs bg-amber-100 text-amber-700 border border-amber-200 px-1.5 py-0.5 rounded-full font-medium">
+                            <UserCheck className="w-3 h-3" />
+                            Reviewer edit{v.uploaded_by ? ` — ${v.uploaded_by}` : ''}
+                          </span>
+                        )}
                         {isLatest && (
                           <span className="text-xs bg-green-500 text-white px-1.5 py-0.5 rounded-full font-medium">Latest</span>
                         )}
@@ -3872,6 +3977,7 @@ function ReviewerDecisionPanel({
   // Reviewer feedback documents (multi-file)
   const [annotatedFiles, setAnnotatedFiles] = useState<File[]>([])
   const [fileError, setFileError] = useState('')
+  const [promoteDocId, setPromoteDocId] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   // Saved-draft state
@@ -3981,6 +4087,24 @@ function ReviewerDecisionPanel({
       toast.success('Removed.', 'The document was removed.')
     },
     onError: (e: any) => toast.error('Could not remove.', e?.response?.data?.message ?? 'Please try again.'),
+  })
+
+  // Promote one of the reviewer's own feedback documents to a new submission
+  // version so later-stage reviewers review the edited copy as the latest.
+  const promoteDocMutation = useMutation<AxiosResponse, unknown, string>({
+    mutationFn: (documentId) =>
+      api.post(`/submissions/${submissionId}/reviewers/${myAssignment!.id}/documents/${documentId}/promote`, {}),
+    onSuccess: () => {
+      setPromoteDocId(null)
+      qc.invalidateQueries({ queryKey: ['submission', submissionId] })
+      qc.invalidateQueries({ queryKey: ['submission-reviewers', submissionId] })
+      qc.invalidateQueries({ queryKey: ['submission-feedback', submissionId] })
+      toast.success('Version created.', 'Your document is now the latest version for later stages.')
+    },
+    onError: (e: any) => {
+      setPromoteDocId(null)
+      toast.error('Could not create version.', e?.response?.data?.message ?? 'Please try again.')
+    },
   })
 
   const downloadMyDoc = async (documentId: string, filename: string) => {
@@ -4138,6 +4262,18 @@ function ReviewerDecisionPanel({
             Attach one or more files to send back — the annotated dissertation, a copy of the handbook, examples, etc. The submitter will be able to view and download them. PDF or Word, up to 25&nbsp;MB each (max 10 files).
           </p>
 
+          {promoteDocId && (
+            <ConfirmModal
+              title="Set as new version?"
+              message="This document will be added to the Documents tab as the latest version that later-stage reviewers will review. Your feedback copy stays here too."
+              confirmLabel="Create version"
+              confirmClass="bg-amber-600 hover:bg-amber-700"
+              onConfirm={() => promoteDocMutation.mutate(promoteDocId)}
+              onCancel={() => setPromoteDocId(null)}
+              loading={promoteDocMutation.isPending}
+            />
+          )}
+
           {/* Already-uploaded documents (persisted on the server) */}
           {myAssignment.documents && myAssignment.documents.length > 0 && (
             <div className="space-y-2 mb-2">
@@ -4146,6 +4282,14 @@ function ReviewerDecisionPanel({
                   <FileText className="w-4 h-4 text-green-500 shrink-0" />
                   <span className="text-sm text-green-800 truncate flex-1">{doc.name}</span>
                   {doc.size != null && <span className="text-xs text-green-500 shrink-0">{(doc.size / 1024 / 1024).toFixed(1)} MB</span>}
+                  <button
+                    type="button"
+                    onClick={() => setPromoteDocId(doc.id)}
+                    className="flex items-center gap-1 text-xs font-medium text-amber-700 border border-amber-300 bg-amber-50 rounded-lg px-2 py-1 hover:bg-amber-100 shrink-0"
+                    title="Set as the new document version for later-stage reviewers"
+                  >
+                    <UserCheck className="w-3.5 h-3.5" /> Set as new version
+                  </button>
                   <button
                     type="button"
                     onClick={() => downloadMyDoc(doc.id, doc.name)}
@@ -4169,8 +4313,7 @@ function ReviewerDecisionPanel({
           )}
 
           {/* Newly selected files, waiting to be uploaded */}
-          {annotatedFiles.length > 0 && (
-            <div className="space-y-2 mb-2">
+          {annotatedFiles.length > 0 && (            <div className="space-y-2 mb-2">
               {annotatedFiles.map((f, i) => (
                 <div key={`${f.name}-${i}`} className="flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2.5">
                   <FileText className="w-4 h-4 text-blue-500 shrink-0" />

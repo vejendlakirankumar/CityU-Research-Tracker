@@ -17,7 +17,7 @@ class DashboardController extends Controller
     public function stats(Request $request): JsonResponse
     {
         $user  = $request->user();
-        $roles = $user->roles ?? [];
+        $roles = $user->effectiveRoles();
 
         if (in_array('admin', $roles)) {
             return $this->adminStats();

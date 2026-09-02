@@ -13,7 +13,7 @@ class SubmissionVersion extends Model
 
     protected $fillable = [
         'submission_id', 'version_number', 'document_paths',
-        'change_summary', 'submitted_at', 'created_by',
+        'change_summary', 'submitted_at', 'created_by', 'source',
     ];
 
     protected function casts(): array

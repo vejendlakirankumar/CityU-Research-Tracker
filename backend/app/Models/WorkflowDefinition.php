@@ -11,7 +11,7 @@ class WorkflowDefinition extends Model
     protected $keyType = 'string';
 
     protected $fillable = [
-        'id', 'name',
+        'id', 'name', 'description',
         'revision_restart_policy', 'final_status_on_pass', 'is_active',
     ];
 

@@ -1030,6 +1030,8 @@ interface ReviewSettings {
   grace_period_consider_holidays: boolean
   grace_period_holidays_country: string
   max_extension_requests: number
+  due_date_exclude_weekends: boolean
+  due_date_consider_holidays: boolean
 }
 
 function ReviewTab() {
@@ -1044,6 +1046,8 @@ function ReviewTab() {
       grace_period_consider_holidays: r.data.grace_period_consider_holidays ?? false,
       grace_period_holidays_country:  r.data.grace_period_holidays_country ?? 'US',
       max_extension_requests:         r.data.max_extension_requests ?? 3,
+      due_date_exclude_weekends:      r.data.due_date_exclude_weekends ?? false,
+      due_date_consider_holidays:     r.data.due_date_consider_holidays ?? false,
     })).catch(() => setError('Failed to load review settings.'))
   }, [])
 
@@ -1094,6 +1098,42 @@ function ReviewTab() {
             </span>
           </button>
         </Field>
+      </div>
+
+      <div className="mt-8 pt-6 border-t border-gray-200">
+        <SectionHeader
+          title="Due Date Calculation"
+          subtitle="Control whether weekends and public holidays are skipped when computing each stage's reviewer due date."
+        />
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+          <Field label="Exclude Weekends (Sat/Sun)" hint="When enabled, Saturdays and Sundays do not count toward a stage's due days.">
+            <button
+              onClick={() => set('due_date_exclude_weekends', !data.due_date_exclude_weekends)}
+              className="flex items-center gap-2 mt-1"
+            >
+              {data.due_date_exclude_weekends
+                ? <ToggleRight className="w-8 h-8 text-blue-600" />
+                : <ToggleLeft  className="w-8 h-8 text-gray-400" />}
+              <span className="text-sm text-gray-700">
+                {data.due_date_exclude_weekends ? 'Enabled — weekends are skipped' : 'Disabled — all days count'}
+              </span>
+            </button>
+          </Field>
+
+          <Field label="Exclude Public Holidays" hint="When enabled, public holidays for the country code above are skipped when computing due dates.">
+            <button
+              onClick={() => set('due_date_consider_holidays', !data.due_date_consider_holidays)}
+              className="flex items-center gap-2 mt-1"
+            >
+              {data.due_date_consider_holidays
+                ? <ToggleRight className="w-8 h-8 text-blue-600" />
+                : <ToggleLeft  className="w-8 h-8 text-gray-400" />}
+              <span className="text-sm text-gray-700">
+                {data.due_date_consider_holidays ? 'Enabled — holidays are skipped' : 'Disabled — all days count'}
+              </span>
+            </button>
+          </Field>
+        </div>
       </div>
 
       <SaveBar saving={saving} saved={saved} onSave={save} />
