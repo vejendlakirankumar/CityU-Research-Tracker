@@ -10,7 +10,7 @@ import {
   Search, UserCheck, Clock, MessageSquare, History,
   ThumbsUp, ThumbsDown, RotateCcw,
   Gavel, CircleAlert, Info, ListChecks,
-  Calendar, EyeOff, ExternalLink, Eye, Printer, Plus, Send,
+  Calendar, EyeOff, ExternalLink, Eye, Printer, Plus, Send, Save,
   ChevronUp, ChevronDown,
   CalendarDays, Ban, ShieldCheck,
 } from 'lucide-react'
@@ -3313,6 +3313,26 @@ function FeedbackTab({
       external: true,
     })
   }
+
+  // Multi-file reviewer feedback documents (annotations, handbook, examples…).
+  const downloadReviewerDoc = async (reviewerId: string, documentId: string, filename: string) => {
+    const res = await api.get(`/submissions/${submissionId}/reviewers/${reviewerId}/documents/${documentId}`, { responseType: 'blob' })
+    const url = URL.createObjectURL(res.data)
+    const a = document.createElement('a')
+    a.href = url; a.download = filename; a.click()
+    URL.revokeObjectURL(url)
+  }
+  const openReviewerDoc = (reviewerId: string, documentId: string, filename: string) => {
+    const ext = filename.split('.').pop()?.toLowerCase()
+    setViewingDoc({
+      submissionId,
+      versionNumber: 0,
+      filename,
+      fileType: ext === 'pdf' ? 'pdf' : 'docx',
+      apiPath: `/submissions/${submissionId}/reviewers/${reviewerId}/documents/${documentId}`,
+      external: true,
+    })
+  }
   const appeal = data?.appeal ?? null
   const isDraft = submissionStatus === 'DRAFT'
 
@@ -3393,6 +3413,35 @@ function FeedbackTab({
                     >
                       <Download className="w-3.5 h-3.5" /> Download
                     </button>
+                  </div>
+                )}
+                {item.documents && item.documents.length > 0 && (
+                  <div className="mt-3 space-y-2">
+                    {item.documents.map(doc => (
+                      <div key={doc.id} className="flex items-center gap-3 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2.5">
+                        <FileText className="w-4 h-4 text-blue-500 shrink-0" />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium text-blue-800 truncate">{doc.name}</p>
+                          <p className="text-xs text-blue-500">
+                            Reviewer feedback document{doc.size ? ` · ${(doc.size / 1024 / 1024).toFixed(1)} MB` : ''}
+                          </p>
+                        </div>
+                        <button
+                          onClick={() => openReviewerDoc(doc.reviewer_id, doc.id, doc.name)}
+                          className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-blue-600 border border-blue-200 rounded-lg hover:bg-blue-100 transition-colors shrink-0"
+                          title="Open in the document viewer"
+                        >
+                          <Eye className="w-3.5 h-3.5" /> View
+                        </button>
+                        <button
+                          onClick={() => downloadReviewerDoc(doc.reviewer_id, doc.id, doc.name)}
+                          className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors shrink-0"
+                          title="Download"
+                        >
+                          <Download className="w-3.5 h-3.5" /> Download
+                        </button>
+                      </div>
+                    ))}
                   </div>
                 )}
               </div>
@@ -3819,10 +3868,14 @@ function ReviewerDecisionPanel({
   const [showConfirm, setShowConfirm] = useState(false)
   const [submitError, setSubmitError] = useState('')
 
-  // Annotated document upload
-  const [annotatedFile, setAnnotatedFile] = useState<File | null>(null)
+  // Reviewer feedback documents (multi-file)
+  const [annotatedFiles, setAnnotatedFiles] = useState<File[]>([])
   const [fileError, setFileError] = useState('')
   const fileInputRef = useRef<HTMLInputElement>(null)
+
+  // Saved-draft state
+  const [draftSavedAt, setDraftSavedAt] = useState<string | null>(null)
+  const draftLoadedRef = useRef(false)
 
   // Extension request state
   const [showExtension, setShowExtension] = useState(false)
@@ -3843,12 +3896,12 @@ function ReviewerDecisionPanel({
 
   const decisionMutation = useMutation<AxiosResponse>({
     mutationFn: () => {
-      if (annotatedFile) {
+      if (annotatedFiles.length > 0) {
         const fd = new FormData()
         fd.append('_method', 'PATCH') // method spoofing so PHP parses the multipart body
         fd.append('decision', selectedDecision ?? '')
         if (comments.trim()) fd.append('comments', comments.trim())
-        fd.append('annotated_document', annotatedFile)
+        annotatedFiles.forEach(f => fd.append('annotated_documents[]', f))
         return api.post(`/submissions/${submissionId}/reviewers/${myAssignment!.id}`, fd, {
           headers: { 'Content-Type': 'multipart/form-data' },
         })
@@ -3860,7 +3913,7 @@ function ReviewerDecisionPanel({
     },
     onSuccess: () => {
       setShowConfirm(false)
-      setAnnotatedFile(null)
+      setAnnotatedFiles([])
       qc.invalidateQueries({ queryKey: ['submission', submissionId] })
       qc.invalidateQueries({ queryKey: ['submission-reviewers', submissionId] })
       qc.invalidateQueries({ queryKey: ['review-progress', submissionId] })
@@ -3876,6 +3929,63 @@ function ReviewerDecisionPanel({
       toast.error('Decision failed.', msg)
     },
   })
+
+  // Save the in-progress decision + comments so they survive navigating away.
+  const draftMutation = useMutation<AxiosResponse>({
+    mutationFn: () =>
+      api.post(`/submissions/${submissionId}/reviewers/${myAssignment!.id}/draft`, {
+        draft_decision: selectedDecision,
+        draft_comments: comments.trim() || null,
+      }),
+    onSuccess: (res) => {
+      setDraftSavedAt(res.data?.data?.draft_saved_at ?? new Date().toISOString())
+      qc.invalidateQueries({ queryKey: ['submission-reviewers', submissionId] })
+      toast.success('Draft saved.', 'Your feedback was saved — you can finish later.')
+    },
+    onError: (e: any) => toast.error('Could not save draft.', e?.response?.data?.message ?? 'Please try again.'),
+  })
+
+  // Upload selected feedback documents immediately so they persist (survive navigation).
+  const uploadDocsMutation = useMutation<AxiosResponse, unknown, File[]>({
+    mutationFn: (files) => {
+      const fd = new FormData()
+      fd.append('_method', 'PATCH')
+      files.forEach(f => fd.append('annotated_documents[]', f))
+      return api.post(`/submissions/${submissionId}/reviewers/${myAssignment!.id}`, fd, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      })
+    },
+    onSuccess: () => {
+      setAnnotatedFiles([])
+      qc.invalidateQueries({ queryKey: ['submission-reviewers', submissionId] })
+      qc.invalidateQueries({ queryKey: ['submission-feedback', submissionId] })
+      toast.success('Files uploaded.', 'Your feedback documents were saved.')
+    },
+    onError: (e: any) => {
+      setAnnotatedFiles([])
+      toast.error('Upload failed.', e?.response?.data?.message ?? 'Please try again.')
+    },
+  })
+
+  // Remove one of the reviewer's already-uploaded feedback documents.
+  const deleteDocMutation = useMutation<AxiosResponse, unknown, string>({
+    mutationFn: (documentId) =>
+      api.delete(`/submissions/${submissionId}/reviewers/${myAssignment!.id}/documents/${documentId}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['submission-reviewers', submissionId] })
+      qc.invalidateQueries({ queryKey: ['submission-feedback', submissionId] })
+      toast.success('Removed.', 'The document was removed.')
+    },
+    onError: (e: any) => toast.error('Could not remove.', e?.response?.data?.message ?? 'Please try again.'),
+  })
+
+  const downloadMyDoc = async (documentId: string, filename: string) => {
+    const res = await api.get(`/submissions/${submissionId}/reviewers/${myAssignment!.id}/documents/${documentId}`, { responseType: 'blob' })
+    const url = URL.createObjectURL(res.data)
+    const a = document.createElement('a')
+    a.href = url; a.download = filename; a.click()
+    URL.revokeObjectURL(url)
+  }
 
   const extensionMutation = useMutation({
     mutationFn: () =>
@@ -3910,6 +4020,15 @@ function ReviewerDecisionPanel({
     },
     onError: (e: any) => toast.error('Failed', e?.response?.data?.message ?? 'Could not flag conflict.'),
   })
+
+  // Prefill the form from the reviewer's saved draft (once, on first load).
+  useEffect(() => {
+    if (!myAssignment || draftLoadedRef.current) return
+    draftLoadedRef.current = true
+    if (myAssignment.draft_decision) setSelectedDecision(myAssignment.draft_decision)
+    if (myAssignment.draft_comments) setComments(myAssignment.draft_comments)
+    setDraftSavedAt(myAssignment.draft_saved_at ?? null)
+  }, [myAssignment])
 
   // Only show when user is an assigned reviewer and hasn't decided yet
   if (!myAssignment || myAssignment.decision !== null) return null
@@ -4006,61 +4125,117 @@ function ReviewerDecisionPanel({
           <p className="text-xs text-gray-400 mt-1">{comments.length}/10000</p>
         </div>
 
-        {/* Annotated document upload */}
+        {/* Reviewer feedback documents (multi-file) */}
         <div>
           <label className="text-xs font-semibold text-gray-600 mb-1 block uppercase tracking-wide">
-            Annotated document <span className="text-gray-400 normal-case font-normal">(optional)</span>
+            Feedback documents <span className="text-gray-400 normal-case font-normal">(optional)</span>
           </label>
           <p className="text-xs text-gray-400 mb-2">
-            Attach the reviewed file with your inline comments or annotations. The submitter will be able to view and download it. PDF or Word, up to 25&nbsp;MB.
+            Attach one or more files to send back — the annotated dissertation, a copy of the handbook, examples, etc. The submitter will be able to view and download them. PDF or Word, up to 25&nbsp;MB each (max 10 files).
           </p>
+
+          {/* Already-uploaded documents (persisted on the server) */}
+          {myAssignment.documents && myAssignment.documents.length > 0 && (
+            <div className="space-y-2 mb-2">
+              {myAssignment.documents.map(doc => (
+                <div key={doc.id} className="flex items-center gap-2 rounded-lg border border-green-200 bg-green-50 px-3 py-2.5">
+                  <FileText className="w-4 h-4 text-green-500 shrink-0" />
+                  <span className="text-sm text-green-800 truncate flex-1">{doc.name}</span>
+                  {doc.size != null && <span className="text-xs text-green-500 shrink-0">{(doc.size / 1024 / 1024).toFixed(1)} MB</span>}
+                  <button
+                    type="button"
+                    onClick={() => downloadMyDoc(doc.id, doc.name)}
+                    className="text-green-500 hover:text-green-700 shrink-0"
+                    title="Download"
+                  >
+                    <Download className="w-4 h-4" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => deleteDocMutation.mutate(doc.id)}
+                    disabled={deleteDocMutation.isPending}
+                    className="text-green-400 hover:text-red-600 shrink-0 disabled:opacity-50"
+                    title="Remove"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Newly selected files, waiting to be uploaded */}
+          {annotatedFiles.length > 0 && (
+            <div className="space-y-2 mb-2">
+              {annotatedFiles.map((f, i) => (
+                <div key={`${f.name}-${i}`} className="flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2.5">
+                  <FileText className="w-4 h-4 text-blue-500 shrink-0" />
+                  <span className="text-sm text-blue-800 truncate flex-1">{f.name}</span>
+                  <span className="text-xs text-blue-500 shrink-0">{(f.size / 1024 / 1024).toFixed(1)} MB</span>
+                  <button
+                    type="button"
+                    onClick={() => setAnnotatedFiles(prev => prev.filter((_, idx) => idx !== i))}
+                    className="text-blue-400 hover:text-blue-600 shrink-0"
+                    title="Remove file"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
           <input
             ref={fileInputRef}
             type="file"
             accept=".pdf,.doc,.docx"
+            multiple
             className="hidden"
             onChange={e => {
-              const f = e.target.files?.[0] ?? null
+              const list = Array.from(e.target.files ?? [])
               setFileError('')
-              if (!f) { setAnnotatedFile(null); return }
-              const ext = f.name.split('.').pop()?.toLowerCase() ?? ''
-              if (!['pdf', 'doc', 'docx'].includes(ext)) {
-                setFileError('Only PDF or Word (.pdf, .doc, .docx) files are allowed.')
-                setAnnotatedFile(null)
-                return
+              if (list.length === 0) return
+              const valid: File[] = []
+              for (const f of list) {
+                const ext = f.name.split('.').pop()?.toLowerCase() ?? ''
+                if (!['pdf', 'doc', 'docx'].includes(ext)) {
+                  setFileError('Only PDF or Word (.pdf, .doc, .docx) files are allowed.')
+                  continue
+                }
+                if (f.size > 25 * 1024 * 1024) {
+                  setFileError(`"${f.name}" exceeds the 25 MB limit.`)
+                  continue
+                }
+                valid.push(f)
               }
-              if (f.size > 25 * 1024 * 1024) {
-                setFileError('File exceeds the 25 MB limit.')
-                setAnnotatedFile(null)
-                return
-              }
-              setAnnotatedFile(f)
+              const alreadyUploaded = myAssignment?.documents?.length ?? 0
+              setAnnotatedFiles(prev => [...prev, ...valid].slice(0, Math.max(0, 10 - alreadyUploaded)))
+              if (fileInputRef.current) fileInputRef.current.value = ''
             }}
           />
-          {annotatedFile ? (
-            <div className="flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2.5">
-              <FileText className="w-4 h-4 text-blue-500 shrink-0" />
-              <span className="text-sm text-blue-800 truncate flex-1">{annotatedFile.name}</span>
-              <span className="text-xs text-blue-500 shrink-0">{(annotatedFile.size / 1024 / 1024).toFixed(1)} MB</span>
-              <button
-                type="button"
-                onClick={() => { setAnnotatedFile(null); if (fileInputRef.current) fileInputRef.current.value = '' }}
-                className="text-blue-400 hover:text-blue-600 shrink-0"
-                title="Remove file"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-          ) : (
+
+          <div className="flex items-center gap-2">
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
-              className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-blue-600 border border-dashed border-blue-300 rounded-lg hover:bg-blue-50 transition-colors w-full justify-center"
+              className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-blue-600 border border-dashed border-blue-300 rounded-lg hover:bg-blue-50 transition-colors flex-1 justify-center"
             >
               <Upload className="w-4 h-4" />
-              Attach annotated document
+              Attach files
             </button>
-          )}
+            {annotatedFiles.length > 0 && (
+              <button
+                type="button"
+                onClick={() => uploadDocsMutation.mutate(annotatedFiles)}
+                disabled={uploadDocsMutation.isPending}
+                className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50"
+                title="Upload the selected files now so they are saved"
+              >
+                {uploadDocsMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+                Upload now
+              </button>
+            )}
+          </div>
           {fileError && <p className="text-xs text-red-600 mt-1">{fileError}</p>}
         </div>
 
@@ -4070,22 +4245,38 @@ function ReviewerDecisionPanel({
 
         {/* Submit + secondary actions */}
         <div className="flex items-center justify-between gap-3 flex-wrap">
-          <button
-            onClick={() => setShowConfirm(true)}
-            disabled={!selectedDecision}
-            className={`flex items-center gap-2 px-5 py-2.5 text-sm font-semibold rounded-lg disabled:opacity-40 disabled:cursor-not-allowed transition-colors ${
-              selectedDecision === 'approve'
-                ? 'bg-green-600 hover:bg-green-700 text-white'
-                : selectedDecision === 'reject'
-                ? 'bg-red-600 hover:bg-red-700 text-white'
-                : selectedDecision === 'revise'
-                ? 'bg-orange-500 hover:bg-orange-600 text-white'
-                : 'bg-blue-600 hover:bg-blue-700 text-white'
-            }`}
-          >
-            <Gavel className="w-4 h-4" />
-            Submit Decision
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowConfirm(true)}
+              disabled={!selectedDecision}
+              className={`flex items-center gap-2 px-5 py-2.5 text-sm font-semibold rounded-lg disabled:opacity-40 disabled:cursor-not-allowed transition-colors ${
+                selectedDecision === 'approve'
+                  ? 'bg-green-600 hover:bg-green-700 text-white'
+                  : selectedDecision === 'reject'
+                  ? 'bg-red-600 hover:bg-red-700 text-white'
+                  : selectedDecision === 'revise'
+                  ? 'bg-orange-500 hover:bg-orange-600 text-white'
+                  : 'bg-blue-600 hover:bg-blue-700 text-white'
+              }`}
+            >
+              <Gavel className="w-4 h-4" />
+              Submit Decision
+            </button>
+            <button
+              onClick={() => draftMutation.mutate()}
+              disabled={draftMutation.isPending || (!selectedDecision && !comments.trim())}
+              className="flex items-center gap-2 px-4 py-2.5 text-sm font-semibold text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              title="Save your feedback without submitting"
+            >
+              {draftMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+              Save Draft
+            </button>
+            {draftSavedAt && (
+              <span className="text-xs text-gray-400">
+                Draft saved {new Date(draftSavedAt).toLocaleString()}
+              </span>
+            )}
+          </div>
 
           {/* Extension & Conflict buttons */}
           <div className="flex items-center gap-2 ml-auto">

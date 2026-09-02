@@ -114,10 +114,16 @@ export interface SubmissionReviewer {
   decision: 'approve' | 'reject' | 'revise' | null
   decision_at: string | null
   comments: string | null
-  // Reviewer-uploaded annotated document
+  // Reviewer-uploaded annotated document (legacy single-file field)
   annotated_document_name: string | null
   annotated_document_uploaded_at: string | null
   has_annotated_document: boolean
+  // Reviewer feedback documents (multi-file)
+  documents?: ReviewerDocument[]
+  // Saved (unsubmitted) draft
+  draft_comments?: string | null
+  draft_decision?: 'approve' | 'reject' | 'revise' | null
+  draft_saved_at?: string | null
   // Extension request
   extension_status: 'pending' | 'approved' | 'rejected' | null
   extension_reason: string | null
@@ -215,6 +221,22 @@ export interface FeedbackItem {
     name: string
     uploaded_at: string | null
   } | null
+  documents?: FeedbackDocument[]
+}
+
+export interface ReviewerDocument {
+  id: string
+  name: string
+  size: number | null
+  uploaded_at: string | null
+}
+
+export interface FeedbackDocument {
+  reviewer_id: string
+  id: string
+  name: string
+  size: number | null
+  uploaded_at: string | null
 }
 
 // ── Appeal ────────────────────────────────────────────────────────────────────

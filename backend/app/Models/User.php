@@ -83,14 +83,38 @@ class User extends Model implements AuthenticatableContract
 
     // ── Role helpers ──────────────────────────────────────────────────────────
 
+    /** Runtime-only active-role override from the X-Active-Role header. Never persisted. */
+    protected ?string $activeRoleOverride = null;
+
+    /** Honour an active role only when the user actually holds it; otherwise ignore. */
+    public function applyActiveRole(?string $role): void
+    {
+        $this->activeRoleOverride = ($role && in_array($role, $this->roles ?? [], true)) ? $role : null;
+    }
+
+    public function getActiveRole(): ?string
+    {
+        return $this->activeRoleOverride;
+    }
+
+    /**
+     * Roles effective for authorization: the single active role when one is set,
+     * otherwise the union of all assigned roles. `$this->roles` always stays the
+     * full real list (so /auth/me can render the role switcher).
+     */
+    public function effectiveRoles(): array
+    {
+        return $this->activeRoleOverride !== null ? [$this->activeRoleOverride] : ($this->roles ?? []);
+    }
+
     public function hasRole(string $role): bool
     {
-        return in_array($role, $this->roles ?? [], true);
+        return in_array($role, $this->effectiveRoles(), true);
     }
 
     public function hasAnyRole(array $roles): bool
     {
-        return (bool) array_intersect($roles, $this->roles ?? []);
+        return (bool) array_intersect($roles, $this->effectiveRoles());
     }
 
     public function isAdmin(): bool       { return $this->hasRole('admin'); }

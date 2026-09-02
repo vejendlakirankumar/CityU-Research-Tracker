@@ -8,6 +8,7 @@ use App\Models\ReviewerPool;
 use App\Models\StageDefinition;
 use App\Models\Submission;
 use App\Models\SubmissionReviewer;
+use App\Models\SubmissionReviewerDocument;
 use App\Services\NotificationService;
 use App\Services\WorkflowAdvancer;
 use Illuminate\Http\JsonResponse;
@@ -35,6 +36,7 @@ class SubmissionReviewerController extends Controller
             'user:id,name,email,first_name,last_name,org_role',
             'assignedBy:id,name',
             'stage:id,name,stage_role_label,order,is_gatekeeper',
+            'documents',
         ])->where('submission_id', $submissionId);
 
         if ($request->filled('stage_id')) {
@@ -236,6 +238,28 @@ class SubmissionReviewerController extends Controller
                     }
                 },
             ],
+            'annotated_documents'   => ['sometimes', 'array', 'max:10'],
+            'annotated_documents.*' => [
+                'file',
+                'max:25600', // 25 MB each
+                function ($attr, $value, $fail) {
+                    $allowedExts = ['pdf', 'doc', 'docx'];
+                    $ext = strtolower($value->getClientOriginalExtension());
+                    if (! in_array($ext, $allowedExts, true)) {
+                        $fail("File extension '.{$ext}' is not allowed. Allowed: " . implode(', ', $allowedExts));
+                        return;
+                    }
+                    $blockedMimes = [
+                        'application/x-php', 'text/x-php', 'application/php',
+                        'application/x-httpd-php', 'application/x-httpd-php-source',
+                        'text/html', 'application/javascript', 'text/javascript',
+                        'application/x-sh', 'application/x-executable',
+                    ];
+                    if (in_array($value->getMimeType() ?? '', $blockedMimes, true)) {
+                        $fail('This file type is not permitted.');
+                    }
+                },
+            ],
         ]);
 
         // Normalise decision values to lowercase canonical form
@@ -256,7 +280,8 @@ class SubmissionReviewerController extends Controller
         // Coordinators/admins may reassign reviewers and adjust due dates, but must NOT
         // submit approve/reject/revise decisions on a reviewer's behalf — doing so left
         // the workflow in an inconsistent, hung state. Only the assigned reviewer decides.
-        if (isset($data['decision']) && $isCoordinator) {
+        // A coordinator who is themselves the assigned reviewer may still decide their own review.
+        if (isset($data['decision']) && $isCoordinator && !$isReviewer) {
             return response()->json([
                 'message' => 'Coordinators cannot approve or reject reviews. Please reassign the review to a reviewer instead.',
             ], 403);
@@ -285,6 +310,10 @@ class SubmissionReviewerController extends Controller
         if (isset($data['decision'])) {
             $data['status'] = 'completed';
             $data['decision_at'] = now();
+            // Finalizing clears any saved draft for this reviewer.
+            $data['draft_comments'] = null;
+            $data['draft_decision'] = null;
+            $data['draft_saved_at'] = null;
         }
 
         // Handle an optional annotated document uploaded by the reviewer.
@@ -313,6 +342,35 @@ class SubmissionReviewerController extends Controller
             $data['annotated_document_uploaded_at'] = now();
         }
         unset($data['annotated_document']);
+
+        // Handle multiple reviewer feedback documents (annotations, handbook, examples…).
+        // Only the assigned reviewer may attach files; each is appended to any already
+        // uploaded so several files can be sent back to the chair.
+        $uploadedDocs = $request->file('annotated_documents', []);
+        if (!empty($uploadedDocs)) {
+            if (!$isReviewer) {
+                return response()->json(['message' => 'Only the assigned reviewer can upload feedback documents.'], 403);
+            }
+            foreach ($uploadedDocs as $file) {
+                $originalName = basename($file->getClientOriginalName());
+                $safeName = preg_replace('/[^A-Za-z0-9._-]+/', '_', $originalName) ?: '';
+                $extension = strtolower($file->getClientOriginalExtension());
+                if ($safeName === '' || ! str_contains($safeName, '.')) {
+                    $safeName = (string) Str::uuid() . ($extension ? ".{$extension}" : '');
+                }
+                $path = $file->storeAs(
+                    "uploads/{$submissionId}/reviews/{$reviewer->id}",
+                    Str::uuid() . '_' . $safeName,
+                );
+                SubmissionReviewerDocument::create([
+                    'submission_reviewer_id' => $reviewer->id,
+                    'path'        => $path,
+                    'name'        => $originalName,
+                    'size'        => $file->getSize(),
+                    'uploaded_at' => now(),
+                ]);
+            }
+        }
 
         $reviewer->update($data);
 
@@ -423,6 +481,111 @@ class SubmissionReviewerController extends Controller
             $reviewer->annotated_document_path,
             $reviewer->annotated_document_name ?: basename($reviewer->annotated_document_path),
         );
+    }
+
+    /**
+     * POST /api/submissions/{submissionId}/reviewers/{reviewerId}/draft
+     *
+     * Persist the assigned reviewer's in-progress decision + comments so they
+     * survive navigating away before submitting. Does not submit or advance.
+     */
+    public function saveDraft(Request $request, string $submissionId, string $reviewerId): JsonResponse
+    {
+        $reviewer = SubmissionReviewer::where('submission_id', $submissionId)
+            ->where('id', $reviewerId)
+            ->firstOrFail();
+
+        if ($reviewer->user_id !== $request->user()->id) {
+            return response()->json(['message' => 'Only the assigned reviewer can save a draft.'], 403);
+        }
+
+        $data = $request->validate([
+            'draft_comments' => ['sometimes', 'nullable', 'string', 'max:10000'],
+            'draft_decision' => ['sometimes', 'nullable', 'in:approve,reject,revise,APPROVE,REJECT,REQUEST_CHANGES'],
+        ]);
+
+        $decision = $data['draft_decision'] ?? null;
+        if ($decision !== null) {
+            $decision = match (strtoupper($decision)) {
+                'APPROVE', 'APPROVED' => 'approve',
+                'REJECT', 'REJECTED'  => 'reject',
+                'REQUEST_CHANGES', 'REVISION', 'REVISE' => 'revise',
+                default => $decision,
+            };
+        }
+
+        $reviewer->update([
+            'draft_comments' => $data['draft_comments'] ?? null,
+            'draft_decision' => $decision,
+            'draft_saved_at' => now(),
+        ]);
+
+        $reviewer->load([
+            'user:id,name,email,first_name,last_name,org_role',
+            'assignedBy:id,name',
+            'stage:id,name,stage_role_label,order',
+            'documents',
+        ]);
+
+        return response()->json(['data' => $this->toResource($reviewer)]);
+    }
+
+    /**
+     * GET /api/submissions/{submissionId}/reviewers/{reviewerId}/documents/{documentId}
+     *
+     * Download one of a reviewer's uploaded feedback documents. Visibility mirrors
+     * the annotated-document rules (admins/coordinators, the uploading reviewer, the
+     * gatekeeper, and the submitter once releasable).
+     */
+    public function downloadDocument(Request $request, string $submissionId, string $reviewerId, string $documentId): mixed
+    {
+        $submission = Submission::with('submissionType:id,is_gated_review')->findOrFail($submissionId);
+        $this->authorize('view', $submission);
+
+        $reviewer = SubmissionReviewer::where('submission_id', $submissionId)
+            ->where('id', $reviewerId)
+            ->firstOrFail();
+
+        if (!$this->canViewReviewerArtifacts($submission, $reviewer, $request->user())) {
+            return response()->json(['message' => 'This document is not available to you yet.'], 403);
+        }
+
+        $doc = SubmissionReviewerDocument::where('submission_reviewer_id', $reviewer->id)
+            ->where('id', $documentId)
+            ->firstOrFail();
+
+        if (! Storage::exists($doc->path)) {
+            return response()->json(['message' => 'File not found.'], 404);
+        }
+
+        return Storage::download($doc->path, $doc->name ?: basename($doc->path));
+    }
+
+    /**
+     * DELETE /api/submissions/{submissionId}/reviewers/{reviewerId}/documents/{documentId}
+     *
+     * Remove one of the reviewer's own uploaded feedback documents.
+     */
+    public function deleteDocument(Request $request, string $submissionId, string $reviewerId, string $documentId): JsonResponse
+    {
+        $reviewer = SubmissionReviewer::where('submission_id', $submissionId)
+            ->where('id', $reviewerId)
+            ->firstOrFail();
+
+        if ($reviewer->user_id !== $request->user()->id) {
+            return response()->json(['message' => 'Only the assigned reviewer can remove their uploaded documents.'], 403);
+        }
+
+        $doc = SubmissionReviewerDocument::where('submission_reviewer_id', $reviewer->id)
+            ->where('id', $documentId)
+            ->firstOrFail();
+
+        if ($doc->path && Storage::exists($doc->path)) {
+            Storage::delete($doc->path);
+        }
+        $doc->delete();
+
+        return response()->json(['message' => 'Document removed.']);
     }
 
     /**
@@ -878,10 +1041,21 @@ class SubmissionReviewerController extends Controller
             'decision'      => $r->decision,
             'decision_at'   => $r->decision_at?->toIso8601String(),
             'comments'      => $r->comments,
-            // Reviewer-uploaded annotated document
+            // Reviewer's saved (unsubmitted) draft
+            'draft_comments' => $r->draft_comments,
+            'draft_decision' => $r->draft_decision,
+            'draft_saved_at' => $r->draft_saved_at?->toIso8601String(),
+            // Reviewer-uploaded annotated document (legacy single-file field)
             'annotated_document_name'        => $r->annotated_document_name,
             'annotated_document_uploaded_at' => $r->annotated_document_uploaded_at?->toIso8601String(),
             'has_annotated_document'         => !empty($r->annotated_document_path),
+            // Reviewer feedback documents (multi-file)
+            'documents' => $r->documents->map(fn ($d) => [
+                'id'          => $d->id,
+                'name'        => $d->name,
+                'size'        => $d->size,
+                'uploaded_at' => $d->uploaded_at?->toIso8601String(),
+            ])->values(),
             // Extension request
             'extension_status'          => $r->extension_status,
             'extension_reason'          => $r->extension_reason,

@@ -113,7 +113,7 @@ class Submission extends Model
      */
     public function scopeVisibleTo(Builder $query, User $user): Builder
     {
-        $roles = $user->roles ?? [];
+        $roles = $user->effectiveRoles();
 
         if (in_array('admin', $roles) || in_array('coordinator', $roles)) {
             return $query; // All submissions

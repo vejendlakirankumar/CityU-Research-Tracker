@@ -14,6 +14,7 @@ class SubmissionReviewer extends Model
     protected $fillable = [
         'id', 'submission_id', 'stage_id', 'user_id', 'assigned_by',
         'status', 'due_at', 'decision', 'decision_at', 'comments',
+        'draft_comments', 'draft_decision', 'draft_saved_at',
         'reminder_sent_at', 'assignment_notified_at',
         // Reviewer-uploaded annotated document
         'annotated_document_path', 'annotated_document_name', 'annotated_document_uploaded_at',
@@ -37,6 +38,7 @@ class SubmissionReviewer extends Model
             'annotated_document_uploaded_at' => 'datetime',
             'conflict_flagged'       => 'boolean',
             'due_at'                 => 'date',
+            'draft_saved_at'         => 'datetime',
         ];
     }
 
@@ -58,5 +60,10 @@ class SubmissionReviewer extends Model
     public function assignedBy()
     {
         return $this->belongsTo(User::class, 'assigned_by');
+    }
+
+    public function documents()
+    {
+        return $this->hasMany(SubmissionReviewerDocument::class, 'submission_reviewer_id');
     }
 }

@@ -32,6 +32,7 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->alias([
             'auth' => \App\Http\Middleware\Authenticate::class,
             'role' => \App\Http\Middleware\EnsureRole::class,
+            'active-role' => \App\Http\Middleware\ResolveActiveRole::class,
         ]);
 
         // Append security headers to all API responses

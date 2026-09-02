@@ -10,11 +10,18 @@ const api = axios.create({
   },
 })
 
-// Attach Bearer token from store on every request
+// Attach Bearer token + active role from store on every request
 api.interceptors.request.use((config) => {
   const token = useAuthStore.getState().token
   if (token) {
     config.headers.Authorization = `Bearer ${token}`
+  }
+  // Tell the backend which role the user is currently acting as so authorization
+  // is scoped to that single role (matches the UI's role switcher).
+  const activeRole =
+    useAuthStore.getState().activeRole ?? sessionStorage.getItem('rrp_active_role')
+  if (activeRole) {
+    config.headers['X-Active-Role'] = activeRole
   }
   return config
 })

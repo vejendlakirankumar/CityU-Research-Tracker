@@ -857,6 +857,16 @@ class SubmissionController extends Controller
             'uploaded_at' => $r->annotated_document_uploaded_at,
         ] : null;
 
+        // Multi-file reviewer feedback documents. The frontend resolves each via the
+        // secure per-document download endpoint using reviewer_id + id.
+        $reviewerDocs = fn ($r) => $r->documents->map(fn ($d) => [
+            'reviewer_id' => $r->id,
+            'id'          => $d->id,
+            'name'        => $d->name,
+            'size'        => $d->size,
+            'uploaded_at' => $d->uploaded_at,
+        ])->values();
+
         $appeal = AppealRequest::where('submission_id', $id)->latest()->first();
         if ($appeal) {
             $appeal->load('resolver:id,name');
@@ -913,7 +923,7 @@ class SubmissionController extends Controller
                     $feedbackItems = [];
                     if ($finalized) {
                         $gatekeeperDecisions = $submission->reviewers()
-                            ->with(['user:id,name', 'stage:id,name,stage_role_label'])
+                            ->with(['user:id,name', 'stage:id,name,stage_role_label', 'documents'])
                             ->whereHas('stage', fn ($q) => $q->where('is_gatekeeper', true))
                             ->whereNotNull('decision')
                             ->orderBy('decision_at')
@@ -930,6 +940,7 @@ class SubmissionController extends Controller
                             'decision_at'      => $r->decision_at,
                             'comments'         => $r->comments,
                             'annotated_document' => $annotatedDoc($r),
+                            'documents'        => $reviewerDocs($r),
                             'reviewer'         => $isBlind ? null : ($r->user ? ['name' => $r->user->name] : null),
                             'is_gated_release' => true,
                         ])->values();
@@ -940,7 +951,7 @@ class SubmissionController extends Controller
 
                 // Non-gatekeeper reviewer: show only decisions from their own stage
                 $reviewers = $submission->reviewers()
-                    ->with(['user:id,name', 'stage:id,name,stage_role_label'])
+                    ->with(['user:id,name', 'stage:id,name,stage_role_label', 'documents'])
                     ->where('stage_id', function ($sub) use ($id, $user) {
                         $sub->select('stage_id')
                             ->from('submission_reviewers')
@@ -963,6 +974,7 @@ class SubmissionController extends Controller
                     'decision_at' => $r->decision_at,
                     'comments'    => $r->comments,
                     'annotated_document' => $annotatedDoc($r),
+                    'documents'   => $reviewerDocs($r),
                     'reviewer'    => $isBlind ? null : ($r->user ? ['name' => $r->user->name] : null),
                 ]);
 
@@ -973,7 +985,7 @@ class SubmissionController extends Controller
 
         // ── Default: admin, coordinator, gatekeeper, or non-gated review ─────
         $reviewers = $submission->reviewers()
-            ->with(['user:id,name', 'stage:id,name,stage_role_label'])
+            ->with(['user:id,name', 'stage:id,name,stage_role_label', 'documents'])
             ->whereNotNull('decision')
             ->orderBy('decision_at')
             ->get();
@@ -989,6 +1001,7 @@ class SubmissionController extends Controller
             'decision_at' => $r->decision_at,
             'comments'    => $r->comments,
             'annotated_document' => $annotatedDoc($r),
+            'documents'   => $reviewerDocs($r),
             'reviewer'    => $isBlind ? null : ($r->user ? ['name' => $r->user->name] : null),
         ]);
 
