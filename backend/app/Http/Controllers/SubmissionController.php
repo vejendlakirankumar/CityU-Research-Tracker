@@ -1317,12 +1317,12 @@ class SubmissionController extends Controller
                     ->pluck('id');
                 SubmissionReviewer::where('submission_id', $submission->id)
                     ->whereIn('stage_id', $stageIdsToReset)
-                    ->update(['decision' => null, 'decision_at' => null, 'comments' => null, 'status' => 'pending']);
+                    ->update(['decision' => null, 'decision_at' => null, 'comments' => null, 'status' => 'pending', 'due_at' => null]);
             }
         } else {
             // FULL_RESTART (default): reset all reviewer decisions.
             SubmissionReviewer::where('submission_id', $submission->id)
-                ->update(['decision' => null, 'decision_at' => null, 'comments' => null, 'status' => 'pending']);
+                ->update(['decision' => null, 'decision_at' => null, 'comments' => null, 'status' => 'pending', 'due_at' => null]);
         }
 
         // Clear all revision and gatekeeper metadata from the previous cycle.
@@ -1468,7 +1468,7 @@ class SubmissionController extends Controller
     public function calendarDeadlines(Request $request): JsonResponse
     {
         $user  = $request->user();
-        $roles = (array) ($user->roles ?? []);
+        $roles = $user->effectiveRoles();
 
         $events = collect();
 

@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import { ChevronLeft, ChevronRight, Calendar, Clock, CheckCircle2, Loader2, Flag } from 'lucide-react'
 import api from '../lib/axios'
+import { useActiveRole } from '../stores/authStore'
 import type { CalendarDeadline } from '../types/submissions'
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -19,13 +20,14 @@ function firstDayOfMonth(year: number, month: number) {
 
 export default function CalendarPage() {
   const navigate = useNavigate()
+  const activeRole = useActiveRole()
   const today = new Date()
   const [year,  setYear]  = useState(today.getFullYear())
   const [month, setMonth] = useState(today.getMonth())
   const [selected, setSelected] = useState<string | null>(null)
 
   const { data, isLoading } = useQuery<{ data: CalendarDeadline[] }>({
-    queryKey: ['calendar-deadlines'],
+    queryKey: ['calendar-deadlines', activeRole],
     queryFn: () => api.get('/calendar/deadlines').then(r => r.data),
     staleTime: 5 * 60_000,
   })
