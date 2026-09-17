@@ -94,6 +94,7 @@ class WorkflowAdvancer
                     $finalStatus = $submission->submissionType?->workflow?->final_status_on_pass
                         ?? Submission::STATUS_ACCEPTED;
                     $this->transition($submission, $finalStatus, 'auto_finalized_at_gate');
+                    $this->notifyGatekeeperReviewersOfAcceptance($submission, $finalStatus);
                     return;
                 }
                 // Move the pointer to the next stage in sequence so later-stage
@@ -163,6 +164,7 @@ class WorkflowAdvancer
         $finalStatus = $submission->submissionType?->workflow?->final_status_on_pass
             ?? Submission::STATUS_ACCEPTED;
         $this->transition($submission, $finalStatus, 'auto_accepted_all_stages');
+        $this->notifyGatekeeperReviewersOfAcceptance($submission, $finalStatus);
     }
 
     /**
@@ -261,6 +263,32 @@ class WorkflowAdvancer
                 'stage_name'       => $stageName,
                 'outcome'          => $outcome,
                 'note'             => "Reviewers {$outcomeLabel} stage \"{$stageName}\". Your decision is required.",
+            ]);
+        }
+    }
+
+    /**
+     * Notify gatekeeper-stage reviewers that the submission was auto-approved,
+     * so they receive the acceptance email alongside the submitter.
+     */
+    private function notifyGatekeeperReviewersOfAcceptance(Submission $submission, string $finalStatus): void
+    {
+        $gatekeeperReviewers = SubmissionReviewer::with('user')
+            ->where('submission_id', $submission->id)
+            ->where('status', '!=', 'declined')
+            ->whereHas('stage', fn ($q) => $q->where('is_gatekeeper', true))
+            ->get();
+
+        $svc = app(NotificationService::class);
+
+        foreach ($gatekeeperReviewers as $reviewer) {
+            if (!$reviewer->user) {
+                continue;
+            }
+            $svc->notify($reviewer->user, Notification::TYPE_SUBMISSION_ACCEPTED, [
+                'submission_id'    => $submission->id,
+                'submission_title' => $submission->title,
+                'new_status'       => $finalStatus,
             ]);
         }
     }
