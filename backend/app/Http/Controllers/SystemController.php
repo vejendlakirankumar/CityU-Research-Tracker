@@ -91,6 +91,8 @@ class SystemController extends Controller
             'max_extension_requests'         => ['sometimes', 'integer', 'min:0', 'max:20'],
             'due_date_exclude_weekends'      => ['sometimes', 'boolean'],
             'due_date_consider_holidays'     => ['sometimes', 'boolean'],
+            'due_date_visibility'            => ['sometimes', 'in:all_stages,current_stage'],
+            'reviewers_can_view_future_submissions' => ['sometimes', 'boolean'],
         ]);
 
         $org = OrganizationSetting::current();

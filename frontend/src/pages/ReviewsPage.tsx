@@ -5,7 +5,7 @@ import {
   ShieldCheck, Hourglass, CheckCircle2, Archive,
   AlertCircle, CalendarDays, Ban, X,
   Loader2, AlertTriangle, Clock, ChevronRight, Gavel,
-  UserX, InboxIcon, Search, RefreshCw,
+  UserX, InboxIcon, Search, RefreshCw, Lock,
 } from 'lucide-react'
 import api from '../lib/axios'
 import { useActiveRole } from '../stores/authStore'
@@ -359,12 +359,14 @@ function AssignmentTableRow({
   onExtension,
   onConflict,
   maxExtensions,
+  canOpen = true,
 }: {
   item: ReviewAssignment
   onClick: () => void
   onExtension: (item: ReviewAssignment) => void
   onConflict: (item: ReviewAssignment) => void
   maxExtensions: number
+  canOpen?: boolean
 }) {
   const sub = item.submission
   const isAwaiting = item.decision === null
@@ -390,8 +392,8 @@ function AssignmentTableRow({
 
   return (
     <tr
-      className="border-b border-gray-50 hover:bg-gray-50 cursor-pointer group"
-      onClick={onClick}
+      className={`border-b border-gray-50 group ${canOpen ? 'hover:bg-gray-50 cursor-pointer' : 'cursor-not-allowed'}`}
+      onClick={canOpen ? onClick : undefined}
     >
       {/* Title */}
       <td className="px-4 py-3 max-w-[220px]">
@@ -399,6 +401,11 @@ function AssignmentTableRow({
           {sub.title}
         </p>
         <div className="flex flex-wrap gap-1 mt-1">
+          {!canOpen && (
+            <span className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500 font-medium" title="You can open this submission once your stage becomes active.">
+              <Lock size={9} />Locked until your stage
+            </span>
+          )}
           {item.extension_status === 'pending' && (
             <span className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700 font-medium">
               <CalendarDays size={9} />Ext. pending
@@ -495,12 +502,14 @@ function AssignmentsTable({
   onConflict,
   navigate,
   maxExtensions,
+  canOpen = true,
 }: {
   items: ReviewAssignment[]
   onExtension: (item: ReviewAssignment) => void
   onConflict: (item: ReviewAssignment) => void
   navigate: ReturnType<typeof useNavigate>
   maxExtensions: number
+  canOpen?: boolean
 }) {
   return (
     <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
@@ -528,6 +537,7 @@ function AssignmentsTable({
                 onExtension={onExtension}
                 onConflict={onConflict}
                 maxExtensions={maxExtensions}
+                canOpen={canOpen}
               />
             ))}
           </tbody>
@@ -788,16 +798,21 @@ export default function ReviewsPage() {
   const [search, setSearch] = useState('')
   const [activeTab, setActiveTab] = useState<TabKey>('awaiting')
 
-  const { data: reviewSettings } = useQuery<{ max_extension_requests: number }>({
+  const { data: reviewSettings } = useQuery<{ max_extension_requests: number; reviewers_can_view_future_submissions: boolean }>({
     queryKey: ['review-settings'],
     queryFn: () => api.get('/system/organization').then(r => ({
       max_extension_requests: r.data.max_extension_requests ?? 3,
+      reviewers_can_view_future_submissions: r.data.reviewers_can_view_future_submissions ?? true,
     })),
     staleTime: 120_000,
   })
   const maxExtensions = reviewSettings?.max_extension_requests ?? 3
 
   const isAdminOrCoord = activeRole === 'admin' || activeRole === 'coordinator'
+
+  // Reviewers may be blocked from opening submissions still queued in later
+  // stages; admins/coordinators can always open them.
+  const canOpenUpcoming = isAdminOrCoord || (reviewSettings?.reviewers_can_view_future_submissions ?? true)
 
   const { data: gatedData } = useQuery<{ pending: GatedItem[] }>({    queryKey: ['gated-reviews'],
     queryFn: () => api.get('/admin/gated-reviews').then((r) => r.data),
@@ -987,7 +1002,7 @@ export default function ReviewsPage() {
 
           {effectiveTab === 'upcoming' && (
             upcomingF.length > 0
-              ? <AssignmentsTable items={upcomingF} onExtension={setExtensionItem} onConflict={setConflictItem} navigate={navigate} maxExtensions={maxExtensions} />
+              ? <AssignmentsTable items={upcomingF} onExtension={setExtensionItem} onConflict={setConflictItem} navigate={navigate} maxExtensions={maxExtensions} canOpen={canOpenUpcoming} />
               : <TabEmptyState icon={Clock} message={search ? 'No upcoming assignments match your search.' : 'No upcoming assignments in later stages.'} />
           )}
 

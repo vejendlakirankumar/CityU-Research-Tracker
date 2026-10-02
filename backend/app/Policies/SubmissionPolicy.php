@@ -4,6 +4,7 @@ namespace App\Policies;
 
 use App\Models\Submission;
 use App\Models\SubmissionReviewer;
+use App\Models\OrganizationSetting;
 use App\Models\User;
 
 class SubmissionPolicy
@@ -110,9 +111,38 @@ class SubmissionPolicy
     {
         // A reviewer who has flagged a conflict of interest loses access to the
         // submission until a coordinator resolves the conflict.
-        return SubmissionReviewer::where('submission_id', $submission->id)
+        $assignments = SubmissionReviewer::with('stage:id,order')
+            ->where('submission_id', $submission->id)
             ->where('user_id', $user->id)
             ->where('conflict_flagged', false)
-            ->exists();
+            ->get();
+
+        if ($assignments->isEmpty()) {
+            return false;
+        }
+
+        // When reviewers are allowed to preview future-stage submissions, any
+        // non-conflict assignment grants view access (default behavior).
+        if (OrganizationSetting::current()->reviewers_can_view_future_submissions ?? true) {
+            return true;
+        }
+
+        // Restricted: grant access only once the submission has reached (or
+        // passed) the reviewer's stage, or the reviewer has already decided.
+        $currentOrder = $submission->currentStage?->order;
+
+        foreach ($assignments as $a) {
+            if ($a->decision !== null) {
+                return true;
+            }
+            if ($a->stage_id === $submission->current_stage_id) {
+                return true;
+            }
+            if ($currentOrder !== null && ($a->stage?->order ?? PHP_INT_MAX) <= $currentOrder) {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

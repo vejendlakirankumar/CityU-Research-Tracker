@@ -23,6 +23,7 @@ class OrganizationSetting extends Model
         'review_grace_period_days', 'grace_period_consider_holidays',
         'grace_period_holidays_country', 'max_extension_requests',
         'due_date_exclude_weekends', 'due_date_consider_holidays',
+        'due_date_visibility', 'reviewers_can_view_future_submissions',
     ];
 
     protected function casts(): array
@@ -32,6 +33,7 @@ class OrganizationSetting extends Model
             'grace_period_consider_holidays'  => 'boolean',
             'due_date_exclude_weekends'       => 'boolean',
             'due_date_consider_holidays'      => 'boolean',
+            'reviewers_can_view_future_submissions' => 'boolean',
             'review_grace_period_days'        => 'integer',
             'max_extension_requests'          => 'integer',
             'audit_retention_days'            => 'integer',

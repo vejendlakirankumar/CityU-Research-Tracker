@@ -1032,6 +1032,8 @@ interface ReviewSettings {
   max_extension_requests: number
   due_date_exclude_weekends: boolean
   due_date_consider_holidays: boolean
+  due_date_visibility: 'all_stages' | 'current_stage'
+  reviewers_can_view_future_submissions: boolean
 }
 
 function ReviewTab() {
@@ -1048,6 +1050,8 @@ function ReviewTab() {
       max_extension_requests:         r.data.max_extension_requests ?? 3,
       due_date_exclude_weekends:      r.data.due_date_exclude_weekends ?? false,
       due_date_consider_holidays:     r.data.due_date_consider_holidays ?? false,
+      due_date_visibility:            r.data.due_date_visibility ?? 'all_stages',
+      reviewers_can_view_future_submissions: r.data.reviewers_can_view_future_submissions ?? true,
     })).catch(() => setError('Failed to load review settings.'))
   }, [])
 
@@ -1130,6 +1134,46 @@ function ReviewTab() {
                 : <ToggleLeft  className="w-8 h-8 text-gray-400" />}
               <span className="text-sm text-gray-700">
                 {data.due_date_consider_holidays ? 'Enabled — holidays are skipped' : 'Disabled — all days count'}
+              </span>
+            </button>
+          </Field>
+        </div>
+      </div>
+
+      <div className="mt-8 pt-6 border-t border-gray-200">
+        <SectionHeader
+          title="Reviewer Visibility"
+          subtitle="Control which stage due dates reviewers see and whether they can open submissions still queued in later stages."
+        />
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+          <Field label="Due Date Visibility" hint="“Current stage only” hides due dates for stages that have not become active yet.">
+            <button
+              onClick={() => set('due_date_visibility', data.due_date_visibility === 'current_stage' ? 'all_stages' : 'current_stage')}
+              className="flex items-center gap-2 mt-1"
+            >
+              {data.due_date_visibility === 'current_stage'
+                ? <ToggleRight className="w-8 h-8 text-blue-600" />
+                : <ToggleLeft  className="w-8 h-8 text-gray-400" />}
+              <span className="text-sm text-gray-700">
+                {data.due_date_visibility === 'current_stage'
+                  ? 'Current stage only — future stages hide due dates'
+                  : 'All stages — every stage shows its due date'}
+              </span>
+            </button>
+          </Field>
+
+          <Field label="Allow Reviewers to Open Upcoming Submissions" hint="When disabled, reviewers still see upcoming assignments in later stages but cannot open them until their stage is active.">
+            <button
+              onClick={() => set('reviewers_can_view_future_submissions', !data.reviewers_can_view_future_submissions)}
+              className="flex items-center gap-2 mt-1"
+            >
+              {data.reviewers_can_view_future_submissions
+                ? <ToggleRight className="w-8 h-8 text-blue-600" />
+                : <ToggleLeft  className="w-8 h-8 text-gray-400" />}
+              <span className="text-sm text-gray-700">
+                {data.reviewers_can_view_future_submissions
+                  ? 'Enabled — reviewers can open upcoming submissions'
+                  : 'Disabled — upcoming submissions are view-locked'}
               </span>
             </button>
           </Field>

@@ -200,12 +200,13 @@ class WorkflowAdvancer
         }
     }
 
-    private function notifyStageReviewers(Submission $submission, $stage): void
+    public function notifyStageReviewers(Submission $submission, $stage): void
     {
         $reviewers = SubmissionReviewer::with('user')
             ->where('submission_id', $submission->id)
             ->where('stage_id', $stage->id)
             ->where('status', '!=', 'declined')
+            ->whereNull('assignment_notified_at')
             ->get();
 
         $svc = app(NotificationService::class);

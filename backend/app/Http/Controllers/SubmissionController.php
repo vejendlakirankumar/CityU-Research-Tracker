@@ -13,6 +13,7 @@ use App\Models\SubmissionVersion;
 use App\Models\User;
 use App\Models\StageDefinition;
 use App\Services\NotificationService;
+use App\Services\WorkflowAdvancer;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -1113,6 +1114,11 @@ class SubmissionController extends Controller
         $stageData = collect();
         $previousStageDueAt = null;
 
+        // When due-date visibility is restricted to the current stage, due dates
+        // for not-yet-active (future) stages are hidden from the response.
+        $dueDateVisibility = \App\Models\OrganizationSetting::current()->due_date_visibility ?? 'all_stages';
+        $currentStageOrder = $orderedStages->firstWhere('id', $submission->current_stage_id)?->order;
+
         foreach ($orderedStages as $stage) {
             $stageReviewers = $reviewers->where('stage_id', $stage->id);
             $total     = $stageReviewers->count();
@@ -1175,14 +1181,23 @@ class SubmissionController extends Controller
                 $previousStageDueAt = $stageDueAt;
             }
 
+            // Hide the due date for future (not-yet-active) stages when the
+            // organization restricts due-date visibility to the current stage.
+            $hideStageDue = $dueDateVisibility === 'current_stage'
+                && $currentStageOrder !== null
+                && $stage->order > $currentStageOrder;
+            $outStageDueAt = $hideStageDue ? null : $stageDueAt;
+
             // Per-reviewer effective due date (for display in panel)
             $reviewerList = $showReviewers
-                ? $stageReviewers->map(function ($r) use ($stage, $stageDueAt) {
-                    $effectiveDue = $r->due_at?->toDateString()
-                        ?? $stageDueAt
-                        ?? ($stage->due_days
-                            ? \App\Services\DueDateService::compute($r->assigned_at, $stage->due_days)->toDateString()
-                            : null);
+                ? $stageReviewers->map(function ($r) use ($stage, $outStageDueAt, $hideStageDue) {
+                    $effectiveDue = $hideStageDue
+                        ? null
+                        : ($r->due_at?->toDateString()
+                            ?? $outStageDueAt
+                            ?? ($stage->due_days
+                                ? \App\Services\DueDateService::compute($r->assigned_at, $stage->due_days)->toDateString()
+                                : null));
                     return [
                         'id'     => $r->id,
                         'name'   => $r->user?->name,
@@ -1215,7 +1230,7 @@ class SubmissionController extends Controller
                 'outcome'         => $outcome,
                 'min_approvals'   => $stage->min_approvals,
                 'due_days'        => $stage->due_days ?: null,
-                'stage_due_at'    => $stageDueAt,
+                'stage_due_at'    => $outStageDueAt,
                 'reviewers'       => $reviewerList,
             ]);
         }
@@ -1284,6 +1299,17 @@ class SubmissionController extends Controller
             $submission->update(['status' => Submission::STATUS_IN_REVIEW]);
             // Ensure current stage reflects the first pending reviewer stage.
             $this->syncCurrentStageFromReviewers($submission);
+
+            // Email the reviewers of the now-active stage. The deferred "notify"
+            // endpoint bails while the submission is still AWAITING_REVIEWERS
+            // (no current stage yet), so first-stage reviewers would otherwise
+            // never receive their assignment email when review begins.
+            if ($submission->current_stage_id) {
+                $currentStage = StageDefinition::find($submission->current_stage_id);
+                if ($currentStage) {
+                    app(WorkflowAdvancer::class)->notifyStageReviewers($submission, $currentStage);
+                }
+            }
         } else {
             return response()->json([
                 'message' => 'Submission cannot be advanced from its current status.',
