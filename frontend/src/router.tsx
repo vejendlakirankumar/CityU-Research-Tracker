@@ -54,7 +54,7 @@ export const router = createBrowserRouter(
         {
           path: '/reviews',
           element: (
-            <RoleRoute allowedRoles={['admin', 'coordinator', 'reviewer']}>
+            <RoleRoute allowedRoles={['admin', 'coordinator', 'readonly', 'reviewer']}>
               <ReviewsPage />
             </RoleRoute>
           ),
@@ -110,7 +110,7 @@ export const router = createBrowserRouter(
         {
           path: '/reports',
           element: (
-            <RoleRoute allowedRoles={['admin', 'coordinator']}>
+            <RoleRoute allowedRoles={['admin', 'coordinator', 'readonly']}>
               <ReportsPage />
             </RoleRoute>
           ),

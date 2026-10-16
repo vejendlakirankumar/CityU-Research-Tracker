@@ -62,7 +62,7 @@ Route::prefix('sso/{provider}')->group(function () {
 });
 
 // ── Authenticated routes ──────────────────────────────────────────────────────
-Route::middleware(['auth:sanctum', 'active-role'])->group(function () {
+Route::middleware(['auth:sanctum', 'active-role', 'read-only'])->group(function () {
 
     // Auth
     Route::prefix('auth')->group(function () {
@@ -246,12 +246,6 @@ Route::middleware(['auth:sanctum', 'active-role'])->group(function () {
             Route::delete('audit-logs',          [AuditLogController::class, 'purge']);
         });
 
-        // Analytics
-        Route::get('analytics/overview',         [AnalyticsController::class, 'overview']);
-        Route::get('analytics/turnaround',       [AnalyticsController::class, 'turnaround']);
-        Route::get('analytics/reviewer-load',    [AnalyticsController::class, 'reviewerLoad']);
-        Route::get('analytics/metrics',          [AnalyticsController::class, 'metrics']);
-
         // Coordinator pending actions (extensions, conflicts, unassigned submissions)
         Route::get('reviewer-pending-actions',   [SubmissionReviewerController::class, 'pendingActions']);
 
@@ -281,6 +275,13 @@ Route::middleware(['auth:sanctum', 'active-role'])->group(function () {
         Route::post('custom-roles',                 [CustomRoleController::class, 'store']);
         Route::patch('custom-roles/{customRole}',   [CustomRoleController::class, 'update']);
         Route::delete('custom-roles/{customRole}',  [CustomRoleController::class, 'destroy']);
+    });
+
+    Route::middleware('role:admin,coordinator,readonly')->prefix('admin/analytics')->group(function () {
+        Route::get('overview',      [AnalyticsController::class, 'overview']);
+        Route::get('turnaround',    [AnalyticsController::class, 'turnaround']);
+        Route::get('reviewer-load', [AnalyticsController::class, 'reviewerLoad']);
+        Route::get('metrics',       [AnalyticsController::class, 'metrics']);
     });
 
     // ── Gated reviews — accessible to admin, coordinator, and assigned gatekeeper reviewers ──

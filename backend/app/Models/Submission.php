@@ -115,7 +115,7 @@ class Submission extends Model
     {
         $roles = $user->effectiveRoles();
 
-        if (in_array('admin', $roles) || in_array('coordinator', $roles)) {
+        if ($user->canViewCoordinatorData()) {
             return $query; // All submissions
         }
 

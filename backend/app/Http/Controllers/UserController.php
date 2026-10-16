@@ -89,7 +89,7 @@ class UserController extends Controller
             'org_role'     => ['nullable', 'string', 'max:100'],
             'password'     => array_merge(['required', 'string', 'confirmed'], $passwordRules),
             'roles'        => ['required', 'array', 'min:1'],
-            'roles.*'      => ['required', Rule::in(['admin', 'coordinator', 'reviewer', 'student'])],
+            'roles.*'      => ['required', Rule::in(['admin', 'coordinator', 'readonly', 'reviewer', 'student'])],
             'program_id'   => ['nullable', 'uuid', 'exists:programs,id'],
             'is_active'    => ['boolean'],
         ]);
@@ -97,6 +97,9 @@ class UserController extends Controller
         // Coordinators cannot create admin accounts
         $actor = $request->user();
         if ($actor->hasRole('coordinator') && !$actor->hasRole('admin')) {
+            if (in_array('readonly', $data['roles'], true)) {
+                return response()->json(['message' => 'Only administrators can assign the read-only role.'], 403);
+            }
             $data['roles'] = array_values(array_filter($data['roles'], fn($r) => $r !== 'admin'));
             if (empty($data['roles'])) {
                 $data['roles'] = ['student'];
@@ -192,7 +195,7 @@ class UserController extends Controller
 
         if ($isAdmin) {
             $rules['roles']   = ['sometimes', 'array', 'min:1'];
-            $rules['roles.*'] = ['required', Rule::in(['admin', 'coordinator', 'reviewer', 'student'])];
+            $rules['roles.*'] = ['required', Rule::in(['admin', 'coordinator', 'readonly', 'reviewer', 'student'])];
         }
 
         $data = $request->validate($rules);
@@ -438,7 +441,7 @@ class UserController extends Controller
 
         $data = $request->validate([
             'roles'   => ['required', 'array', 'min:1'],
-            'roles.*' => ['required', Rule::in(['admin', 'coordinator', 'reviewer', 'student'])],
+            'roles.*' => ['required', Rule::in(['admin', 'coordinator', 'readonly', 'reviewer', 'student'])],
         ]);
 
         $before = $user->roles;

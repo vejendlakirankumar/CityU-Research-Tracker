@@ -51,6 +51,7 @@ interface IncomingSubmission {
 
 interface ReviewAssignment {
   assignment_id: string
+  reviewer?: { id: string; name: string } | null
   assignment_status: 'pending' | 'accepted' | 'declined' | 'completed'
   due_at: string | null
   decision: 'approve' | 'reject' | 'revise' | null
@@ -368,6 +369,7 @@ function AssignmentTableRow({
   maxExtensions: number
   canOpen?: boolean
 }) {
+  const isReadOnly = useActiveRole() === 'readonly'
   const sub = item.submission
   const isAwaiting = item.decision === null
     && item.stage?.id === item.submission.current_stage?.id
@@ -400,6 +402,7 @@ function AssignmentTableRow({
         <p className="text-sm font-medium text-gray-900 truncate" title={sub.title}>
           {sub.title}
         </p>
+        {isReadOnly && item.reviewer && <p className="mt-1 text-xs text-gray-500">{item.reviewer.name}</p>}
         <div className="flex flex-wrap gap-1 mt-1">
           {!canOpen && (
             <span className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500 font-medium" title="You can open this submission once your stage becomes active.">
@@ -467,7 +470,7 @@ function AssignmentTableRow({
       {/* Actions */}
       <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center gap-1">
-          {isAwaiting && !item.conflict_flagged && (
+          {!isReadOnly && isAwaiting && !item.conflict_flagged && (
             <>
               {(!item.extension_status || item.extension_status === 'rejected') && (item.extension_request_count ?? 0) < maxExtensions && (
                 <button
@@ -511,6 +514,7 @@ function AssignmentsTable({
   maxExtensions: number
   canOpen?: boolean
 }) {
+  const isReadOnly = useActiveRole() === 'readonly'
   return (
     <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
       <div className="overflow-x-auto">
@@ -519,7 +523,7 @@ function AssignmentsTable({
             <tr className="border-b border-gray-100 bg-gray-50/80">
               <th scope="col" className="text-left text-[10px] font-semibold text-gray-400 uppercase tracking-wide px-4 py-2.5">Title</th>
               <th scope="col" className="text-left text-[10px] font-semibold text-gray-400 uppercase tracking-wide px-4 py-2.5">Type</th>
-              <th scope="col" className="text-left text-[10px] font-semibold text-gray-400 uppercase tracking-wide px-4 py-2.5">Your Stage</th>
+              <th scope="col" className="text-left text-[10px] font-semibold text-gray-400 uppercase tracking-wide px-4 py-2.5">{isReadOnly ? 'Review Stage' : 'Your Stage'}</th>
               <th scope="col" className="text-left text-[10px] font-semibold text-gray-400 uppercase tracking-wide px-4 py-2.5">Current Stage</th>
               <th scope="col" className="text-left text-[10px] font-semibold text-gray-400 uppercase tracking-wide px-4 py-2.5">Submitted</th>
               <th scope="col" className="text-left text-[10px] font-semibold text-gray-400 uppercase tracking-wide px-4 py-2.5">Prev. Decision Date</th>
@@ -792,6 +796,7 @@ type TabKey = 'gated' | 'awaiting' | 'upcoming' | 'completed' | 'archived'
 
 export default function ReviewsPage() {
   const activeRole = useActiveRole()
+  const isReadOnly = activeRole === 'readonly'
   const navigate = useNavigate()
   const [extensionItem, setExtensionItem] = useState<ReviewAssignment | null>(null)
   const [conflictItem, setConflictItem] = useState<ReviewAssignment | null>(null)
@@ -805,6 +810,7 @@ export default function ReviewsPage() {
       reviewers_can_view_future_submissions: r.data.reviewers_can_view_future_submissions ?? true,
     })),
     staleTime: 120_000,
+    enabled: !isReadOnly,
   })
   const maxExtensions = reviewSettings?.max_extension_requests ?? 3
 
@@ -812,11 +818,12 @@ export default function ReviewsPage() {
 
   // Reviewers may be blocked from opening submissions still queued in later
   // stages; admins/coordinators can always open them.
-  const canOpenUpcoming = isAdminOrCoord || (reviewSettings?.reviewers_can_view_future_submissions ?? true)
+  const canOpenUpcoming = isReadOnly || isAdminOrCoord || (reviewSettings?.reviewers_can_view_future_submissions ?? true)
 
   const { data: gatedData } = useQuery<{ pending: GatedItem[] }>({    queryKey: ['gated-reviews'],
     queryFn: () => api.get('/admin/gated-reviews').then((r) => r.data),
     staleTime: 30_000,
+    enabled: !isReadOnly,
   })
   const gatedPending = gatedData?.pending ?? []
 
@@ -835,7 +842,7 @@ export default function ReviewsPage() {
   const conflictDeclarations = coordData?.conflicts ?? []
   const incomingSubmissions = coordData?.unassigned ?? []
 
-  const { data, isLoading, refetch } = useQuery<{ pending: ReviewAssignment[], future: ReviewAssignment[], completed: ReviewAssignment[] }>({
+  const { data, isLoading, isError, refetch } = useQuery<{ pending: ReviewAssignment[], future: ReviewAssignment[], completed: ReviewAssignment[], archived?: ReviewAssignment[] }>({
     queryKey: ['my-reviews', 'assignments'],
     queryFn: () => api.get('/submissions/my-reviews').then((r) => r.data),
     staleTime: 30_000,
@@ -849,7 +856,7 @@ export default function ReviewsPage() {
 
   const awaiting  = pending.filter((i) => classifyItem(i) === 'awaiting')
   const completedByMe = completed.filter((i) => classifyItem(i) === 'completed')
-  const others    = items.filter((i) => classifyItem(i) === 'others')
+  const others    = [...items.filter((i) => classifyItem(i) === 'others'), ...(data?.archived ?? [])]
 
   const awaitingSorted = [
     ...awaiting.filter((i) => i.is_overdue),
@@ -863,6 +870,7 @@ export default function ReviewsPage() {
     !search ||
     i.submission.title.toLowerCase().includes(s) ||
     (i.submission.submission_type?.label ?? '').toLowerCase().includes(s)
+    || (isReadOnly && (i.reviewer?.name ?? '').toLowerCase().includes(s))
   const matchesGated = (g: GatedItem) =>
     !search ||
     g.title.toLowerCase().includes(s) ||
@@ -877,13 +885,20 @@ export default function ReviewsPage() {
   // ── Tab definitions (gated + archived only shown when populated) ─────────────
   const tabDefs: { key: TabKey; label: string; count: number; show: boolean }[] = [
     { key: 'gated',     label: 'Gatekeeper Decisions', count: gatedPending.length,  show: gatedPending.length > 0 },
-    { key: 'awaiting',  label: 'Awaiting My Review',   count: awaitingSorted.length, show: true },
+    { key: 'awaiting',  label: isReadOnly ? 'Awaiting Review' : 'Awaiting My Review', count: awaitingSorted.length, show: true },
     { key: 'upcoming',  label: 'Upcoming',             count: future.length,         show: true },
     { key: 'completed', label: 'Completed',            count: completedByMe.length,  show: true },
     { key: 'archived',  label: 'Archived',             count: others.length,         show: others.length > 0 },
   ]
   const visibleTabs = tabDefs.filter((t) => t.show)
   const effectiveTab: TabKey = visibleTabs.some((t) => t.key === activeTab) ? activeTab : 'awaiting'
+
+  if (isError) {
+    return <div role="alert" className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+      Unable to load reviewer assignments.
+      <button className="ml-3 underline" onClick={() => refetch()}>Retry</button>
+    </div>
+  }
 
   return (
     <>
@@ -916,7 +931,7 @@ export default function ReviewsPage() {
           <p className="text-sm text-gray-500 mt-0.5">
             {isAdminOrCoord
               ? 'Manage peer review assignments, extensions, and decisions'
-              : 'Submissions assigned to you for peer review'}
+              : isReadOnly ? 'View reviewer assignments across all submissions (read-only)' : 'Submissions assigned to you for peer review'}
           </p>
         </div>
         <button
@@ -957,13 +972,13 @@ export default function ReviewsPage() {
             </div>
           ))}
         </div>
-      ) : items.length === 0 && gatedPending.length === 0 ? (
+      ) : items.length === 0 && others.length === 0 && gatedPending.length === 0 ? (
         <div className="bg-white rounded-xl border border-gray-200 shadow-sm">
           <div className="flex flex-col items-center justify-center py-24 text-center">
             <ShieldCheck className="w-12 h-12 text-gray-200 mb-4" />
             <p className="text-base font-medium text-gray-500">No reviews assigned</p>
             <p className="text-sm text-gray-400 mt-1">
-              Submissions assigned to you for review will appear here.
+              {isReadOnly ? 'Reviewer assignments will appear here when reviewers are assigned to submissions.' : 'Submissions assigned to you for review will appear here.'}
             </p>
           </div>
         </div>
@@ -997,7 +1012,7 @@ export default function ReviewsPage() {
           {effectiveTab === 'awaiting' && (
             awaitingF.length > 0
               ? <AssignmentsTable items={awaitingF} onExtension={setExtensionItem} onConflict={setConflictItem} navigate={navigate} maxExtensions={maxExtensions} />
-              : <TabEmptyState icon={Hourglass} message={search ? 'No items awaiting your review match your search.' : 'Nothing is awaiting your review right now.'} />
+              : <TabEmptyState icon={Hourglass} message={isReadOnly ? 'No assignments awaiting review match this view.' : search ? 'No items awaiting your review match your search.' : 'Nothing is awaiting your review right now.'} />
           )}
 
           {effectiveTab === 'upcoming' && (
@@ -1009,7 +1024,7 @@ export default function ReviewsPage() {
           {effectiveTab === 'completed' && (
             completedF.length > 0
               ? <AssignmentsTable items={completedF} onExtension={setExtensionItem} onConflict={setConflictItem} navigate={navigate} maxExtensions={maxExtensions} />
-              : <TabEmptyState icon={CheckCircle2} message={search ? 'No completed reviews match your search.' : 'You have not completed any reviews yet.'} />
+              : <TabEmptyState icon={CheckCircle2} message={search ? 'No completed reviews match your search.' : isReadOnly ? 'No completed reviews yet.' : 'You have not completed any reviews yet.'} />
           )}
 
           {effectiveTab === 'archived' && (

@@ -108,6 +108,40 @@ class ReviewerUploadDiagnosticsTest extends TestCase
         ], ['Accept' => 'application/json']);
     }
 
+    public function test_read_only_observer_can_read_gated_feedback_and_download_but_assigned_read_only_cannot_upload(): void
+    {
+        $this->upload(UploadedFile::fake()->create('feedback.pdf', 100, 'application/pdf'))->assertOk();
+        Schema::table('submission_types', function (Blueprint $table) {
+            $table->boolean('is_gated_review')->default(true);
+            $table->boolean('is_blind_review')->default(false);
+        });
+        Schema::table('submission_reviewers', function (Blueprint $table) {
+            $table->timestamp('decision_at')->nullable();
+        });
+        Schema::create('appeal_requests', function (Blueprint $table) {
+            $table->uuid('id')->primary();
+            $table->uuid('submission_id');
+            $table->timestamp('created_at')->nullable();
+        });
+        DB::table('submission_reviewers')->where('id', $this->reviewerId)
+            ->update(['decision' => 'approve', 'decision_at' => now()]);
+        $document = DB::table('submission_reviewer_documents')->first();
+        $observer = (new User())->forceFill([
+            'id' => (string) Str::uuid(), 'roles' => ['readonly'], 'is_active' => true,
+        ]);
+        $this->actingAs($observer, 'sanctum');
+        $this->getJson("/api/submissions/{$this->submissionId}/feedback")
+            ->assertOk()->assertJsonCount(1, 'data')
+            ->assertJsonPath('data.0.documents.0.name', 'feedback.pdf');
+        $this->get("/api/submissions/{$this->submissionId}/reviewers/{$this->reviewerId}/documents/{$document->id}")
+            ->assertOk()->assertDownload('feedback.pdf');
+
+        $this->reviewer->forceFill(['roles' => ['reviewer', 'readonly']]);
+        $this->actingAs($this->reviewer, 'sanctum')->withHeader('X-Active-Role', 'readonly');
+        $this->upload(UploadedFile::fake()->create('blocked.pdf', 100, 'application/pdf'))->assertForbidden();
+        $this->assertDatabaseCount('submission_reviewer_documents', 1);
+    }
+
     public function test_pdf_from_reported_incident_is_persisted_under_eight_mb_feedback_limit(): void
     {
         $this->upload(UploadedFile::fake()->create('Chapter 3.pdf', 3584, 'application/pdf'))->assertOk();
@@ -254,5 +288,49 @@ class ReviewerUploadDiagnosticsTest extends TestCase
         $this->getJson('/api/system/logs?request_id=invalid')->assertUnprocessable();
         $this->getJson('/api/system/logs?date_from=2026-10-16&date_to=2026-10-15')->assertUnprocessable();
         $this->getJson('/api/system/logs?date_to=2026-10-16')->assertOk();
+    }
+
+    public function test_unfiltered_system_logs_show_latest_fifty_without_any_submission_id(): void
+    {
+        $this->reviewer->forceFill(['roles' => ['admin']]);
+        $now = now();
+        for ($index = 0; $index < 55; $index++) {
+            SystemLog::create([
+                'id' => (string) Str::uuid(), 'request_id' => (string) Str::uuid(),
+                'level' => 'info', 'event' => "test.event.$index",
+                'submission_id' => $index % 2 === 0 ? $this->submissionId : null,
+                'context' => [], 'created_at' => $now->copy()->subSeconds(55 - $index),
+            ]);
+        }
+        $this->getJson('/api/system/logs')->assertOk()
+            ->assertJsonCount(50, 'data')->assertJsonPath('total', 55)
+            ->assertJsonPath('per_page', 50)->assertJsonPath('data.0.event', 'test.event.54')
+            ->assertJsonPath('data.49.event', 'test.event.5');
+        $this->getJson('/api/system/logs?page=2')->assertOk()
+            ->assertJsonCount(5, 'data')->assertJsonPath('data.0.event', 'test.event.4');
+        $this->getJson('/api/system/logs?submission_id=&request_id=&level=&date_from=&date_to=')
+            ->assertOk()->assertJsonCount(50, 'data')->assertJsonPath('total', 55);
+    }
+
+    public function test_system_logs_support_text_search_separately_from_optional_uuid_filters(): void
+    {
+        $this->reviewer->forceFill(['roles' => ['admin']]);
+        foreach (['reviewer.validation_failed', 'reviewer.documents_uploaded'] as $event) {
+            SystemLog::create([
+                'id' => (string) Str::uuid(), 'request_id' => (string) Str::uuid(),
+                'level' => 'warning', 'event' => $event, 'context' => [],
+                'submission_id' => $this->submissionId, 'created_at' => now(),
+            ]);
+        }
+        $this->getJson('/api/system/logs?search=Validation%20Failed')
+            ->assertOk()->assertJsonCount(1, 'data')
+            ->assertJsonPath('data.0.event', 'reviewer.validation_failed');
+        $this->getJson("/api/system/logs?search=validation&submission_id={$this->submissionId}")
+            ->assertOk()->assertJsonPath('total', 1);
+        $this->getJson('/api/system/logs?request_id=validation%20failed')
+            ->assertUnprocessable()->assertJsonValidationErrors('request_id')
+            ->assertJsonPath('errors.request_id.0', 'Error reference must be a UUID copied from an error message. Use Search events for text such as "validation failed", or Show latest 50 to clear all filters.');
+        $this->getJson('/api/system/logs?submission_id=*')
+            ->assertUnprocessable()->assertJsonValidationErrors('submission_id');
     }
 }

@@ -6,8 +6,10 @@ import ProfileModal from './ProfileModal'
 import BottomNav from './BottomNav'
 import { ToastProvider } from '../../lib/toast'
 import { useThemeStore } from '../../stores/themeStore'
+import { useActiveRole } from '../../stores/authStore'
 
 export default function AppShell() {
+  const isReadOnly = useActiveRole() === 'readonly'
   const isDark = useThemeStore((s) => s.isDark)
   const accentColor = useThemeStore((s) => s.accentColor)
 
@@ -37,6 +39,9 @@ export default function AppShell() {
             <Sidebar />
           </div>
           <main className="flex-1 overflow-y-auto overflow-x-hidden bg-gray-50 dark:bg-gray-900 p-4 md:p-6 pb-20 md:pb-6">
+            {isReadOnly && <p className="mb-4 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800">
+              Read-only access. You can view submissions, documents, feedback, assignments, and reports, but cannot make changes or access administration.
+            </p>}
             <Outlet />
           </main>
         </div>

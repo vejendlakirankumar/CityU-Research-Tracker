@@ -138,7 +138,16 @@ export default function DashboardPage() {
       )}
 
       {/* Quick actions */}
-      {primaryRole === 'student' ? (
+      {primaryRole === 'readonly' ? (
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <QuickAction title="All Submissions" description="View submissions and documents"
+            icon={FileText} onClick={() => navigate('/submissions')} color="blue" />
+          <QuickAction title="Assignments" description="View reviewer assignments"
+            icon={Clock} onClick={() => navigate('/reviews')} color="amber" />
+          <QuickAction title="Reports" description="View portal reports"
+            icon={FileText} onClick={() => navigate('/reports')} color="purple" />
+        </div>
+      ) : primaryRole === 'student' ? (
         <div className="flex flex-wrap justify-center gap-4">
           <QuickAction title="New Submission" description="Start submitting your research"
             icon={FileText} onClick={() => navigate('/submissions/new')} color="blue" />

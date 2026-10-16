@@ -579,6 +579,46 @@ Set back to `false` after recovery.
 
 Production uses a two-tree flow: **pull** into `/opt/rrp/source`, then **sync** into the served path. This preserves `.env`, `vendor/`, and `storage/`.
 
+### Read-only role update
+
+This update changes both the backend and frontend. It adds no dependencies or
+database migrations and does not alter existing users' roles automatically.
+Use the backend/frontend update steps below (or your established updater), build
+with the existing Node installation as `rrp`, publish both parts of the same
+release, rebuild Laravel caches, reload PHP-FPM, and ensure maintenance mode is
+cleared with `artisan up`. Preserve the live `.env`, storage, and vendor directory.
+On the current VM, `/var/www/rrp` may resolve to `/opt/rrp/www/rrp`; always run
+Artisan in the backend actually served by Nginx.
+
+Before publishing, run the focused regression checks in an existing development
+or staging environment with dependencies already available:
+
+```bash
+cd /opt/rrp/source/backend
+sudo -u rrp php8.4 artisan test --filter='ReadOnlyAccessTest|test_read_only_observer'
+cd /opt/rrp/source/frontend
+sudo -u rrp npm test -- src/test/read-only-access.test.tsx
+sudo -u rrp npm run build
+```
+
+After deployment:
+
+1. As an administrator, edit a test coordinator/operator account in **User
+   Management** and select **only Read-only**. Save and sign into that account.
+2. Confirm the read-only banner and access to submissions, document previews and
+   downloads, feedback, all reviewer assignments (including separate reviewers
+   on the same submission), reports, and calendar.
+3. Confirm there are no upload, edit, review-decision, annotation, assignment,
+   extension, message/email, or meeting controls. Direct navigation to
+   administration or New Submission must redirect away.
+4. Confirm a business-write API request and an administration API read return
+   HTTP 403, including when `X-Active-Role: readonly` is used by a multi-role
+   account. Reports' four analytics GET endpoints are the intentional exception
+   to the otherwise prohibited administration APIs.
+5. Confirm an existing coordinator can still edit/manage and an administrator
+   can still assign roles when their respective role is active. Sign-out and
+   own-password changes remain available to read-only users.
+
 ### Backend update
 
 ```bash

@@ -3,8 +3,10 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Bell, CheckCheck, ArrowRight } from 'lucide-react'
 import api from '../lib/axios'
 import type { AppNotification, NotificationsResponse } from '../types/notifications'
+import { useActiveRole } from '../stores/authStore'
 
 export default function NotificationsPage() {
+  const isReadOnly = useActiveRole() === 'readonly'
   const navigate = useNavigate()
   const queryClient = useQueryClient()
 
@@ -24,7 +26,7 @@ export default function NotificationsPage() {
   const unreadCount = data?.unread_count ?? 0
 
   function handleClick(n: AppNotification) {
-    if (!n.read_at) {
+    if (!isReadOnly && !n.read_at) {
       markRead.mutate([n.id])
     }
     if (n.link) navigate(n.link)
@@ -40,7 +42,7 @@ export default function NotificationsPage() {
           <h1 className="text-2xl font-bold text-gray-900">Notifications</h1>
           <p className="text-sm text-gray-500 mt-1">Your alerts and system notifications</p>
         </div>
-        {unreadCount > 0 && (
+        {unreadCount > 0 && !isReadOnly && (
           <button
             onClick={() => markRead.mutate(undefined)}
             disabled={markRead.isPending}
@@ -135,4 +137,3 @@ function NotificationRow({
     </button>
   )
 }
-

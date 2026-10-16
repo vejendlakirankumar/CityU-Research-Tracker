@@ -37,7 +37,8 @@ class SubmissionController extends Controller
     {
         $user = $request->user();
 
-        // Load ALL non-declined assignments for this reviewer (across all stages).
+        $readOnly = $user->hasRole('readonly');
+        // Read-only observers see assignments across reviewers, not their personal queue.
         $allAssignments = SubmissionReviewer::with([
             'submission' => fn($q) => $q->with([
                 'submitter:id,name,email',
@@ -47,18 +48,23 @@ class SubmissionController extends Controller
             ]),
             'stage:id,name,stage_role_label,order',
         ])
-        ->where('user_id', $user->id)
-        ->where('status', '!=', 'declined')
+        ->when(!$readOnly, fn ($q) => $q->where('user_id', $user->id)->where('status', '!=', 'declined'))
+        ->when($readOnly, fn ($q) => $q->with('user:id,name,email'))
         ->get();
 
         // ── Build three collections: pending, future and completed ────────────
         $pending = collect();
         $future = collect();
         $completed = collect();
+        $archived = collect();
 
-        foreach ($allAssignments->groupBy('submission_id') as $assignments) {
+        foreach ($allAssignments->groupBy(fn ($assignment) => $readOnly ? $assignment->id : $assignment->submission_id) as $assignments) {
             $s = $assignments->first()?->submission;
             if (!$s) continue;
+            if ($readOnly && $assignments->first()->status === 'declined') {
+                $archived->push($assignments->first());
+                continue;
+            }
 
             // Pending: active stage assignment with no decision
             $activePending = $assignments->first(
@@ -100,6 +106,9 @@ class SubmissionController extends Controller
             if ($completedAssignment) {
                 $completed->push($completedAssignment);
             }
+            if ($readOnly && !$activePending && !$futureAssignment && !$completedAssignment) {
+                $archived->push($assignments->first());
+            }
         }
 
         // Sort pending: overdue first, then due-soon, then by due_at asc
@@ -135,6 +144,7 @@ class SubmissionController extends Controller
             'pending' => $pendingData,
             'future' => $futureData,
             'completed' => $completedData,
+            'archived' => $archived->map(fn ($a) => $this->formatReviewAssignment($a, $today))->values(),
         ]);
     }
 
@@ -152,6 +162,8 @@ class SubmissionController extends Controller
 
         return [
             'assignment_id'             => $a->id,
+            'reviewer'                  => $a->relationLoaded('user') && $a->user
+                ? ['id' => $a->user->id, 'name' => $a->user->name] : null,
             'assignment_status'         => $a->status,
             'due_at'                    => $a->due_at?->toDateString(),
             'decision'                  => $a->decision,
@@ -719,8 +731,7 @@ class SubmissionController extends Controller
         $this->authorize('view', $submission);
 
         $user           = $request->user();
-        $roles          = (array) ($user->roles ?? []);
-        $isAdminOrCoord = count(array_intersect($roles, ['admin', 'coordinator'])) > 0;
+        $isAdminOrCoord = $user->canViewCoordinatorData();
         $isGatedReview  = $submission->submissionType?->is_gated_review ?? false;
 
         // For gated-review submissions, determine whether the viewer should see
@@ -845,8 +856,7 @@ class SubmissionController extends Controller
         $this->authorize('view', $submission);
 
         $user           = $request->user();
-        $roles          = (array) ($user->roles ?? []);
-        $isAdminOrCoord = count(array_intersect($roles, ['admin', 'coordinator'])) > 0;
+        $isAdminOrCoord = $user->canViewCoordinatorData();
         $isBlind        = $submission->submissionType?->is_blind_review ?? false;
         $isGatedReview  = $submission->submissionType?->is_gated_review ?? false;
 
@@ -1093,7 +1103,7 @@ class SubmissionController extends Controller
 
         // Admins/coordinators always see reviewer names even in blind reviews
         $requestingUser = request()->user();
-        $isAdminOrCoord = $requestingUser->hasAnyRole(['admin', 'coordinator']);
+        $isAdminOrCoord = $requestingUser->canViewCoordinatorData();
         $showReviewers  = !$isBlind || $isAdminOrCoord;
 
         $reviewers = $submission->reviewers;
@@ -1474,8 +1484,7 @@ class SubmissionController extends Controller
         if (! $viewer) {
             return false;
         }
-        $roles = (array) ($viewer->roles ?? []);
-        if (count(array_intersect($roles, ['admin', 'coordinator'])) > 0) {
+        if ($viewer->canViewCoordinatorData()) {
             return true;
         }
         $isGated = $s->submissionType?->is_gated_review ?? false;
@@ -1508,8 +1517,8 @@ class SubmissionController extends Controller
         };
 
         // Reviewer (and admin/coordinator) → their own review assignments
-        if (array_intersect($roles, ['reviewer', 'admin', 'coordinator'])) {
-            $adminOrCoord = array_intersect($roles, ['admin', 'coordinator']);
+        if ($user->canViewCoordinatorData() || in_array('reviewer', $roles)) {
+            $adminOrCoord = $user->canViewCoordinatorData();
 
             $reviewerQuery = SubmissionReviewer::with([
                 'submission:id,title,status',

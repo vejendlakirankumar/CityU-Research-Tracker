@@ -101,7 +101,7 @@ class GatedReleaseController extends Controller
     {
         $user  = request()->user();
         $roles = (array) ($user->roles ?? []);
-        if (!count(array_intersect($roles, ['admin', 'coordinator'])) &&
+        if (!$user->canViewCoordinatorData() &&
             !$this->canAccessGatedRelease($user, $roles, $submissionId)) {
             return response()->json(['message' => 'Forbidden.'], 403);
         }
@@ -392,7 +392,7 @@ class GatedReleaseController extends Controller
         $user = $request->user();
         $roles = (array) ($user->roles ?? []);
 
-        if (!$this->canAccessGatedRelease($user, $roles, $submissionId)) {
+        if (!$user->canViewCoordinatorData() && !$this->canAccessGatedRelease($user, $roles, $submissionId)) {
             return response()->json(['message' => 'Forbidden.'], 403);
         }
 

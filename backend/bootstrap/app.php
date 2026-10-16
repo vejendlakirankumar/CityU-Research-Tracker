@@ -33,6 +33,7 @@ return Application::configure(basePath: dirname(__DIR__))
             'auth' => \App\Http\Middleware\Authenticate::class,
             'role' => \App\Http\Middleware\EnsureRole::class,
             'active-role' => \App\Http\Middleware\ResolveActiveRole::class,
+            'read-only' => \App\Http\Middleware\EnforceReadOnlyAccess::class,
         ]);
 
         // Append security headers to all API responses

@@ -189,7 +189,7 @@ class SubmissionEmailController extends Controller
      */
     private function canViewEmails($user, Submission $submission): bool
     {
-        if ($user->hasAnyRole(['admin', 'coordinator'])) {
+        if ($user->canViewCoordinatorData()) {
             return true;
         }
 

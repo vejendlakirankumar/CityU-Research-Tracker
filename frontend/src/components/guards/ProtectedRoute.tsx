@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 import { Navigate, useLocation } from 'react-router-dom'
-import { useAuthStore } from '../../stores/authStore'
+import { useActiveRole, useAuthStore } from '../../stores/authStore'
 import api from '../../lib/axios'
 import type { AuthUser } from '../../types/auth'
 
@@ -11,6 +11,7 @@ interface Props {
 export default function ProtectedRoute({ children }: Props) {
   const { user, token, setAuth, clearAuth, setLoading } = useAuthStore()
   const location = useLocation()
+  const activeRole = useActiveRole()
 
   // If we have a token but no user (e.g., page reload), fetch /me
   useEffect(() => {
@@ -35,6 +36,13 @@ export default function ProtectedRoute({ children }: Props) {
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-brand-800" />
       </div>
     )
+  }
+
+  const readOnlyPages = ['/dashboard', '/submissions', '/reviews', '/reports', '/notifications', '/calendar']
+  const currentPath = location.pathname.replace(/\/+$/, '')
+  const isSubmissionDetail = /^\/submissions\/[0-9a-f-]{36}$/i.test(currentPath)
+  if (activeRole === 'readonly' && !readOnlyPages.includes(currentPath) && !isSubmissionDetail) {
+    return <Navigate to="/submissions" replace />
   }
 
   return <>{children}</>

@@ -11,6 +11,7 @@ import type {
   GroupMember, PaginatedResponse, GroupType,
 } from '../types/users'
 import type { Role } from '../types/auth'
+import { ROLE_LABELS } from '../types/auth'
 
 // ── Utilities ────────────────────────────────────────────────────────────────
 
@@ -41,12 +42,13 @@ function generatePassword(length = 16): string {
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-const ROLES: Role[] = ['admin', 'coordinator', 'reviewer', 'student']
+const ROLES: Role[] = ['admin', 'coordinator', 'readonly', 'reviewer', 'student']
 const GROUP_TYPES: GroupType[] = ['department', 'faculty', 'school', 'custom']
 
 const roleColor: Record<Role, string> = {
   admin:       'bg-red-100 text-red-700',
   coordinator: 'bg-purple-100 text-purple-700',
+  readonly:    'bg-slate-100 text-slate-700',
   reviewer:    'bg-blue-100 text-blue-700',
   student:     'bg-green-100 text-green-700',
 }
@@ -56,7 +58,7 @@ const roleColor: Record<Role, string> = {
 function RoleBadge({ role }: { role: Role }) {
   return (
     <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium capitalize', roleColor[role])}>
-      {role}
+      {ROLE_LABELS[role]}
     </span>
   )
 }
@@ -504,14 +506,17 @@ function UserFormModal({
         {!coordinatorEditMode && (
           <FormField label="System Roles" error={errors.roles}>
             <div className="flex flex-wrap gap-2 mt-1">
-              {ROLES.filter(role => actorIsAdmin || role !== 'admin').map(role => (
+              {ROLES.filter(role => actorIsAdmin || (role !== 'admin' && role !== 'readonly')).map(role => (
                 <button key={role} type="button" onClick={() => toggleRole(role)}
                   className={clsx('px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors capitalize',
                     form.roles.includes(role) ? 'border-brand-800 bg-brand-800 text-white' : 'border-gray-300 text-gray-600 hover:border-brand-600')}>
-                  {role}
+                  {ROLE_LABELS[role]}
                 </button>
               ))}
             </div>
+            {form.roles.includes('readonly') && <p className="mt-2 text-xs text-gray-500">
+              For a strictly read-only account, assign only Read-only. Users with additional roles can switch to those roles and use their permissions.
+            </p>}
           </FormField>
         )}
 
@@ -883,7 +888,7 @@ function UsersTab() {
         <select className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-600"
           value={roleFilter} onChange={e => { setRoleFilter(e.target.value); setPage(1) }}>
           <option value="">All Roles</option>
-          {ROLES.map(r => <option key={r} value={r} className="capitalize">{r}</option>)}
+          {ROLES.map(r => <option key={r} value={r}>{ROLE_LABELS[r]}</option>)}
         </select>
         <button className={btnPrimary} onClick={() => setShowCreate(true)}><Plus className="w-4 h-4" /> Add User</button>
       </div>

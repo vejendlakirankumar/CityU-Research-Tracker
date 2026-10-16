@@ -588,6 +588,7 @@ function SsoTab() {
                 <option value="student">Student</option>
                 <option value="reviewer">Reviewer</option>
                 <option value="coordinator">Coordinator</option>
+                <option value="readonly">Read-only</option>
               </select>
             </Field>
           </div>

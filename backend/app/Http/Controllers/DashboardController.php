@@ -23,8 +23,8 @@ class DashboardController extends Controller
             return $this->adminStats();
         }
 
-        if (in_array('coordinator', $roles)) {
-            return $this->coordinatorStats();
+        if (in_array('coordinator', $roles) || in_array('readonly', $roles)) {
+            return $this->coordinatorStats($user->hasRole('readonly') ? 'readonly' : 'coordinator');
         }
 
         if (in_array('reviewer', $roles)) {
@@ -36,7 +36,7 @@ class DashboardController extends Controller
 
     // ── Role-specific stat builders ───────────────────────────────────────────
 
-    private function coordinatorStats(): JsonResponse
+    private function coordinatorStats(string $role = 'coordinator'): JsonResponse
     {
         $active = Submission::whereIn('status', [
             Submission::STATUS_SUBMITTED,
@@ -74,7 +74,7 @@ class DashboardController extends Controller
             ->count();
 
         return response()->json([
-            'role'  => 'coordinator',
+            'role'  => $role,
             'stats' => [
                 ['key' => 'active_submissions',  'label' => 'Active Submissions',  'value' => $active],
                 ['key' => 'pending_assignment',  'label' => 'Pending Assignment',  'value' => $pendingAssignment],

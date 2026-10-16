@@ -324,6 +324,15 @@ are pruned after 30 days by the Laravel scheduler. It does not expose raw logs o
 recover historical failures. See the [VM upload diagnostics instructions](DEPLOYMENT-VM.md#reviewer-upload-diagnostics-and-system-logs)
 for native PHP-FPM limits, deployment steps, and troubleshooting.
 
+System Logs opens with the latest 50 diagnostic events, newest first. All filters
+are optional; **Show latest 50** clears filters and returns to the first page.
+No submission ID or `*` wildcard is required. Use **Search events** for text such
+as `validation failed`; **Error reference** accepts only a UUID copied from an
+error message. The full **Submission ID** is shown as selectable text on each
+submission detail page. Administrators can click **View system logs** there to
+open the logs with that submission filter already applied. Older matching events
+are available using **Next**.
+
 Reviewer feedback size and count limits are managed separately from submission
 categories at **Settings → Review Settings → Reviewer Feedback Uploads**.
 Defaults are 25 MB per file and 10 total files per reviewer assignment. The
@@ -643,6 +652,26 @@ print 'Done';
 ```
 
 ### Assign / change roles
+
+Administrators can assign the built-in **Read-only** role in **User Management**
+when creating or editing an account. This is a system role, not a custom workflow-stage label.
+
+| Read-only users can | Read-only users cannot |
+|---|---|
+| View all submissions with coordinator-level visibility, including feedback, reviewer identities, assignments, and document downloads | Create/edit/delete submissions, upload documents, annotate, submit reviews, change assignments, request extensions, send messages/emails, or schedule meetings |
+| View dashboard statistics, reports, calendar deadlines, and their own notifications | Access user management, settings, audit/system logs, or other administration pages; change profiles or mark notifications read |
+| Sign out and change their own local password (SSO passwords remain managed by the identity provider) | Grant themselves another role |
+
+For a strictly read-only coordinator/operator account, assign **only Read-only**
+(`readonly`). Remove any existing Admin, Coordinator, Reviewer, or Student roles.
+Users retaining additional roles can switch back to those roles and use their
+permissions. While Read-only is selected, the API denies business changes even
+if the account also owns the submission or holds an administrator/reviewer role.
+The read-only API uses an explicit read-action allowlist, not just disabled UI controls.
+
+Read-only visibility is portal-wide, like the current coordinator submission
+list. It is not a group-scoped or administration-access role. Use a separate test
+account to confirm this visibility is appropriate before granting it.
 
 ```bash
 docker exec rrp_app php artisan tinker --execute="

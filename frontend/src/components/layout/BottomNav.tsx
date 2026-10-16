@@ -6,10 +6,10 @@ import api from '../../lib/axios'
 import type { NotificationsResponse } from '../../types/notifications'
 
 const ALL_ITEMS = [
-  { label: 'Dashboard',    to: '/dashboard',      icon: LayoutDashboard, roles: ['admin','coordinator','reviewer','student'] },
-  { label: 'Submissions',  to: '/submissions',    icon: FileText,        roles: ['admin','coordinator','reviewer','student'] },
-  { label: 'Reviews',      to: '/reviews',        icon: ShieldCheck,     roles: ['admin','coordinator','reviewer'] },
-  { label: 'Notifications',to: '/notifications',  icon: Bell,            roles: ['admin','coordinator','reviewer','student'] },
+  { label: 'Dashboard',    to: '/dashboard',      icon: LayoutDashboard, roles: ['admin','coordinator','readonly','reviewer','student'] },
+  { label: 'Submissions',  to: '/submissions',    icon: FileText,        roles: ['admin','coordinator','readonly','reviewer','student'] },
+  { label: 'Reviews',      to: '/reviews',        icon: ShieldCheck,     roles: ['admin','coordinator','readonly','reviewer'] },
+  { label: 'Notifications',to: '/notifications',  icon: Bell,            roles: ['admin','coordinator','readonly','reviewer','student'] },
 ]
 
 /**

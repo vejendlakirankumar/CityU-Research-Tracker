@@ -28,6 +28,7 @@ import {
 import { clsx } from 'clsx'
 import { useActiveRole, useAuthStore } from '../../stores/authStore'
 import type { Role } from '../../types/auth'
+import { ROLE_LABELS } from '../../types/auth'
 
 interface NavItem {
   label: string
@@ -49,19 +50,19 @@ const navSections: NavSection[] = [
         label: 'Dashboard',
         to: '/dashboard',
         icon: LayoutDashboard,
-        roles: ['admin', 'coordinator', 'reviewer', 'student'],
+        roles: ['admin', 'coordinator', 'readonly', 'reviewer', 'student'],
       },
       {
         label: 'Submissions',
         to: '/submissions',
         icon: FileText,
-        roles: ['admin', 'coordinator', 'reviewer', 'student'],
+        roles: ['admin', 'coordinator', 'readonly', 'reviewer', 'student'],
       },
       {
         label: 'Assignments',
         to: '/reviews',
         icon: ShieldCheck,
-        roles: ['admin', 'coordinator', 'reviewer'],
+        roles: ['admin', 'coordinator', 'readonly', 'reviewer'],
       },
       {
         label: 'My Analytics',
@@ -73,13 +74,13 @@ const navSections: NavSection[] = [
         label: 'Notifications',
         to: '/notifications',
         icon: Bell,
-        roles: ['admin', 'coordinator', 'reviewer', 'student'],
+        roles: ['admin', 'coordinator', 'readonly', 'reviewer', 'student'],
       },
       {
         label: 'Calendar',
         to: '/calendar',
         icon: Calendar,
-        roles: ['admin', 'coordinator', 'reviewer', 'student'],
+        roles: ['admin', 'coordinator', 'readonly', 'reviewer', 'student'],
       },
       {
         label: 'References',
@@ -91,7 +92,7 @@ const navSections: NavSection[] = [
         label: 'Reports',
         to: '/reports',
         icon: BarChart2,
-        roles: ['admin', 'coordinator'],
+        roles: ['admin', 'coordinator', 'readonly'],
       },
     ],
   },
@@ -269,7 +270,7 @@ export default function Sidebar() {
             </div>
             <div className="min-w-0 flex-1">
               <p className="text-sm font-medium truncate">{user.name}</p>
-              <p className="text-xs text-brand-300 capitalize">{activeRole ?? user.roles[0]}</p>
+              <p className="text-xs text-brand-300">{ROLE_LABELS[activeRole ?? user.roles[0]]}</p>
             </div>
             <svg className="w-3.5 h-3.5 text-brand-400 flex-shrink-0" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" d="M15.232 5.232l3.536 3.536M9 13l6.586-6.586a2 2 0 012.828 2.828L11.828 15.828a4 4 0 01-1.414.94l-3.414.946.946-3.414a4 4 0 01.94-1.414z" />
@@ -280,5 +281,4 @@ export default function Sidebar() {
     </aside>
   )
 }
-
 

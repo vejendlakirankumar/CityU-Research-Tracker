@@ -207,7 +207,8 @@ function MeetingItem({
   const [confirmTime, setConfirmTime] = useState(
     meeting.confirmed_at ? new Date(meeting.confirmed_at).toISOString().slice(0, 16) : ''
   )
-  const canCancel = (meeting.requested_by === currentUserId || isAdmin)
+  const isReadOnly = useActiveRole() === 'readonly'
+  const canCancel = !isReadOnly && (meeting.requested_by === currentUserId || isAdmin)
     && ['requested', 'confirmed'].includes(meeting.status)
 
   return (
@@ -473,6 +474,7 @@ function ReviewProgressPanel({
   isAdmin: boolean
   onAssignClick?: () => void
 }) {
+  const isReadOnly = useActiveRole() === 'readonly'
   const qc = useQueryClient()
   const user = useAuthStore((s) => s.user)
   const [requestingStageId, setRequestingStageId]   = useState<string | null>(null)
@@ -539,7 +541,7 @@ function ReviewProgressPanel({
   // Returns meeting_type the current user is allowed to initiate at a given stage,
   // or null if they cannot initiate any meeting there.
   const getMeetingTypeForStage = (stageId: string): MeetingType | null => {
-    if (!allowMeetings || isBlind) return null
+    if (isReadOnly || !allowMeetings || isBlind) return null
     if (isAdmin) return null   // admins use the generic form (no type enforcement)
     if (!isGatedReview) return null  // non-gated: handled separately below
     if (!userMeetingCtx) return null
@@ -653,7 +655,7 @@ function ReviewProgressPanel({
 
   // Submitter in a gated review — show gatekeeper meeting section before the stage list
   const showSubmitterGatekeeperSection =
-    allowMeetings && isGatedReview && (userMeetingCtx?.is_submitter ?? false) &&
+    !isReadOnly && allowMeetings && isGatedReview && (userMeetingCtx?.is_submitter ?? false) &&
     !!userMeetingCtx?.gatekeeper_stage_id
 
   return (
@@ -796,7 +798,7 @@ function ReviewProgressPanel({
           const isActiveStage = ['assigned', 'in_progress', 'needs_assignment'].includes(stage.status)
           const meetingType = getMeetingTypeForStage(stage.id)
           // Non-gated review: anyone can request
-          const canRequestNonGated = allowMeetings && !isBlind && !isGatedReview && (isActiveStage || isAdmin)
+          const canRequestNonGated = !isReadOnly && allowMeetings && !isBlind && !isGatedReview && (isActiveStage || isAdmin)
           // Gated review + admin: can request on any stage
           const canRequestGatedAdmin = allowMeetings && !isBlind && isGatedReview && isAdmin
           // Show meeting section if user has a type for this stage, or admin, or existing meetings
@@ -896,7 +898,7 @@ function ReviewProgressPanel({
                       ))}
                     </div>
                   )}
-                  {requestingStageId === stage.id
+                  {!isReadOnly && (requestingStageId === stage.id
                     ? renderMeetingForm(
                         (form) => requestMeetingMutation.mutate({
                           stage_id: stage.id,
@@ -915,7 +917,7 @@ function ReviewProgressPanel({
                         {getMeetingButtonLabel(stage.id)}
                       </button>
                     )
-                  }
+                  )}
                 </div>
               )}
 
@@ -924,7 +926,7 @@ function ReviewProgressPanel({
                 <EmailStagePanel
                   submissionId={submissionId}
                   stageId={stage.id}
-                  canEmail={stage.can_email}
+                  canEmail={!isReadOnly && stage.can_email}
                 />
               )}
             </li>
@@ -1233,7 +1235,7 @@ function AuthorsPanel({ submissionId, canEdit }: { submissionId: string; canEdit
       </div>
 
       {/* Add form */}
-      {showForm && (
+      {canEdit && showForm && (
         <div className="mb-4 p-4 bg-blue-50 rounded-xl border border-blue-100 space-y-2">
           {/* Search existing accounts */}
           <div className="relative">
@@ -1548,7 +1550,7 @@ function ReviewerSearchAdder({
   )
 }
 
-function ReviewersPanel({ submissionId, submissionTypeId }: { submissionId: string; submissionTypeId: string }) {
+function ReviewersPanel({ submissionId, submissionTypeId, readOnly = false }: { submissionId: string; submissionTypeId: string; readOnly?: boolean }) {
   const qc = useQueryClient()
   const [isEditing, setIsEditing] = useState(false)
 
@@ -1560,7 +1562,7 @@ function ReviewersPanel({ submissionId, submissionTypeId }: { submissionId: stri
   const { data: typeData } = useQuery<{ data: SubmissionTypeAdmin }>({
     queryKey: ['admin-type', submissionTypeId],
     queryFn: () => api.get(`/admin/submission-types/${submissionTypeId}`).then(r => r.data),
-    enabled: !!submissionTypeId,
+    enabled: !!submissionTypeId && !readOnly,
   })
 
   const removeMutation = useMutation({
@@ -1576,9 +1578,16 @@ function ReviewersPanel({ submissionId, submissionTypeId }: { submissionId: stri
   })
 
   const reviewers = reviewersData?.data ?? []
-  const stages = typeData?.data?.workflow?.stages ?? []
+  const stages = readOnly
+    ? Array.from(new Map(reviewers.map(r => [r.stage_id ?? '', {
+        id: r.stage_id ?? '',
+        name: r.stage?.name ?? 'No stage',
+        stage_role_label: r.stage?.stage_role_label ?? '',
+        order: r.stage?.order ?? 0,
+      }] as const)).values()).sort((a, b) => a.order - b.order)
+    : typeData?.data?.workflow?.stages ?? []
 
-  const reviewersByStage = (stageId: string) => reviewers.filter(r => r.stage_id === stageId)
+  const reviewersByStage = (stageId: string) => reviewers.filter(r => (r.stage_id ?? '') === stageId)
   const existingUserIds = (stageId: string) => reviewersByStage(stageId).map(r => r.user_id)
 
   return (
@@ -1587,7 +1596,7 @@ function ReviewersPanel({ submissionId, submissionTypeId }: { submissionId: stri
         <UserCheck className="w-4 h-4 text-emerald-500" />
         <h2 className="text-base font-semibold text-gray-900">Reviewer Assignments</h2>
         <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">{reviewers.length} total</span>
-        <div className="ml-auto">
+        {!readOnly && <div className="ml-auto">
           {isEditing ? (
             <button
               onClick={() => { notifyMutation.mutate(); setIsEditing(false) }}
@@ -1606,10 +1615,10 @@ function ReviewersPanel({ submissionId, submissionTypeId }: { submissionId: stri
               <Pencil className="w-3.5 h-3.5" /> Edit
             </button>
           )}
-        </div>
+        </div>}
       </div>
 
-      {isEditing && (
+      {!readOnly && isEditing && (
         <div className="mb-3 p-2.5 bg-blue-50 border border-blue-100 rounded-lg">
           <p className="text-xs text-blue-700">Edit mode — remove existing reviewers or add new ones below. Click <strong>Done</strong> when finished.</p>
         </div>
@@ -1618,7 +1627,7 @@ function ReviewersPanel({ submissionId, submissionTypeId }: { submissionId: stri
       {isLoading ? (
         <div className="flex justify-center py-6"><Loader2 className="w-5 h-5 animate-spin text-gray-300" /></div>
       ) : stages.length === 0 ? (
-        <p className="text-sm text-gray-400 italic">No workflow stages configured for this submission type.</p>
+        <p className="text-sm text-gray-400 italic">{readOnly ? 'No reviewers assigned.' : 'No workflow stages configured for this submission type.'}</p>
       ) : (
         <div className="space-y-4">
           {stages.map((stage, idx) => {
@@ -1660,7 +1669,7 @@ function ReviewersPanel({ submissionId, submissionTypeId }: { submissionId: stri
                               <p className="text-xs text-gray-500 mt-0.5 italic">"{r.comments}"</p>
                             )}
                           </div>
-                          {isEditing && (
+                          {!readOnly && isEditing && (
                             <button
                               onClick={() => removeMutation.mutate(r.id)}
                               className="p-1 text-gray-400 hover:text-red-500 flex-shrink-0"
@@ -1673,7 +1682,7 @@ function ReviewersPanel({ submissionId, submissionTypeId }: { submissionId: stri
                       ))}
                     </ul>
                   )}
-                  {isEditing && (
+                  {!readOnly && isEditing && (
                     <ReviewerSearchAdder
                       submissionId={submissionId}
                       stageId={stage.id}
@@ -1739,6 +1748,7 @@ function InlineDocViewer({ doc, onClose }: { doc: ViewingDoc; onClose: () => voi
   const [showDownloadMenu, setShowDownloadMenu] = useState(false)
 
   const annotationActiveRole = useActiveRole()
+  const canAddAnnotations = annotationActiveRole !== 'readonly'
 
   const apiPath = doc.apiPath ?? `/submissions/${doc.submissionId}/files/${doc.versionNumber}/${encodeURIComponent(doc.filename)}`
 
@@ -2092,7 +2102,7 @@ tbody tr{border-bottom:1px solid #e5e7eb}tbody tr:hover{background:#f9fafb}</sty
   const handleMouseUp = useCallback(() => {
     if (doc.external) return
     if (doc.fileType !== 'docx' && doc.fileType !== 'pdf') return
-    if (skipSelectionRef.current) return
+    if (!canAddAnnotations || skipSelectionRef.current) return
     const sel = window.getSelection()
     if (!sel || sel.isCollapsed) return
     const text = sel.toString().trim()
@@ -2126,7 +2136,7 @@ tbody tr{border-bottom:1px solid #e5e7eb}tbody tr:hover{background:#f9fafb}</sty
     })
     setNewComment('')
     setHighlightedId(null)
-  }, [doc.fileType, doc.external])
+  }, [doc.fileType, doc.external, canAddAnnotations])
 
   const saveAnnotation = async (quote: string, comment: string, positionHint: string) => {
     if (!comment.trim()) return
@@ -2166,7 +2176,7 @@ tbody tr{border-bottom:1px solid #e5e7eb}tbody tr:hover{background:#f9fafb}</sty
       <div className="flex items-center gap-3 px-4 py-3 bg-white border-b border-gray-200 flex-shrink-0">
         <FileText className="w-4 h-4 text-gray-500 flex-shrink-0" />
         <p className="text-sm font-medium text-gray-800 flex-1 truncate">{doc.filename}</p>
-        {doc.fileType === 'pdf' && !doc.external && !loading && !error && (
+        {canAddAnnotations && doc.fileType === 'pdf' && !doc.external && !loading && !error && (
           <button
             onClick={() => { setPdfNoteOpen(true); setShowPanel(true) }}
             className="flex items-center gap-1.5 px-3 py-1.5 border border-blue-200 text-blue-700 bg-blue-50 rounded-lg text-xs hover:bg-blue-100"
@@ -2307,7 +2317,7 @@ tbody tr{border-bottom:1px solid #e5e7eb}tbody tr:hover{background:#f9fafb}</sty
             </div>
 
             {/* PDF add-note form */}
-            {pdfNoteOpen && (
+            {canAddAnnotations && pdfNoteOpen && (
               <div className="p-4 border-b border-blue-100 bg-blue-50 flex-shrink-0">
                 <p className="text-xs font-medium text-blue-700 mb-2">New annotation</p>
                 <textarea value={pdfQuote} onChange={e => setPdfQuote(e.target.value)}
@@ -2370,7 +2380,7 @@ tbody tr{border-bottom:1px solid #e5e7eb}tbody tr:hover{background:#f9fafb}</sty
                           <ExternalLink className="w-2.5 h-2.5 text-blue-400 flex-shrink-0" />
                         )}
                       </div>
-                      {(ann.is_mine || annotationActiveRole === 'admin') && (
+                      {canAddAnnotations && (ann.is_mine || annotationActiveRole === 'admin') && (
                         <button
                           onClick={(e) => { e.stopPropagation(); deleteAnnotation(ann.id) }}
                           className="opacity-0 group-hover:opacity-100 p-0.5 rounded text-gray-300 hover:text-red-500 transition-opacity flex-shrink-0"
@@ -2398,7 +2408,7 @@ tbody tr{border-bottom:1px solid #e5e7eb}tbody tr:hover{background:#f9fafb}</sty
       </div>
 
       {/* DOCX selection popover */}
-      {pending && (
+      {canAddAnnotations && pending && (
         <div
           className="fixed z-[60] w-80 bg-white border border-gray-200 rounded-xl shadow-xl p-4"
           style={{ left: pending.x, top: pending.y }}
@@ -2731,6 +2741,7 @@ function DocCompareViewer({
 // ── Documents Tab ─────────────────────────────────────────────────────────────
 
 function DocumentsTab({ sub, canEdit, canRunSimilarity }: { sub: Submission; canEdit: boolean; canRunSimilarity?: boolean }) {
+  const isReadOnly = useActiveRole() === 'readonly'
   const qc = useQueryClient()
   const toast = useToastHelpers()
   const user = useAuthStore((s) => s.user)
@@ -2757,7 +2768,7 @@ function DocumentsTab({ sub, canEdit, canRunSimilarity }: { sub: Submission; can
     enabled: !!user,
   })
   const myAssignment = reviewersData?.data?.find(r => r.user_id === user?.id && !r.conflict_flagged) ?? null
-  const canReviewerUpload = !!myAssignment && !sub.is_locked &&
+  const canReviewerUpload = !isReadOnly && !!myAssignment && !sub.is_locked &&
     !['ACCEPTED', 'REJECTED', 'WITHDRAWN', 'CANCELLED'].includes(sub.status)
 
   const openUploadForm = (mode: 'submitter' | 'reviewer') => {
@@ -2860,7 +2871,7 @@ function DocumentsTab({ sub, canEdit, canRunSimilarity }: { sub: Submission; can
           onClose={() => setShowCompare(false)}
         />
       )}
-      {showSimilarity && (
+      {!isReadOnly && showSimilarity && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setShowSimilarity(false)}>
           <div className="bg-white rounded-xl shadow-xl w-full max-w-2xl max-h-[85vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between p-5 border-b">
@@ -2930,7 +2941,7 @@ function DocumentsTab({ sub, canEdit, canRunSimilarity }: { sub: Submission; can
         </div>
 
         {/* Inline upload form */}
-        {showUploadForm && (
+        {!isReadOnly && showUploadForm && (
           <div className={`mb-4 p-4 rounded-xl border space-y-3 ${uploadMode === 'reviewer' ? 'bg-amber-50 border-amber-100' : 'bg-blue-50 border-blue-100'}`}>
             <p className={`text-sm font-semibold ${uploadMode === 'reviewer' ? 'text-amber-800' : 'text-blue-800'}`}>
               {uploadMode === 'reviewer' ? 'Upload reviewer version' : 'Upload New Version'}
@@ -3675,7 +3686,7 @@ function FeedbackTab({
         </div>
       )}
 
-      {showAppeal && (
+      {isOwner && showAppeal && (
         <AppealModal
           submissionId={submissionId}
           onClose={() => setShowAppeal(false)}
@@ -3783,6 +3794,7 @@ function ActivityTab({ submissionId }: { submissionId: string }) {
  * Uses document.execCommand (no 3rd-party libraries).
  */
 function CommunicationTab({ submissionId }: { submissionId: string }) {
+  const isReadOnly = useActiveRole() === 'readonly'
   const qc = useQueryClient()
   const toast = useToastHelpers()
   const editorRef = useRef<HTMLDivElement>(null)
@@ -3889,7 +3901,7 @@ function CommunicationTab({ submissionId }: { submissionId: string }) {
                         month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
                       })}
                     </span>
-                    {msg.is_mine && (
+                    {msg.is_mine && !isReadOnly && (
                       <button
                         onClick={() => deleteMessage(msg.id)}
                         className="text-gray-300 hover:text-red-400 transition-colors"
@@ -3915,7 +3927,7 @@ function CommunicationTab({ submissionId }: { submissionId: string }) {
       </div>
 
       {/* Compose area */}
-      <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+      {!isReadOnly && <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
         {/* Formatting toolbar */}
         <div className="flex items-center gap-0.5 px-3 py-2 border-b border-gray-100 bg-gray-50">
           <ToolBtn cmd="bold" title="Bold (Ctrl+B)"><strong>B</strong></ToolBtn>
@@ -3954,7 +3966,7 @@ function CommunicationTab({ submissionId }: { submissionId: string }) {
             Send
           </button>
         </div>
-      </div>
+      </div>}
     </div>
   )
 }
@@ -4673,6 +4685,7 @@ export default function SubmissionDetailPage() {
   const reviewersRef = useRef<HTMLDivElement>(null)
 
   const isAdmin = activeRole === 'admin' || activeRole === 'coordinator'
+  const isReadOnly = activeRole === 'readonly'
 
   const { data, isLoading, isError } = useQuery<{ data: Submission }>({
     queryKey: ['submission', id],
@@ -4689,10 +4702,10 @@ export default function SubmissionDetailPage() {
     enabled: !!id && !!user,
   })
   const myAssignmentMain = myReviewerData?.data?.find(r => r.user_id === user?.id) ?? null
-  const isGatekeeper = !!myAssignmentMain?.stage?.is_gatekeeper
+  const isGatekeeper = !isReadOnly && !!myAssignmentMain?.stage?.is_gatekeeper
   // True when the current user has an active (non-declined) reviewer assignment,
   // regardless of whether they also hold admin/coordinator roles.
-  const isAssignedReviewer = !!myAssignmentMain && myAssignmentMain.status !== 'declined'
+  const isAssignedReviewer = !isReadOnly && !!myAssignmentMain && myAssignmentMain.status !== 'declined'
   const isGatedReview = !!sub?.submission_type?.is_gated_review
 
   const pendingGatekeeperStage = (sub?.status === 'PENDING_RELEASE' && sub?.metadata)
@@ -4793,9 +4806,9 @@ export default function SubmissionDetailPage() {
   const TERMINAL_STATUSES = ['ACCEPTED', 'CONDITIONALLY_ACCEPTED', 'REJECTED', 'WITHDRAWN', 'CANCELLED']
   const isTerminal = TERMINAL_STATUSES.includes(sub.status)
 
-  const canEdit    = (sub.status === 'DRAFT' || sub.status === 'REVISION_REQUIRED') && !sub.is_locked
+  const canEdit    = !isReadOnly && (sub.status === 'DRAFT' || sub.status === 'REVISION_REQUIRED') && !sub.is_locked
   // Only the student who owns the submission may submit it for review
-  const isOwner    = user?.id === sub.submitter?.id
+  const isOwner    = !isReadOnly && user?.id === sub.submitter?.id
   const canSubmit  = isOwner && (sub.status === 'DRAFT' || sub.status === 'REVISION_REQUIRED') && !sub.is_locked && sub.versions.length > 0
   // Student can withdraw any non-terminal submission they own
   const canWithdraw = !isTerminal && !sub.is_locked && isOwner && !isAdmin
@@ -4826,7 +4839,7 @@ export default function SubmissionDetailPage() {
       {/* Header card */}
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6 mb-5">
         <div className="flex items-start justify-between gap-4 mb-4">
-          {editing ? (
+          {canEdit && editing ? (
             <input
               className="flex-1 border border-gray-300 rounded-lg px-3 py-1.5 text-lg font-semibold focus:outline-none focus:ring-2 focus:ring-blue-500"
               value={editTitle}
@@ -4850,6 +4863,15 @@ export default function SubmissionDetailPage() {
         </div>
 
         {/* Meta grid */}
+        <div className="mb-4 flex flex-wrap items-center gap-2 text-sm">
+          <span className="text-gray-500">Submission ID:</span>
+          <code className="select-all break-all rounded bg-gray-100 px-2 py-1 text-xs text-gray-800">{sub.id}</code>
+          {activeRole === 'admin' && <button type="button"
+            className="text-xs text-blue-600 underline hover:text-blue-800"
+            onClick={() => navigate(`/system-logs?submission_id=${encodeURIComponent(sub.id)}`)}>
+            View system logs
+          </button>}
+        </div>
         <div className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm mb-4">
           <div className="flex gap-2">
             <span className="text-gray-500 w-24">Type</span>
@@ -4865,7 +4887,7 @@ export default function SubmissionDetailPage() {
               {sub.current_version > 0 ? `v${sub.current_version}` : 'Draft (unsubmitted)'}
             </span>
           </div>
-          {isAdmin && (
+          {(isAdmin || isReadOnly) && (
             <div className="flex gap-2">
               <span className="text-gray-500 w-24">Submitter</span>
               <span className="font-medium text-gray-800">{sub.submitter.name}</span>
@@ -4882,7 +4904,7 @@ export default function SubmissionDetailPage() {
         </div>
 
         {/* Abstract */}
-        {editing ? (
+        {canEdit && editing ? (
           <div className="mb-4">
             <label className="text-xs font-medium text-gray-600 mb-1 block">Abstract</label>
             <textarea
@@ -4902,7 +4924,7 @@ export default function SubmissionDetailPage() {
         ) : null}
 
         {/* Edit actions */}
-        {editing && (
+        {canEdit && editing && (
           <div className="flex gap-2 mt-2">
             <button
               onClick={() => updateMutation.mutate({ title: editTitle.trim(), abstract: editAbstract.trim() || undefined })}
@@ -5116,9 +5138,9 @@ export default function SubmissionDetailPage() {
               setTimeout(() => reviewersRef.current?.scrollIntoView({ behavior: 'smooth' }), 50)
             } : undefined}
           />
-          {isAdmin && sub.submission_type && (
+          {(isAdmin || isReadOnly) && sub.submission_type && (
             <div ref={reviewersRef}>
-              <ReviewersPanel submissionId={sub.id} submissionTypeId={sub.submission_type.id} />
+              <ReviewersPanel submissionId={sub.id} submissionTypeId={sub.submission_type.id} readOnly={isReadOnly} />
             </div>
           )}
         </div>
@@ -5197,7 +5219,7 @@ export default function SubmissionDetailPage() {
       )}
 
       {/* Withdraw confirm modal */}
-      {showWithdrawConfirm && (
+      {canWithdraw && showWithdrawConfirm && (
         <ConfirmModal
           title="Withdraw Submission"
           message="Are you sure you want to withdraw this submission? The coordinator will be notified and the submission will be removed from the review queue."
@@ -5210,7 +5232,7 @@ export default function SubmissionDetailPage() {
       )}
 
       {/* Cancel confirm modal — admin/coordinator only */}
-      {showCancelConfirm && (
+      {canCancel && showCancelConfirm && (
         <ConfirmModal
           title="Cancel Submission"
           message="Are you sure you want to cancel this submission? The student will be notified. This action cannot be undone."

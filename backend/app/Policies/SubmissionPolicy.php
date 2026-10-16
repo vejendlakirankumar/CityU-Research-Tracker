@@ -9,6 +9,15 @@ use App\Models\User;
 
 class SubmissionPolicy
 {
+    public function before(User $user, string $ability): ?bool
+    {
+        if ($user->hasRole('readonly') && !in_array($ability, ['viewAny', 'view', 'downloadFile'], true)) {
+            return false;
+        }
+
+        return null;
+    }
+
     /** Admin and coordinator can view all; submitter can view own. */
     public function viewAny(User $user): bool
     {
@@ -17,7 +26,7 @@ class SubmissionPolicy
 
     public function view(User $user, Submission $submission): bool
     {
-        return $this->isAdminOrCoordinator($user)
+        return $user->canViewCoordinatorData()
             || $submission->submitter_id === $user->id
             || $this->isAssignedReviewer($user, $submission);
     }

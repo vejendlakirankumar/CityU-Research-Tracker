@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { X, User, Lock, Loader2, CheckCircle, AlertCircle, LinkIcon, Unlink } from 'lucide-react'
-import { useAuthStore } from '../../stores/authStore'
+import { useActiveRole, useAuthStore } from '../../stores/authStore'
 import api from '../../lib/axios'
 import type { AuthUser } from '../../types/auth'
 
@@ -16,6 +16,7 @@ interface SsoIdentity {
 }
 
 export default function ProfileModal() {
+  const isReadOnly = useActiveRole() === 'readonly'
   const user = useAuthStore((s) => s.user)
   const profileOpen = useAuthStore((s) => s.profileOpen)
   const closeProfile = useAuthStore((s) => s.closeProfile)
@@ -208,6 +209,7 @@ export default function ProfileModal() {
                   <input
                     className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                     value={firstName}
+                    disabled={isReadOnly}
                     onChange={(e) => setFirstName(e.target.value)}
                     placeholder="First name"
                   />
@@ -217,6 +219,7 @@ export default function ProfileModal() {
                   <input
                     className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                     value={lastName}
+                    disabled={isReadOnly}
                     onChange={(e) => setLastName(e.target.value)}
                     placeholder="Last name"
                   />
@@ -227,6 +230,7 @@ export default function ProfileModal() {
                 <input
                   className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                   value={displayName}
+                  disabled={isReadOnly}
                   onChange={(e) => setDisplayName(e.target.value)}
                   placeholder="How your name appears"
                 />
@@ -245,6 +249,7 @@ export default function ProfileModal() {
                 <input
                   className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                   value={organization}
+                  disabled={isReadOnly}
                   onChange={(e) => setOrganization(e.target.value)}
                   placeholder="Your institution or department"
                 />
@@ -254,11 +259,12 @@ export default function ProfileModal() {
                 <input
                   className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                   value={orgRole}
+                  disabled={isReadOnly}
                   onChange={(e) => setOrgRole(e.target.value)}
                   placeholder="e.g. Associate Professor"
                 />
               </div>
-              <div className="flex justify-end pt-1">
+              {!isReadOnly && <div className="flex justify-end pt-1">
                 <button
                   onClick={() => profileMutation.mutate()}
                   disabled={profileMutation.isPending}
@@ -267,7 +273,7 @@ export default function ProfileModal() {
                   {profileMutation.isPending && <Loader2 className="w-4 h-4 animate-spin" />}
                   Save Changes
                 </button>
-              </div>
+              </div>}
             </>
           ) : tab === 'password' ? (
             hasSso ? (
@@ -359,7 +365,7 @@ export default function ProfileModal() {
                           Linked {new Date(identity.linked_at).toLocaleDateString()}
                         </p>
                       </div>
-                      <button
+                      {!isReadOnly && <button
                         onClick={() => unlinkIdentity(identity.id)}
                         disabled={unlinking === identity.id}
                         className="flex items-center gap-1.5 px-3 py-1.5 border border-red-200 text-red-600 hover:bg-red-50 rounded-lg text-xs font-medium transition-colors disabled:opacity-50"
@@ -370,7 +376,7 @@ export default function ProfileModal() {
                           : <Unlink className="w-3.5 h-3.5" />
                         }
                         Unlink
-                      </button>
+                      </button>}
                     </div>
                   ))}
                 </div>

@@ -8,6 +8,7 @@ import api from '../../lib/axios'
 import cityuLogo from '../../assets/city-university-logo.svg'
 import type { PublicOrgInfo } from '../../types/organization'
 import type { AppNotification, NotificationsResponse } from '../../types/notifications'
+import { ROLE_LABELS } from '../../types/auth'
 
 const ACCENT_PRESETS = [
   { label: 'Default',  color: null },
@@ -226,7 +227,7 @@ export default function TopBar() {
               aria-label="Notifications"
             >
               <Bell size={20} color="rgba(255,255,255,0.8)" />
-              {unreadCount > 0 && (
+              {unreadCount > 0 && activeRole !== 'readonly' && (
                 <span style={{
                   position: 'absolute', top: 0, right: 0,
                   background: '#ef4444', color: '#fff',
@@ -291,7 +292,7 @@ export default function TopBar() {
                           setBellOpen(false)
                           if (n.link) navigate(n.link)
                           if (!n.read_at) {
-                            api.post('/notifications/read', { ids: [n.id] })
+                            if (activeRole !== 'readonly') api.post('/notifications/read', { ids: [n.id] })
                               .then(() => queryClient.invalidateQueries({ queryKey: ['notifications'] }))
                           }
                         }}
@@ -360,7 +361,7 @@ export default function TopBar() {
                 onMouseLeave={(e) => (e.currentTarget.style.background = 'rgba(255,255,255,0.12)')}
                 title="Switch role"
               >
-                {activeRole}
+                {ROLE_LABELS[activeRole]}
                 <ChevronDown size={14} />
               </button>
               {roleMenuOpen && (
@@ -393,7 +394,7 @@ export default function TopBar() {
                       onMouseEnter={(e) => (e.currentTarget.style.background = role === activeRole ? '#eef2ff' : '#f9fafb')}
                       onMouseLeave={(e) => (e.currentTarget.style.background = role === activeRole ? '#eef2ff' : 'transparent')}
                     >
-                      {role}
+                      {ROLE_LABELS[role]}
                       {role === activeRole && <span style={{ color: '#4f46e5', fontSize: '0.9rem' }}>✓</span>}
                     </button>
                   ))}

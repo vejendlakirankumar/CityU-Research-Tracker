@@ -819,8 +819,7 @@ class SubmissionReviewerController extends Controller
      */
     private function canViewReviewerArtifacts(Submission $submission, SubmissionReviewer $reviewer, $user): bool
     {
-        $roles = (array) ($user->roles ?? []);
-        if (count(array_intersect($roles, ['admin', 'coordinator'])) > 0) {
+        if ($user->canViewCoordinatorData()) {
             return true;
         }
 

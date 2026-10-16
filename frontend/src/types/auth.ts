@@ -1,4 +1,12 @@
-export type Role = 'admin' | 'coordinator' | 'reviewer' | 'student'
+export type Role = 'admin' | 'coordinator' | 'readonly' | 'reviewer' | 'student'
+
+export const ROLE_LABELS: Record<Role, string> = {
+  admin: 'Administrator',
+  coordinator: 'Coordinator',
+  readonly: 'Read-only',
+  reviewer: 'Reviewer',
+  student: 'Student',
+}
 
 export interface AuthUser {
   id: string

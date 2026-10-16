@@ -321,7 +321,7 @@ class SystemController extends Controller
             'button_label'         => ['sometimes', 'string', 'nullable', 'max:255'],
             'button_icon_url'      => ['sometimes', 'url', 'nullable'],
             'auto_provision_users' => ['sometimes', 'boolean'],
-            'default_role'         => ['sometimes', 'string', 'in:student,reviewer,coordinator,admin'],
+            'default_role'         => ['sometimes', 'string', 'in:student,reviewer,coordinator,readonly,admin'],
             'config'               => ['sometimes', 'array'],
         ]);
 
@@ -359,7 +359,7 @@ class SystemController extends Controller
             'button_label'         => ['sometimes', 'string', 'nullable', 'max:255'],
             'button_icon_url'      => ['sometimes', 'url', 'nullable'],
             'auto_provision_users' => ['sometimes', 'boolean'],
-            'default_role'         => ['sometimes', 'string', 'in:student,reviewer,coordinator,admin'],
+            'default_role'         => ['sometimes', 'string', 'in:student,reviewer,coordinator,readonly,admin'],
             'config'               => ['sometimes', 'array'],
         ]);
 

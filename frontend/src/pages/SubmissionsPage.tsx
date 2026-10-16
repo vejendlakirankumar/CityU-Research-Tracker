@@ -411,7 +411,8 @@ export default function SubmissionsPage() {
   const [statusFilter, setStatusFilter] = useState('')
   const [page, setPage] = useState(1)
 
-  const isAdmin = activeRole === 'admin' || activeRole === 'coordinator'
+  const isReadOnly = activeRole === 'readonly'
+  const isAdmin = activeRole === 'admin' || activeRole === 'coordinator' || isReadOnly
   const hasReviewerRole = activeRole === 'reviewer'
   // The active role decides the view. A user acting as reviewer sees only their
   // review queue; acting as admin/coordinator shows the full submissions view.
@@ -448,7 +449,7 @@ export default function SubmissionsPage() {
           </h1>
           <p className="text-sm text-gray-500 mt-0.5">
             {isAdmin
-              ? 'View and manage all research submissions'
+              ? isReadOnly ? 'View all research submissions (read-only)' : 'View and manage all research submissions'
               : 'Track and manage your research submissions'}
           </p>
         </div>
@@ -732,4 +733,3 @@ function MobilePagination({
     </div>
   )
 }
-

@@ -121,6 +121,10 @@ class User extends Model implements AuthenticatableContract
     public function isCoordinator(): bool { return $this->hasRole('coordinator'); }
     public function isReviewer(): bool    { return $this->hasRole('reviewer'); }
     public function isStudent(): bool     { return $this->hasRole('student'); }
+    public function canViewCoordinatorData(): bool
+    {
+        return $this->hasAnyRole(['admin', 'coordinator', 'readonly']);
+    }
     public function isLocked(): bool      { return $this->locked_at !== null; }
 
     /**

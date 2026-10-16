@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { useSearchParams } from 'react-router-dom'
 import api from '../lib/axios'
 import { getApiErrorMessage } from '../lib/apiErrors'
 
@@ -23,8 +24,13 @@ interface LogPage {
   total: number
 }
 
+const EMPTY_FILTERS = { level: '', search: '', request_id: '', submission_id: '', date_from: '', date_to: '' }
+
 export default function SystemLogsPage() {
-  const [filters, setFilters] = useState({ level: '', request_id: '', submission_id: '', date_from: '', date_to: '' })
+  const [searchParams, setSearchParams] = useSearchParams()
+  const [filters, setFilters] = useState(() => ({
+    ...EMPTY_FILTERS, submission_id: searchParams.get('submission_id') ?? '',
+  }))
   const [appliedFilters, setAppliedFilters] = useState(filters)
   const [page, setPage] = useState(1)
   const { data, error, isPending, isFetching, refetch } = useQuery<LogPage>({
@@ -38,34 +44,55 @@ export default function SystemLogsPage() {
     <div className="space-y-5">
       <h1 className="text-2xl font-bold text-gray-900">System Logs</h1>
       <p className="text-sm text-gray-600">
-        Administrator-only application diagnostics retained for 30 days. Search a reviewer&apos;s error reference
-        or submission ID. These are not raw server logs: failures blocked by Nginx, PHP before Laravel starts,
+        Administrator-only application diagnostics retained for 30 days. All filters are optional:
+        leave them blank to see the latest 50 events, newest first. No submission ID or wildcard is required.
+        These are not raw server logs: failures blocked by Nginx, PHP before Laravel starts,
         or an upstream gateway must be checked on the VM. Historical errors are not backfilled.
       </p>
       <form className="flex flex-wrap items-end gap-3 rounded-xl border bg-white p-4" onSubmit={event => {
         event.preventDefault()
+        const nextFilters = { ...filters, search: filters.search.trim(), request_id: filters.request_id.trim(), submission_id: filters.submission_id.trim() }
         setPage(1)
-        setAppliedFilters({ ...filters, request_id: filters.request_id.trim(), submission_id: filters.submission_id.trim() })
+        setAppliedFilters(nextFilters)
+        setSearchParams(nextFilters.submission_id ? { submission_id: nextFilters.submission_id } : {}, { replace: true })
       }}>
         <label className="text-sm">Level
           <select className="block rounded border p-2" value={filters.level} onChange={event => setFilters({ ...filters, level: event.target.value })}>
             <option value="">All levels</option><option value="info">Info</option><option value="warning">Warning</option><option value="error">Error</option>
           </select>
         </label>
+        <label className="text-sm">Search events
+          <input className="block rounded border p-2" type="search" maxLength={200}
+            placeholder="e.g. validation failed" value={filters.search}
+            onChange={event => setFilters({ ...filters, search: event.target.value })} />
+        </label>
         {(['request_id', 'submission_id', 'date_from', 'date_to'] as const).map(field => (
           <label key={field} className="text-sm">
-            {{ request_id: 'Error reference', submission_id: 'Submission ID', date_from: 'From', date_to: 'To' }[field]}
+            {{ request_id: 'Error reference (UUID, optional)', submission_id: 'Submission ID (UUID, optional)', date_from: 'From (optional)', date_to: 'To (optional)' }[field]}
             <input className="block rounded border p-2" type={field.startsWith('date_') ? 'date' : 'text'}
+              placeholder={field === 'request_id' ? 'Paste the UUID from an error message' : field === 'submission_id' ? 'UUID from submission details' : undefined}
               value={filters[field]} onChange={event => setFilters({ ...filters, [field]: event.target.value })} />
           </label>
         ))}
         <button className="rounded bg-blue-600 px-4 py-2 text-sm text-white" type="submit">Filter</button>
         <button className="rounded border px-4 py-2 text-sm" type="button" disabled={isFetching} onClick={() => void refetch()}>Refresh</button>
+        <button className="rounded border px-4 py-2 text-sm" type="button" onClick={() => {
+          const alreadyLatest = page === 1 && Object.values(appliedFilters).every(value => !value)
+          setFilters(EMPTY_FILTERS)
+          setAppliedFilters(EMPTY_FILTERS)
+          setPage(1)
+          setSearchParams({}, { replace: true })
+          if (alreadyLatest) void refetch()
+        }}>Show latest 50</button>
       </form>
+      <p className="text-xs text-gray-500">
+        Use Search events for words such as &quot;validation failed&quot;. Error reference accepts only the UUID
+        supplied with an error. Find a submission&apos;s full ID in its detail page, or use its View system logs shortcut.
+      </p>
       {error ? <p role="alert" className="text-sm text-red-600">{getApiErrorMessage(error, 'Could not load system logs.')}</p>
         : isPending ? <p role="status">Loading system logs...</p>
         : <>
-            <p className="text-sm text-gray-500">{data?.total ?? 0} events</p>
+            <p className="text-sm text-gray-500">Showing {data?.data.length ?? 0} of {data?.total ?? 0} events; newest first, 50 per page.</p>
             {data?.data.length === 0 && <p className="rounded border bg-white p-6 text-gray-500">No diagnostic events match these filters.</p>}
             {data?.data.map(entry => (
               <details key={entry.id} className="rounded-xl border bg-white p-4">

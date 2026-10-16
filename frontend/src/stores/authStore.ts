@@ -4,7 +4,7 @@ import { queryClient } from '../lib/queryClient'
 
 // Priority used to pick a sensible default active role for multi-role users.
 // Higher-privilege roles win so behaviour is unchanged for single-role users.
-const ROLE_PRIORITY: Role[] = ['admin', 'coordinator', 'reviewer', 'student']
+const ROLE_PRIORITY: Role[] = ['admin', 'coordinator', 'readonly', 'reviewer', 'student']
 
 /** Pick the highest-priority role from a user's role list. */
 export function pickDefaultRole(roles: Role[]): Role | null {
