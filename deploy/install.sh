@@ -101,6 +101,7 @@ PHP_VERSION="$($PHP_BIN -r 'echo PHP_MAJOR_VERSION.".".PHP_MINOR_VERSION;')"
 PHP_FPM_SERVICE="php${PHP_VERSION}-fpm"
 PHP_FPM_POOL_FILE="/etc/php/${PHP_VERSION}/fpm/pool.d/rrp.conf"
 PHP_FPM_SOCK="/run/php/php${PHP_VERSION}-fpm-rrp.sock"
+install -m 644 "$SCRIPT_DIR/php-uploads.ini" "/etc/php/${PHP_VERSION}/fpm/conf.d/99-rrp-uploads.ini"
 
 # PostgreSQL 16
 info "Installing PostgreSQL 16..."
@@ -298,6 +299,7 @@ cat > /etc/nginx/sites-available/rrp <<EOF
 server {
     listen 80;
     server_name $DOMAIN;
+    client_max_body_size 512M;
 
     root $APP_DIR/backend/public;
   index index.php;

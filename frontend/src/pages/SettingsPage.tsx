@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import {
   Building2, Mail, Shield, Bell, Sliders, Key,
   Save, Send, Plus, Pencil, Trash2, CheckCircle2,
@@ -8,6 +9,7 @@ import {
   ShieldCheck, Copy, FileText, Paperclip,
 } from 'lucide-react'
 import api from '../lib/axios'
+import { getApiErrorMessage } from '../lib/apiErrors'
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -1026,6 +1028,8 @@ function FlagsTab() {
 // ── Review Settings Tab ───────────────────────────────────────────────────────
 
 interface ReviewSettings {
+  reviewer_feedback_max_file_size_mb: number
+  reviewer_feedback_max_files: number
   review_grace_period_days: number
   grace_period_consider_holidays: boolean
   grace_period_holidays_country: string
@@ -1037,22 +1041,33 @@ interface ReviewSettings {
 }
 
 function ReviewTab() {
+  const qc = useQueryClient()
   const [data, setData] = useState<ReviewSettings | null>(null)
+  const [serverLimits, setServerLimits] = useState<{
+    upload_max_filesize: string
+    post_max_size: string
+    max_file_uploads: number
+  } | null>(null)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [error, setError] = useState('')
 
   useEffect(() => {
-    api.get('/system/organization').then(r => setData({
-      review_grace_period_days:       r.data.review_grace_period_days ?? 0,
-      grace_period_consider_holidays: r.data.grace_period_consider_holidays ?? false,
-      grace_period_holidays_country:  r.data.grace_period_holidays_country ?? 'US',
-      max_extension_requests:         r.data.max_extension_requests ?? 3,
-      due_date_exclude_weekends:      r.data.due_date_exclude_weekends ?? false,
-      due_date_consider_holidays:     r.data.due_date_consider_holidays ?? false,
-      due_date_visibility:            r.data.due_date_visibility ?? 'all_stages',
-      reviewers_can_view_future_submissions: r.data.reviewers_can_view_future_submissions ?? true,
-    })).catch(() => setError('Failed to load review settings.'))
+    api.get('/system/organization').then(r => {
+      setServerLimits(r.data.upload_server_limits ?? null)
+      setData({
+        reviewer_feedback_max_file_size_mb: r.data.reviewer_feedback_max_file_size_mb ?? 25,
+        reviewer_feedback_max_files: r.data.reviewer_feedback_max_files ?? 10,
+        review_grace_period_days:       r.data.review_grace_period_days ?? 0,
+        grace_period_consider_holidays: r.data.grace_period_consider_holidays ?? false,
+        grace_period_holidays_country:  r.data.grace_period_holidays_country ?? 'US',
+        max_extension_requests:         r.data.max_extension_requests ?? 3,
+        due_date_exclude_weekends:      r.data.due_date_exclude_weekends ?? false,
+        due_date_consider_holidays:     r.data.due_date_consider_holidays ?? false,
+        due_date_visibility:            r.data.due_date_visibility ?? 'all_stages',
+        reviewers_can_view_future_submissions: r.data.reviewers_can_view_future_submissions ?? true,
+      })
+    }).catch((e: unknown) => setError(getApiErrorMessage(e, 'Failed to load review settings.')))
   }, [])
 
   const save = async () => {
@@ -1060,19 +1075,44 @@ function ReviewTab() {
     setSaving(true); setSaved(false); setError('')
     try {
       await api.patch('/system/organization', data)
+      qc.invalidateQueries({ queryKey: ['submission-reviewers'] })
       setSaved(true); setTimeout(() => setSaved(false), 3000)
-    } catch { setError('Save failed.') }
+    } catch (e: unknown) { setError(getApiErrorMessage(e, 'Failed to save review settings.')) }
     finally { setSaving(false) }
   }
 
-  if (!data) return <div className="flex justify-center py-20"><Loader2 className="w-6 h-6 animate-spin text-gray-400" /></div>
-  const set = (k: keyof ReviewSettings, v: unknown) => setData(prev => prev ? { ...prev, [k]: v } : prev)
+  if (!data) return error
+    ? <p role="alert" className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">{error}</p>
+    : <div className="flex justify-center py-20"><Loader2 className="w-6 h-6 animate-spin text-gray-400" /></div>
+  const set = <K extends keyof ReviewSettings>(k: K, v: ReviewSettings[K]) => setData(prev => prev ? { ...prev, [k]: v } : prev)
 
   return (
     <div>
-      <SectionHeader title="Review Deadline Settings" subtitle="Configure grace periods, public holiday handling, and extension limits." />
+      <SectionHeader title="Reviewer Feedback Uploads" subtitle="Configure attachments in Your Review Decision. These limits are independent of submission-category document limits." />
       {error && <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg flex gap-2"><AlertCircle className="w-4 h-4 mt-0.5" />{error}</div>}
 
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+        <Field label="Maximum Feedback File Size (MB)" hint="Per-file limit for reviewer feedback documents. Allowed range: 1-500 MB. PDF and Word documents are supported.">
+          <input aria-label="Maximum Feedback File Size (MB)" type="number" min={1} max={500} step={1} className={INPUT} value={data.reviewer_feedback_max_file_size_mb}
+            onChange={e => set('reviewer_feedback_max_file_size_mb', parseInt(e.target.value) || 0)} />
+        </Field>
+        <Field label="Maximum Feedback Files per Reviewer" hint="Total files per reviewer assignment, including documents already uploaded. Allowed range: 1-50.">
+          <input aria-label="Maximum Feedback Files per Reviewer" type="number" min={1} max={50} step={1} className={INPUT} value={data.reviewer_feedback_max_files}
+            onChange={e => set('reviewer_feedback_max_files', parseInt(e.target.value) || 0)} />
+        </Field>
+      </div>
+      <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+        {serverLimits && <p className="mb-1">
+          Active PHP-FPM limits: {serverLimits.upload_max_filesize} per file, {serverLimits.post_max_size} per request,
+          {' '}{serverLimits.max_file_uploads} files per request.
+        </p>}
+        PHP-FPM, Nginx, and gateway limits must be high enough for these settings. Saving here does not change
+        server configuration. Upload large collections in smaller batches if they exceed the server&apos;s total request limit.
+        Existing attachments are not deleted if you lower a limit.
+      </div>
+      <div className="mt-8 pt-6 border-t border-gray-200">
+        <SectionHeader title="Review Deadline Settings" subtitle="Configure grace periods, public holiday handling, and extension limits." />
+      </div>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
         <Field label="Grace Period (days)" hint="Days after deadline before escalation notifications are sent.">
           <input type="number" min={0} max={30} className={INPUT} value={data.review_grace_period_days}
@@ -2074,4 +2114,3 @@ export default function SettingsPage() {
     </div>
   )
 }
-

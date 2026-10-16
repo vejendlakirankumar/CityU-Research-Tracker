@@ -20,6 +20,7 @@ import SubmissionCategoriesPage from './pages/SubmissionCategoriesPage'
 import ReviewerAssignmentsPage from './pages/ReviewerAssignmentsPage'
 import ResearcherAccessPage from './pages/ResearcherAccessPage'
 import AuditLogPage from './pages/AuditLogPage'
+import SystemLogsPage from './pages/SystemLogsPage'
 import WebhooksPage from './pages/WebhooksPage'
 import GatedReviewsPage from './pages/GatedReviewsPage'
 import AppealsPage from './pages/AppealsPage'
@@ -132,6 +133,14 @@ export const router = createBrowserRouter(
           ),
         },
         {
+          path: '/system-logs',
+          element: (
+            <RoleRoute allowedRoles={['admin']}>
+              <SystemLogsPage />
+            </RoleRoute>
+          ),
+        },
+        {
           path: '/audit-log',
           element: (
             <RoleRoute allowedRoles={['admin']}>
@@ -205,4 +214,3 @@ export const router = createBrowserRouter(
   ],
   { basename: '/' },
 )
-

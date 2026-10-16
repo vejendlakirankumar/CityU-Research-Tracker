@@ -104,6 +104,17 @@ export interface SubmissionAuthor {
   added_at: string
 }
 
+export interface ReviewerFeedbackUploadPolicy {
+  max_file_size_mb: number
+  max_files: number
+  allowed_extensions: string[]
+}
+
+export interface SubmissionReviewerListResponse {
+  data: SubmissionReviewer[]
+  meta: { feedback_upload_policy: ReviewerFeedbackUploadPolicy }
+}
+
 export interface SubmissionReviewer {
   id: string
   submission_id: string

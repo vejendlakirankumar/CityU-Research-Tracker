@@ -19,10 +19,12 @@ import * as pdfjsLib from 'pdfjs-dist'
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 import type { AxiosResponse } from 'axios'
 import api from '../lib/axios'
+import { getApiErrorMessage } from '../lib/apiErrors'
 import { useActiveRole, useAuthStore } from '../stores/authStore'
 import { useToastHelpers } from '../lib/toast'
 import type {
   Submission, SubmissionStatus, SubmissionAuthor, SubmissionReviewer,
+  SubmissionReviewerListResponse,
   ActivityEvent, FeedbackItem, Appeal, ReviewProgressStage, SubmissionMeeting,
   DocumentAnnotation, SubmissionMessage, MeetingType, UserMeetingContext,
   SubmissionEmail, EmailStageTemplate,
@@ -2784,8 +2786,8 @@ function DocumentsTab({ sub, canEdit, canRunSimilarity }: { sub: Submission; can
       setShowUploadForm(false)
       setUploadFiles([])
       setChangeSummary('')
-    } catch (e: any) {
-      setUploadError(e?.response?.data?.message ?? 'Upload failed. Please try again.')
+    } catch (e: unknown) {
+      setUploadError(getApiErrorMessage(e, 'Upload failed. Please try again.', uploadFiles))
     } finally {
       setIsUploading(false)
     }
@@ -4021,7 +4023,7 @@ function ReviewerDecisionPanel({
   const [showConflict, setShowConflict] = useState(false)
   const [conflictReason, setConflictReason] = useState('')
 
-  const { data: reviewersData } = useQuery<{ data: SubmissionReviewer[] }>({
+  const { data: reviewersData } = useQuery<SubmissionReviewerListResponse>({
     queryKey: ['submission-reviewers', submissionId],
     queryFn: () => api.get(`/submissions/${submissionId}/reviewers`).then(r => r.data),
     enabled: !!user,
@@ -4031,6 +4033,7 @@ function ReviewerDecisionPanel({
   const stageAllowsFinalize = !!myAssignment?.stage?.allows_finalize
 
   const decisionMutation = useMutation<AxiosResponse>({
+    onMutate: () => setSubmitError(''),
     mutationFn: () => {
       if (annotatedFiles.length > 0) {
         const fd = new FormData()
@@ -4055,13 +4058,14 @@ function ReviewerDecisionPanel({
       qc.invalidateQueries({ queryKey: ['submission', submissionId] })
       qc.invalidateQueries({ queryKey: ['submission-reviewers', submissionId] })
       qc.invalidateQueries({ queryKey: ['review-progress', submissionId] })
+      qc.invalidateQueries({ queryKey: ['submission-feedback', submissionId] })
       qc.invalidateQueries({ queryKey: ['my-reviews'] })
       qc.invalidateQueries({ queryKey: ['my-reviews-queue'] })
       qc.invalidateQueries({ queryKey: ['dashboard-stats'] })
       toast.success('Decision submitted.', 'Your review has been recorded.')
     },
-    onError: (e: any) => {
-      const msg = e?.response?.data?.message ?? 'Failed to submit decision.'
+    onError: (e: unknown) => {
+      const msg = getApiErrorMessage(e, 'Failed to submit decision.', annotatedFiles)
       setSubmitError(msg)
       setShowConfirm(false)
       toast.error('Decision failed.', msg)
@@ -4085,6 +4089,7 @@ function ReviewerDecisionPanel({
 
   // Upload selected feedback documents immediately so they persist (survive navigation).
   const uploadDocsMutation = useMutation<AxiosResponse, unknown, File[]>({
+    onMutate: () => { setFileError(''); setSubmitError('') },
     mutationFn: (files) => {
       const fd = new FormData()
       fd.append('_method', 'PATCH')
@@ -4099,9 +4104,10 @@ function ReviewerDecisionPanel({
       qc.invalidateQueries({ queryKey: ['submission-feedback', submissionId] })
       toast.success('Files uploaded.', 'Your feedback documents were saved.')
     },
-    onError: (e: any) => {
-      setAnnotatedFiles([])
-      toast.error('Upload failed.', e?.response?.data?.message ?? 'Please try again.')
+    onError: (e: unknown, files) => {
+      const message = getApiErrorMessage(e, 'Could not upload feedback documents.', files)
+      setFileError(message)
+      toast.error('Upload failed. Selected files have been kept.', message)
     },
   })
 
@@ -4210,6 +4216,14 @@ function ReviewerDecisionPanel({
   }
 
   const selectedOption = DECISION_OPTIONS.find(o => o.value === selectedDecision)
+  const uploadPolicy = reviewersData?.meta?.feedback_upload_policy
+  if (!uploadPolicy) {
+    return <p role="alert" className="mb-5 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+      Reviewer feedback upload settings could not be loaded. Refresh the page or contact an administrator before submitting your review.
+    </p>
+  }
+  const { max_file_size_mb: maxSizeMb, max_files: maxFiles, allowed_extensions: allowedExts } = uploadPolicy
+  const uploadedCount = (myAssignment.documents?.length ?? 0) + (myAssignment.has_annotated_document ? 1 : 0)
   const hasPendingExtension = myAssignment.extension_status === 'pending'
   const canRequestExtension = !hasPendingExtension && myAssignment.extension_status !== 'approved'
 
@@ -4287,7 +4301,7 @@ function ReviewerDecisionPanel({
             Feedback documents <span className="text-gray-400 normal-case font-normal">(optional)</span>
           </label>
           <p className="text-xs text-gray-400 mb-2">
-            Attach one or more files to send back — the annotated dissertation, a copy of the handbook, examples, etc. The submitter will be able to view and download them. PDF or Word, up to 25&nbsp;MB each (max 10 files).
+            Attach one or more files to send back — the annotated dissertation, a copy of the handbook, examples, etc. The submitter will be able to view and download them. Allowed: {allowedExts.map(ext => `.${ext}`).join(', ')}. Administrator-configured limit: {maxSizeMb} MB per file, up to {maxFiles} files per reviewer (including files already uploaded).
           </p>
 
           {promoteDocId && (
@@ -4303,12 +4317,18 @@ function ReviewerDecisionPanel({
           )}
 
           {/* Already-uploaded documents (persisted on the server) */}
+          {myAssignment.has_annotated_document && (
+            <p className="mb-2 text-xs text-green-700">
+              Previously uploaded feedback: {myAssignment.annotated_document_name}. This document also counts toward the file limit.
+            </p>
+          )}
           {myAssignment.documents && myAssignment.documents.length > 0 && (
             <div className="space-y-2 mb-2">
               {myAssignment.documents.map(doc => (
                 <div key={doc.id} className="flex items-center gap-2 rounded-lg border border-green-200 bg-green-50 px-3 py-2.5">
                   <FileText className="w-4 h-4 text-green-500 shrink-0" />
                   <span className="text-sm text-green-800 truncate flex-1">{doc.name}</span>
+                  <span className="text-xs text-green-700 shrink-0">Uploaded</span>
                   {doc.size != null && <span className="text-xs text-green-500 shrink-0">{(doc.size / 1024 / 1024).toFixed(1)} MB</span>}
                   <button
                     type="button"
@@ -4341,15 +4361,19 @@ function ReviewerDecisionPanel({
           )}
 
           {/* Newly selected files, waiting to be uploaded */}
-          {annotatedFiles.length > 0 && (            <div className="space-y-2 mb-2">
+          {annotatedFiles.length > 0 && (
+            <div className="space-y-2 mb-2">
+              <p className="text-xs text-blue-700">Not uploaded yet. Use Upload now or Submit Decision to save these files. Save Draft saves only your decision and comments.</p>
               {annotatedFiles.map((f, i) => (
                 <div key={`${f.name}-${i}`} className="flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2.5">
                   <FileText className="w-4 h-4 text-blue-500 shrink-0" />
                   <span className="text-sm text-blue-800 truncate flex-1">{f.name}</span>
+                  <span className="text-xs text-blue-600 shrink-0">Pending upload</span>
                   <span className="text-xs text-blue-500 shrink-0">{(f.size / 1024 / 1024).toFixed(1)} MB</span>
                   <button
                     type="button"
                     onClick={() => setAnnotatedFiles(prev => prev.filter((_, idx) => idx !== i))}
+                    disabled={uploadDocsMutation.isPending || decisionMutation.isPending}
                     className="text-blue-400 hover:text-blue-600 shrink-0"
                     title="Remove file"
                   >
@@ -4363,28 +4387,32 @@ function ReviewerDecisionPanel({
           <input
             ref={fileInputRef}
             type="file"
-            accept=".pdf,.doc,.docx"
+            accept={allowedExts.map(ext => `.${ext}`).join(',')}
             multiple
             className="hidden"
             onChange={e => {
               const list = Array.from(e.target.files ?? [])
               setFileError('')
               if (list.length === 0) return
+              if (annotatedFiles.length + list.length + uploadedCount > maxFiles) {
+                setFileError(`Review Settings allow at most ${maxFiles} feedback documents, including files already uploaded. No additional files were selected.`)
+                e.target.value = ''
+                return
+              }
               const valid: File[] = []
               for (const f of list) {
                 const ext = f.name.split('.').pop()?.toLowerCase() ?? ''
-                if (!['pdf', 'doc', 'docx'].includes(ext)) {
-                  setFileError('Only PDF or Word (.pdf, .doc, .docx) files are allowed.')
+                if (!allowedExts.includes(ext)) {
+                  setFileError(`"${f.name}" is not allowed. Allowed: ${allowedExts.map(value => `.${value}`).join(', ')}.`)
                   continue
                 }
-                if (f.size > 25 * 1024 * 1024) {
-                  setFileError(`"${f.name}" exceeds the 25 MB limit.`)
+                if (f.size > maxSizeMb * 1024 * 1024) {
+                  setFileError(`"${f.name}" exceeds the administrator-configured reviewer feedback limit of ${maxSizeMb} MB.`)
                   continue
                 }
                 valid.push(f)
               }
-              const alreadyUploaded = myAssignment?.documents?.length ?? 0
-              setAnnotatedFiles(prev => [...prev, ...valid].slice(0, Math.max(0, 10 - alreadyUploaded)))
+              setAnnotatedFiles(prev => [...prev, ...valid])
               if (fileInputRef.current) fileInputRef.current.value = ''
             }}
           />
@@ -4393,6 +4421,7 @@ function ReviewerDecisionPanel({
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
+              disabled={uploadDocsMutation.isPending || decisionMutation.isPending}
               className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-blue-600 border border-dashed border-blue-300 rounded-lg hover:bg-blue-50 transition-colors flex-1 justify-center"
             >
               <Upload className="w-4 h-4" />
@@ -4402,7 +4431,7 @@ function ReviewerDecisionPanel({
               <button
                 type="button"
                 onClick={() => uploadDocsMutation.mutate(annotatedFiles)}
-                disabled={uploadDocsMutation.isPending}
+                disabled={uploadDocsMutation.isPending || decisionMutation.isPending}
                 className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50"
                 title="Upload the selected files now so they are saved"
               >
@@ -4411,7 +4440,7 @@ function ReviewerDecisionPanel({
               </button>
             )}
           </div>
-          {fileError && <p className="text-xs text-red-600 mt-1">{fileError}</p>}
+          {fileError && <p role="alert" className="text-xs text-red-600 mt-1">{fileError}</p>}
         </div>
 
         {submitError && (
@@ -4425,6 +4454,7 @@ function ReviewerDecisionPanel({
               <>
                 <button
                   onClick={() => { setFinalizeWorkflow(true); setShowConfirm(true) }}
+                  disabled={uploadDocsMutation.isPending || decisionMutation.isPending}
                   className="flex items-center gap-2 px-5 py-2.5 text-sm font-semibold rounded-lg bg-green-600 hover:bg-green-700 text-white transition-colors"
                   title="Approve and finish the workflow now"
                 >
@@ -4433,6 +4463,7 @@ function ReviewerDecisionPanel({
                 </button>
                 <button
                   onClick={() => { setFinalizeWorkflow(false); setShowConfirm(true) }}
+                  disabled={uploadDocsMutation.isPending || decisionMutation.isPending}
                   className="flex items-center gap-2 px-5 py-2.5 text-sm font-semibold rounded-lg border border-green-600 text-green-700 hover:bg-green-50 transition-colors"
                   title="Approve and continue to the next stage"
                 >
@@ -4443,7 +4474,7 @@ function ReviewerDecisionPanel({
             ) : (
               <button
                 onClick={() => { setFinalizeWorkflow(false); setShowConfirm(true) }}
-                disabled={!selectedDecision}
+                disabled={!selectedDecision || uploadDocsMutation.isPending || decisionMutation.isPending}
                 className={`flex items-center gap-2 px-5 py-2.5 text-sm font-semibold rounded-lg disabled:opacity-40 disabled:cursor-not-allowed transition-colors ${
                   selectedDecision === 'approve'
                     ? 'bg-green-600 hover:bg-green-700 text-white'

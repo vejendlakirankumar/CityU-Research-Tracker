@@ -214,7 +214,259 @@ sudo systemctl reload nginx
 
 ### Upload size limit
 
-In the nginx vhost set `client_max_body_size 100M;`, then `sudo systemctl reload nginx`.
+**Settings → Review Settings → Reviewer Feedback Uploads** controls the per-file
+size and total file count for attachments in **Your Review Decision → Feedback
+documents**. Defaults are 25 MB per file and 10 files per reviewer assignment;
+administrators can configure 1–500 MB and 1–50 files. Already-uploaded files count
+toward that limit. Lowering a setting does not delete existing attachments.
+Feedback continues to accept PDF and Word (`pdf`, `doc`, `docx`).
+
+These settings are independent of submission-category limits. Category settings
+continue to govern submission documents and **Upload reviewer version** in the
+Documents tab. The decision panel reads the reviewer feedback policy from the
+API, displays the configured values, and validates selections against them.
+The API rechecks the current settings on every upload, including attachments sent
+with a decision and the legacy single-document upload field.
+
+The installer and backend updater install [deploy/php-uploads.ini](deploy/php-uploads.ini)
+for PHP-FPM: `upload_max_filesize=500M`, `post_max_size=512M`, and
+`max_file_uploads=51`. The extra file slot lets the API reject requests exceeding
+the application's maximum count instead of PHP silently dropping the 51st file.
+These are infrastructure ceilings, not the feedback or category policy: an
+8 MB reviewer feedback setting still rejects a 9 MB feedback document, regardless
+of the category setting. The 512 MB total request ceiling also applies;
+upload large collections in smaller batches using **Upload now**.
+
+**Existing VMs need this configuration as well as the application update.**
+From your source checkout, using the PHP version that serves the application:
+
+```bash
+PHP_VERSION=8.4
+sudo install -m 644 deploy/php-uploads.ini "/etc/php/${PHP_VERSION}/fpm/conf.d/99-rrp-uploads.ini"
+sudo systemctl reload "php${PHP_VERSION}-fpm"
+```
+
+In the active Nginx site's `server` block (normally
+`/etc/nginx/sites-available/rrp`), add or update:
+
+```nginx
+client_max_body_size 512M;
+```
+
+Then run `sudo nginx -t && sudo systemctl reload nginx`. Check for smaller
+overrides in the PHP-FPM pool, Nginx locations, and upstream Application Gateway /
+WAF upload settings. The updater deliberately does not rewrite existing Nginx
+vhosts. `php -i` describes CLI PHP, not necessarily the active PHP-FPM pool;
+the System Logs upload diagnostics and **Review Settings** show the effective
+settings of the PHP-FPM request. Saving review settings changes application
+policy only; PHP limits cannot be raised by Laravel after PHP has parsed a request.
+
+### Reviewer upload diagnostics and System Logs
+
+After deploying the backend and frontend, run `php artisan migrate --force` in
+the served backend as the application user, then rebuild Laravel's caches.
+The new `system_logs` table and the two `reviewer_feedback_*` columns on
+`organization_settings` are required.
+
+Administrators can open **Administration → System Logs**. The API
+`GET /api/system/logs` is also restricted to administrators (including active-role
+checks). Filter by severity, submission UUID, date range, or the error reference
+shown to the reviewer. It records:
+
+- Reviewer validation failures, with failed rules, field errors, active PHP-FPM
+  limits, and PHP upload error codes (`1` means `upload_max_filesize` was exceeded).
+- Successfully persisted feedback and reviewer-version uploads, with document count.
+- Oversized requests reaching Laravel and reportable API exceptions.
+
+Entries exclude request bodies, comments, document contents, filenames, tokens,
+raw exception messages, SQL, and stack traces. Standard Laravel reporting remains
+enabled for detailed VM-side investigation. If diagnostic database writes fail,
+an explicit `system_diagnostics.persistence_failed` event is sent to the server log.
+Entries older than 30 days are deleted by the daily Laravel scheduler; ensure
+`php artisan schedule:run` runs every minute.
+
+The page is not a raw log-file browser and cannot backfill historical failures.
+Nginx / gateway rejections and failures before Laravel starts may have no portal
+entry. On a native VM check:
+
+```bash
+sudo journalctl -u php8.4-fpm --since "2026-10-15" --no-pager
+sudo tail -n 200 /var/log/nginx/error.log
+sudo tail -n 200 /var/log/nginx/access.log
+sudo tail -n 200 /var/www/rrp/backend/storage/logs/laravel.log
+```
+
+Use the log paths configured on your VM; if `LOG_CHANNEL=stderr`, inspect the
+PHP-FPM service/error log rather than assuming a Laravel log file exists.
+Ordinary validation failures were not previously logged, so the original failed
+PDF may require a controlled reproduction to identify its exact cause.
+
+Before release, set the reviewer feedback limit to 8 MB and 2 files in Review
+Settings, even if the category has a different limit. Upload a 3.5 MB PDF
+successfully, reject a file over 8 MB with an actionable message, and confirm two
+uploaded files appear in feedback after the reviewer submits their decision.
+Verify that a third file is rejected (including when the first two were uploaded
+in separate batches), failed uploads retain selected files, and non-admin users
+receive HTTP 403 from `/api/system/logs`.
+
+### Deploying this reviewer-upload update to an existing production VM
+
+This is a native Ubuntu deployment, **not Docker**. The following uses the
+standard layout: source `/opt/rrp/source`, live app `/var/www/rrp`, application user
+`rrp`, PHP-FPM `php8.4-fpm`, and PostgreSQL database `rrp_production`. Adjust these
+names if your installation differs. Run these commands on the production VM,
+not on the local Windows development machine. No PHP/Node installation or
+dependency-manifest changes are needed for this release.
+
+#### 1. Publish the code and back up the live deployment
+
+First commit and push the complete release from your development environment.
+Include both new migrations, the new System Logs classes/page, the reviewer
+settings changes, and `deploy/php-uploads.ini`. Do not deploy only the edited
+controller. Schedule a maintenance window and have reviewers finish or save
+their current work.
+
+In one VM shell:
+
+```bash
+set -euo pipefail
+BACKUP="/var/backups/rrp/reviewer-upload-$(date +%Y%m%d-%H%M%S)"
+sudo mkdir -p "$BACKUP"
+sudo chmod 700 "$BACKUP"
+sudo -u postgres pg_dump --format=custom rrp_production \
+  | sudo tee "$BACKUP/database.dump" >/dev/null
+sudo tar --exclude=backend/vendor --exclude=backend/storage \
+  --exclude=backend/bootstrap/cache \
+  -C /var/www/rrp -czf "$BACKUP/application.tar.gz" backend frontend-dist
+sudo cp /etc/nginx/sites-available/rrp "$BACKUP/nginx-rrp.conf"
+echo "Backup: $BACKUP"
+```
+
+The application archive contains `.env`; keep the backup directory private.
+Uploads are deliberately excluded from that archive: keep your normal document
+storage backup/snapshot as well. Check that the database dump and archive are
+non-empty before continuing.
+
+#### 2. Update the source and build the frontend before downtime
+
+```bash
+sudo -u rrp git -C /opt/rrp/source status --short
+sudo -u rrp git -C /opt/rrp/source pull --ff-only
+cd /opt/rrp/source/frontend
+sudo -u rrp npm run build
+```
+
+Confirm the checkout is on your intended release branch and has no conflicting
+local edits before pulling. Stop if the build fails. This uses existing frontend
+dependencies; if the VM has no build dependencies, build the same commit in your
+normal build/CI environment and transfer its `frontend/dist` artifacts instead.
+Do not install new runtimes just to deploy this change.
+
+#### 3. Enter maintenance mode, copy the code, and migrate
+
+```bash
+cd /var/www/rrp/backend
+sudo -u rrp php8.4 artisan down --retry=60
+
+sudo rsync -a --chown=rrp:rrp \
+  --exclude='.env' --exclude='vendor/' --exclude='storage/' \
+  --exclude='bootstrap/cache/' \
+  /opt/rrp/source/backend/ /var/www/rrp/backend/
+
+sudo -u rrp php8.4 artisan migrate --force
+sudo -u rrp php8.4 artisan migrate:status
+
+sudo rsync -a --chown=rrp:rrp \
+  /opt/rrp/source/frontend/dist/ /var/www/rrp/frontend-dist/
+```
+
+Verify both migrations show **Ran**:
+
+- `2026_10_16_000001_create_system_logs_table`
+- `2026_10_16_000002_add_reviewer_feedback_upload_settings`
+
+Do not run `migrate:fresh`, reset the database, or overwrite `.env`, `storage`,
+or `vendor`. If any command fails, leave the app in maintenance while investigating.
+
+#### 4. Apply PHP-FPM and Nginx ceilings
+
+```bash
+sudo cp /opt/rrp/source/deploy/php-uploads.ini \
+  /etc/php/8.4/fpm/conf.d/99-rrp-uploads.ini
+sudo chmod 644 /etc/php/8.4/fpm/conf.d/99-rrp-uploads.ini
+```
+
+Back up an existing `99-rrp-uploads.ini` before replacing it. Edit the active
+Nginx site (including its HTTPS server block if TLS terminates on this VM) to use
+`client_max_body_size 512M;`. Check for lower settings in included files, Nginx
+locations, PHP-FPM pool `php_admin_value[...]` overrides, or an upstream
+Application Gateway / WAF. Ensure that upstream request and per-file upload
+limits support your intended feedback setting.
+
+```bash
+sudo php-fpm8.4 -t
+sudo nginx -t
+sudo systemctl reload php8.4-fpm
+sudo systemctl reload nginx
+```
+
+Do not rely on `php8.4 -i` alone: it checks CLI PHP, not the FPM pool serving the API.
+
+#### 5. Refresh caches and resume service
+
+```bash
+cd /var/www/rrp/backend
+sudo -u rrp php8.4 artisan optimize:clear
+sudo -u rrp php8.4 artisan config:cache
+sudo -u rrp php8.4 artisan route:cache
+sudo -u rrp php8.4 artisan queue:restart
+sudo -u rrp php8.4 artisan up
+sudo systemctl is-active php8.4-fpm nginx
+```
+
+If you use Supervisor, confirm the worker restarts normally. Confirm the existing
+cron runs `php artisan schedule:run` every minute for System Logs retention.
+
+#### 6. Configure and verify in the portal
+
+1. Refresh the browser and sign in using the **Administrator** role.
+2. Open **Settings → Review Settings → Reviewer Feedback Uploads**.
+3. Set **Maximum Feedback File Size (MB)** and **Maximum Feedback Files per Reviewer**,
+   then save. Defaults remain 25 MB and 10 files until changed.
+4. Check that the active PHP-FPM limits shown there are `500M`, `512M`, and `51`.
+   A smaller value means the wrong FPM configuration was changed or an override remains.
+5. Open a review as the assigned reviewer. Confirm **Feedback documents** shows
+   the exact saved size/count, not the category limits or hard-coded defaults.
+6. On a test submission, use an 8 MB / 2-file feedback policy: upload a 3.5 MB PDF,
+   add a second PDF, and verify the third-file and over-8-MB rejections. A failed
+   file upload must not silently disappear or submit a decision.
+7. Submit a test decision and verify both uploaded files appear in Feedback.
+8. As administrator, check **Administration → System Logs** for successful
+   upload events and controlled validation failures. Verify a reviewer or
+   coordinator cannot open the System Logs API.
+
+Where your normal test environment already has dependencies and SQLite support,
+run the focused regression tests before release:
+
+```bash
+cd /opt/rrp/source/frontend
+npm test -- src/test/apiErrors.test.ts src/test/review-settings.test.tsx
+cd /opt/rrp/source/backend
+php8.4 artisan test --filter=ReviewerUploadDiagnosticsTest
+```
+
+The backend test builds an isolated in-memory SQLite fixture; it does not use
+the production PostgreSQL database. Do not run unrelated suites against
+production data.
+
+#### If the deployment must be rolled back
+
+Keep the site in maintenance, restore the previous backend and frontend artifacts
+from your private application backup, refresh caches, and reload PHP-FPM before
+resuming. Preserve `.env`, `vendor`, document storage, and any newly uploaded
+documents. These migrations are additive; the previous code can leave the new
+columns/table in place. Do not blindly roll back migrations or restore the entire
+database after users have resumed work, because that could lose new data.
 
 ---
 
@@ -260,7 +512,7 @@ The backend trusts `X-Forwarded-Proto` / `X-Forwarded-Host` / `X-Forwarded-For` 
 | **Backend HTTP setting** | Protocol **HTTP**, port **80**. Request timeout **≥ 120s**. Cookie affinity **not required** |
 | **Health probe** | Protocol **HTTP**, path **`/api/system/public`**, status **200–399**, host `rrp.cityu.edu` |
 | **Redirect** | HTTP (80) listener + rule to force HTTP → HTTPS at the gateway |
-| **Max request body size** (WAF SKU) | Raise to **≥ 50 MB** for document uploads |
+| **Max request body size** (WAF SKU) | Match the **512 MB** server request ceiling where supported; smaller gateway or per-file limits will reject otherwise-valid category uploads |
 
 ### Step 4 — Lock down the VM network
 
@@ -577,7 +829,7 @@ server {
 
     root /var/www/rrp/backend/public;
     index index.php;
-    client_max_body_size 50M;
+    client_max_body_size 512M;
 
     location / {
         root /var/www/rrp/frontend-dist;

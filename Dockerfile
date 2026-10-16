@@ -59,6 +59,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # PHP-FPM config: run as www-data, listen on TCP
 RUN sed -i 's/^listen = .*/listen = 127.0.0.1:9000/' /etc/php/${PHP_VERSION}/fpm/pool.d/www.conf
 RUN sed -i 's/^;daemonize = .*/daemonize = no/' /etc/php/${PHP_VERSION}/fpm/php-fpm.conf
+COPY deploy/php-uploads.ini /etc/php/8.4/fpm/conf.d/99-rrp-uploads.ini
 
 # Nginx config
 COPY docker/nginx.conf /etc/nginx/nginx.conf

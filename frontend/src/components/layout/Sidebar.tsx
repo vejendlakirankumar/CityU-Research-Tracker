@@ -140,6 +140,12 @@ const navSections: NavSection[] = [
         roles: ['admin', 'coordinator'],
       },
       {
+        label: 'System Logs',
+        to: '/system-logs',
+        icon: ClipboardList,
+        roles: ['admin'],
+      },
+      {
         label: 'Audit Log',
         to: '/audit-log',
         icon: Shield,
@@ -274,6 +280,5 @@ export default function Sidebar() {
     </aside>
   )
 }
-
 
 

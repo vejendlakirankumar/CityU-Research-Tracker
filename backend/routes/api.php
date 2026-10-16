@@ -25,6 +25,7 @@ use App\Http\Controllers\SubmissionEmailController;
 use App\Http\Controllers\SubmissionTypeController;
 use App\Http\Controllers\ResearchTemplateController;
 use App\Http\Controllers\SystemController;
+use App\Http\Controllers\SystemLogController;
 use App\Http\Controllers\UserController;
 use App\Http\Controllers\WebhookController;
 use App\Http\Controllers\AnnouncementController;
@@ -117,6 +118,7 @@ Route::middleware(['auth:sanctum', 'active-role'])->group(function () {
 
     // ── Admin-only system routes ───────────────────────────────────────────────
     Route::middleware('role:admin')->prefix('system')->group(function () {
+        Route::get('logs', [SystemLogController::class, 'index']);
 
         // Organization
         Route::get('organization',              [SystemController::class, 'getOrganization']);
@@ -388,4 +390,3 @@ Route::middleware(['auth:sanctum', 'active-role'])->group(function () {
     });
 
 }); // end middleware('auth:sanctum')
-

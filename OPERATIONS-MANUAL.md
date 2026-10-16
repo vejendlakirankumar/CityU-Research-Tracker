@@ -316,6 +316,21 @@ sudo tail -n 100 /var/log/supervisor/rrp-v2-watchdog.log
 
 ### In-app Audit Log
 
+For operational errors rather than completed business actions, administrators can
+use **Administration → System Logs**. This database-backed page records reviewer
+upload validation failures, successful feedback uploads, oversized requests that
+reach Laravel, and reportable API exceptions. Entries carry an error reference and
+are pruned after 30 days by the Laravel scheduler. It does not expose raw logs or
+recover historical failures. See the [VM upload diagnostics instructions](DEPLOYMENT-VM.md#reviewer-upload-diagnostics-and-system-logs)
+for native PHP-FPM limits, deployment steps, and troubleshooting.
+
+Reviewer feedback size and count limits are managed separately from submission
+categories at **Settings → Review Settings → Reviewer Feedback Uploads**.
+Defaults are 25 MB per file and 10 total files per reviewer assignment. The
+decision panel shows the saved policy and the API enforces it. PHP-FPM / proxy
+ceilings must also be configured; the settings page shows the active PHP-FPM
+limits but does not change server configuration.
+
 All administrative and workflow actions are stored in the `audit_logs` table. View via the portal at **Admin → Audit Log**, or query directly:
 
 ```bash

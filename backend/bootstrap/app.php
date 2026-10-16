@@ -45,8 +45,32 @@ return Application::configure(basePath: dirname(__DIR__))
         $schedule->command('reviews:check-overdue')->dailyAt('08:00');
         // Remind reviewers whose deadline is approaching (default: 2 days out).
         $schedule->command('reviews:check-due-soon')->dailyAt('08:00');
+        $schedule->call(fn () => \App\Models\SystemLog::where('created_at', '<', now()->subDays(30))->delete())
+            ->daily()->name('prune-system-logs');
     })
     ->withExceptions(function (Exceptions $exceptions) {
+        $exceptions->report(function (\Throwable $e) {
+            $request = request();
+            if ($request->is('api/*')) {
+                \App\Services\SystemDiagnostics::record($request, 'error', 'api.exception', [
+                    'exception' => $e::class,
+                    'source' => basename($e->getFile()),
+                    'line' => $e->getLine(),
+                ] + \App\Services\SystemDiagnostics::uploadContext($request));
+            }
+        });
+
+        $exceptions->render(function (\Illuminate\Http\Exceptions\PostTooLargeException $e, $request) {
+            if ($request->is('api/*')) {
+                \App\Services\SystemDiagnostics::record($request, 'warning', 'upload.request_too_large',
+                    \App\Services\SystemDiagnostics::uploadContext($request));
+                return response()->json([
+                    'message' => 'The upload exceeds the server request-size limit. Upload fewer files at a time, or ask an administrator to check PHP-FPM and proxy upload limits.',
+                    'request_id' => \App\Services\SystemDiagnostics::requestId($request),
+                ], 413);
+            }
+        });
+
         $exceptions->render(function (\Illuminate\Auth\AuthenticationException $e, $request) {
             if ($request->is('api/*')) {
                 return response()->json(['message' => 'Unauthenticated.'], 401);
@@ -61,10 +85,31 @@ return Application::configure(basePath: dirname(__DIR__))
 
         $exceptions->render(function (\Illuminate\Validation\ValidationException $e, $request) {
             if ($request->is('api/*')) {
+                $requestId = null;
+                if ($request->is('api/submissions/*/reviewers/*')) {
+                    \App\Services\SystemDiagnostics::record($request, 'warning', 'reviewer.validation_failed', [
+                        'failed_rules' => collect($e->validator->failed())->map(fn ($rules) => array_keys($rules))->all(),
+                        'validation_errors' => $e->errors(),
+                    ] + \App\Services\SystemDiagnostics::uploadContext($request));
+                    $requestId = \App\Services\SystemDiagnostics::requestId($request);
+                }
                 return response()->json([
                     'message' => 'Validation failed.',
                     'errors'  => $e->errors(),
+                    'request_id' => $requestId,
                 ], 422);
+            }
+        });
+        $exceptions->render(function (\Throwable $e, $request) {
+            if ($request->is('api/*') && $request->attributes->has('diagnostic_request_id')) {
+                $status = $e instanceof \Symfony\Component\HttpKernel\Exception\HttpExceptionInterface
+                    ? $e->getStatusCode() : 500;
+                if ($status >= 500) {
+                    return response()->json([
+                        'message' => 'The server could not complete this request. Please contact an administrator with the reference below before retrying.',
+                        'request_id' => \App\Services\SystemDiagnostics::requestId($request),
+                    ], $status);
+                }
             }
         });
     })->create();

@@ -24,6 +24,7 @@ class OrganizationSetting extends Model
         'grace_period_holidays_country', 'max_extension_requests',
         'due_date_exclude_weekends', 'due_date_consider_holidays',
         'due_date_visibility', 'reviewers_can_view_future_submissions',
+        'reviewer_feedback_max_file_size_mb', 'reviewer_feedback_max_files',
     ];
 
     protected function casts(): array
@@ -37,6 +38,8 @@ class OrganizationSetting extends Model
             'review_grace_period_days'        => 'integer',
             'max_extension_requests'          => 'integer',
             'audit_retention_days'            => 'integer',
+            'reviewer_feedback_max_file_size_mb' => 'integer',
+            'reviewer_feedback_max_files' => 'integer',
         ];
     }
 
@@ -45,5 +48,14 @@ class OrganizationSetting extends Model
         return static::firstOrCreate(['id' => 1], [
             'org_name' => 'Research Review Portal',
         ]);
+    }
+
+    public function reviewerFeedbackUploadPolicy(): array
+    {
+        return [
+            'max_file_size_mb' => $this->reviewer_feedback_max_file_size_mb ?? 25,
+            'max_files' => $this->reviewer_feedback_max_files ?? 10,
+            'allowed_extensions' => ['pdf', 'doc', 'docx'],
+        ];
     }
 }

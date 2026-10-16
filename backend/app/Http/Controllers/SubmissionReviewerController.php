@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\AuditLog;
 use App\Models\Notification;
+use App\Models\OrganizationSetting;
 use App\Models\ReviewerPool;
 use App\Models\StageDefinition;
 use App\Models\Submission;
@@ -13,6 +14,7 @@ use App\Models\SubmissionVersion;
 use App\Services\DueDateService;
 use App\Services\NotificationService;
 use App\Services\WorkflowAdvancer;
+use App\Services\SystemDiagnostics;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
@@ -47,7 +49,10 @@ class SubmissionReviewerController extends Controller
 
         $reviewers = $query->orderBy('assigned_at')->get();
 
-        return response()->json(['data' => $reviewers->map(fn($r) => $this->toResource($r))]);
+        return response()->json([
+            'data' => $reviewers->map(fn($r) => $this->toResource($r)),
+            'meta' => ['feedback_upload_policy' => OrganizationSetting::current()->reviewerFeedbackUploadPolicy()],
+        ]);
     }
 
     /**
@@ -212,58 +217,55 @@ class SubmissionReviewerController extends Controller
             return response()->json(['message' => 'Unauthorized.'], 403);
         }
 
+        $uploadPolicy = OrganizationSetting::current()->reviewerFeedbackUploadPolicy();
+        $maxMb = $uploadPolicy['max_file_size_mb'];
+        $maxFiles = $uploadPolicy['max_files'];
+        $allowedExts = $uploadPolicy['allowed_extensions'];
+        $fileRules = [
+            'bail', 'file', 'max:' . ($maxMb * 1024),
+            function ($attr, $value, $fail) use ($allowedExts) {
+                $ext = strtolower($value->getClientOriginalExtension());
+                if (!in_array($ext, $allowedExts, true)) {
+                    $fail("File extension '.{$ext}' is not allowed. Allowed: " . implode(', ', $allowedExts));
+                    return;
+                }
+                $blockedMimes = [
+                    'application/x-php', 'text/x-php', 'application/php',
+                    'application/x-httpd-php', 'application/x-httpd-php-source',
+                    'text/html', 'application/javascript', 'text/javascript',
+                    'application/x-sh', 'application/x-executable',
+                ];
+                if (in_array($value->getMimeType() ?? '', $blockedMimes, true)) {
+                    $fail('This file type is not permitted.');
+                }
+            },
+        ];
+
         $data = $request->validate([
             'status'   => ['sometimes', 'in:accepted,declined'],
             'due_at'   => ['sometimes', 'nullable', 'date'],
             'decision' => ['sometimes', 'nullable', 'in:approve,reject,revise,APPROVE,REJECT,REQUEST_CHANGES'],
             'finalize_workflow' => ['sometimes', 'boolean'],
             'comments' => ['sometimes', 'nullable', 'string', 'max:10000'],
-            'annotated_document' => [
-                'sometimes',
-                'nullable',
-                'file',
-                'max:25600', // 25 MB
-                function ($attr, $value, $fail) {
-                    $allowedExts = ['pdf', 'doc', 'docx'];
-                    $ext = strtolower($value->getClientOriginalExtension());
-                    if (! in_array($ext, $allowedExts, true)) {
-                        $fail("File extension '.{$ext}' is not allowed. Allowed: " . implode(', ', $allowedExts));
-                        return;
-                    }
-                    $blockedMimes = [
-                        'application/x-php', 'text/x-php', 'application/php',
-                        'application/x-httpd-php', 'application/x-httpd-php-source',
-                        'text/html', 'application/javascript', 'text/javascript',
-                        'application/x-sh', 'application/x-executable',
-                    ];
-                    if (in_array($value->getMimeType() ?? '', $blockedMimes, true)) {
-                        $fail('This file type is not permitted.');
-                    }
-                },
-            ],
-            'annotated_documents'   => ['sometimes', 'array', 'max:10'],
-            'annotated_documents.*' => [
-                'file',
-                'max:25600', // 25 MB each
-                function ($attr, $value, $fail) {
-                    $allowedExts = ['pdf', 'doc', 'docx'];
-                    $ext = strtolower($value->getClientOriginalExtension());
-                    if (! in_array($ext, $allowedExts, true)) {
-                        $fail("File extension '.{$ext}' is not allowed. Allowed: " . implode(', ', $allowedExts));
-                        return;
-                    }
-                    $blockedMimes = [
-                        'application/x-php', 'text/x-php', 'application/php',
-                        'application/x-httpd-php', 'application/x-httpd-php-source',
-                        'text/html', 'application/javascript', 'text/javascript',
-                        'application/x-sh', 'application/x-executable',
-                    ];
-                    if (in_array($value->getMimeType() ?? '', $blockedMimes, true)) {
-                        $fail('This file type is not permitted.');
-                    }
-                },
-            ],
+            'annotated_document' => ['sometimes', 'nullable', ...$fileRules],
+            'annotated_documents' => ['sometimes', 'array', "max:{$maxFiles}"],
+            'annotated_documents.*' => $fileRules,
+        ], [
+            'annotated_document.uploaded' => 'The document could not be received by the server. The active PHP-FPM per-file upload limit is ' . ini_get('upload_max_filesize') . '. Ask an administrator to check upload limits, temporary storage, and disk space.',
+            'annotated_documents.*.uploaded' => 'Feedback document #:position could not be received by the server. The active PHP-FPM per-file upload limit is ' . ini_get('upload_max_filesize') . '. Ask an administrator to check upload limits, temporary storage, and disk space.',
+            'annotated_document.max' => "The document exceeds the administrator-configured reviewer feedback limit of {$maxMb} MB.",
+            'annotated_documents.*.max' => "Feedback document #:position exceeds the administrator-configured reviewer feedback limit of {$maxMb} MB.",
+            'annotated_documents.max' => "Reviewer feedback allows at most {$maxFiles} files, as configured in Review Settings.",
         ]);
+
+        $existingCount = $reviewer->documents()->count() + ($reviewer->annotated_document_path ? 1 : 0);
+        $incomingCount = count($request->file('annotated_documents', []))
+            + ($request->hasFile('annotated_document') && !$reviewer->annotated_document_path ? 1 : 0);
+        if ($incomingCount > 0 && $existingCount + $incomingCount > $maxFiles) {
+            throw \Illuminate\Validation\ValidationException::withMessages([
+                'annotated_documents' => "Review Settings allow at most {$maxFiles} feedback documents per reviewer, including files already uploaded. Remove a file before adding another.",
+            ]);
+        }
 
         // Normalise decision values to lowercase canonical form
         if (isset($data['decision'])) {
@@ -345,6 +347,11 @@ class SubmissionReviewerController extends Controller
             }
 
             $path = $file->storeAs("uploads/{$submissionId}/reviews/{$reviewer->id}", $safeName);
+            if ($path === false) {
+                SystemDiagnostics::record($request, 'error', 'reviewer.document_storage_failed',
+                    SystemDiagnostics::uploadContext($request));
+                throw new \RuntimeException('Reviewer document storage failed.');
+            }
             $data['annotated_document_path'] = $path;
             $data['annotated_document_name'] = $originalName;
             $data['annotated_document_uploaded_at'] = now();
@@ -370,6 +377,11 @@ class SubmissionReviewerController extends Controller
                     "uploads/{$submissionId}/reviews/{$reviewer->id}",
                     Str::uuid() . '_' . $safeName,
                 );
+                if ($path === false) {
+                    SystemDiagnostics::record($request, 'error', 'reviewer.document_storage_failed',
+                        SystemDiagnostics::uploadContext($request));
+                    throw new \RuntimeException('Reviewer feedback document storage failed.');
+                }
                 SubmissionReviewerDocument::create([
                     'submission_reviewer_id' => $reviewer->id,
                     'path'        => $path,
@@ -381,6 +393,12 @@ class SubmissionReviewerController extends Controller
         }
 
         $reviewer->update($data);
+        if ($request->hasFile('annotated_document') || !empty($uploadedDocs)) {
+            SystemDiagnostics::record($request, 'info', 'reviewer.documents_uploaded', [
+                'document_count' => count($uploadedDocs) + ($request->hasFile('annotated_document') ? 1 : 0),
+                'decision_included' => isset($data['decision']),
+            ] + SystemDiagnostics::uploadContext($request));
+        }
 
         // When a reviewer ACCEPTS, advance submission's current_stage_id if this stage
         // is more advanced than the current pointer. This is the correct place to do it
@@ -679,6 +697,7 @@ class SubmissionReviewerController extends Controller
         $request->validate([
             'files'   => ['required', 'array', 'min:1', "max:{$maxFiles}"],
             'files.*' => [
+                'bail',
                 'file',
                 'max:' . ($maxMb * 1024),
                 function ($attr, $value, $fail) use ($allowedExts) {
@@ -700,6 +719,9 @@ class SubmissionReviewerController extends Controller
                 },
             ],
             'change_summary' => ['nullable', 'string', 'max:2000'],
+        ], [
+            'files.*.uploaded' => 'Document #:position could not be received by the server. The active PHP-FPM per-file upload limit is ' . ini_get('upload_max_filesize') . '. Ask an administrator to check upload limits, temporary storage, and disk space.',
+            'files.*.max' => "Document #:position exceeds this category's {$maxMb} MB limit.",
         ]);
 
         $nextVersion = $submission->versions()->max('version_number') + 1;
@@ -721,7 +743,13 @@ class SubmissionReviewerController extends Controller
                 $index++;
             }
             $usedNames[] = strtolower($candidate);
-            $storedPaths[] = $file->storeAs("uploads/{$submission->id}/v{$nextVersion}", $candidate);
+            $path = $file->storeAs("uploads/{$submission->id}/v{$nextVersion}", $candidate);
+            if ($path === false) {
+                SystemDiagnostics::record($request, 'error', 'reviewer.document_storage_failed',
+                    SystemDiagnostics::uploadContext($request));
+                throw new \RuntimeException('Reviewer version document storage failed.');
+            }
+            $storedPaths[] = $path;
         }
 
         $version = $this->recordReviewerVersion(
@@ -731,6 +759,10 @@ class SubmissionReviewerController extends Controller
             $storedPaths,
             $request->change_summary,
         );
+        SystemDiagnostics::record($request, 'info', 'reviewer.version_uploaded', [
+            'document_count' => count($storedPaths),
+            'version_number' => $nextVersion,
+        ] + SystemDiagnostics::uploadContext($request));
 
         return response()->json(['data' => $version], 201);
     }

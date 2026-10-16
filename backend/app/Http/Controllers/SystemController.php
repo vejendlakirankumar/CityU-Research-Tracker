@@ -62,7 +62,13 @@ class SystemController extends Controller
      */
     public function getOrganization(): JsonResponse
     {
-        return response()->json(OrganizationSetting::current());
+        return response()->json(OrganizationSetting::current()->toArray() + [
+            'upload_server_limits' => [
+                'upload_max_filesize' => ini_get('upload_max_filesize'),
+                'post_max_size' => ini_get('post_max_size'),
+                'max_file_uploads' => (int) ini_get('max_file_uploads'),
+            ],
+        ]);
     }
 
     /**
@@ -93,6 +99,8 @@ class SystemController extends Controller
             'due_date_consider_holidays'     => ['sometimes', 'boolean'],
             'due_date_visibility'            => ['sometimes', 'in:all_stages,current_stage'],
             'reviewers_can_view_future_submissions' => ['sometimes', 'boolean'],
+            'reviewer_feedback_max_file_size_mb' => ['sometimes', 'integer', 'min:1', 'max:500'],
+            'reviewer_feedback_max_files' => ['sometimes', 'integer', 'min:1', 'max:50'],
         ]);
 
         $org = OrganizationSetting::current();
@@ -497,4 +505,3 @@ class SystemController extends Controller
         return response()->json(['data' => $backups]);
     }
 }
-

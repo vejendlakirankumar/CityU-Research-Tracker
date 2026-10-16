@@ -111,6 +111,9 @@ fi
 # ---------- 4. Reload services -----------------------------------------------
 if [[ "$FRONTEND_ONLY" == false ]]; then
   info "Reloading PHP-FPM and restarting queue worker ..."
+  PHP_VERSION="$("$PHP" -r 'echo PHP_MAJOR_VERSION.".".PHP_MINOR_VERSION;')"
+  install -m 644 "$SRC/deploy/php-uploads.ini" "/etc/php/${PHP_VERSION}/fpm/conf.d/99-rrp-uploads.ini"
+  warn "Existing Nginx vhosts are not rewritten. Ensure client_max_body_size is at least 512M in the active site and upstream gateway."
   systemctl reload "$FPM_SVC"
   supervisorctl restart "$WORKER" || ( cd "$BE" && asuser "$PHP" artisan queue:restart ) || true
 fi
