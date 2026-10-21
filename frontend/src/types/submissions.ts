@@ -274,6 +274,7 @@ export type ReviewStageStatus =
   | 'assigned'
   | 'in_progress'
   | 'completed'
+  | 'revision_required'
 
 export interface ReviewProgressStage {
   id: string

@@ -340,6 +340,31 @@ decision panel shows the saved policy and the API enforces it. PHP-FPM / proxy
 ceilings must also be configured; the settings page shows the active PHP-FPM
 limits but does not change server configuration.
 
+### Revision uploads and resubmission
+
+Uploading a revised version saves the document; it does **not** submit it for
+another review. The student must click **Resubmit for Review** on the submission
+Overview (or the action bar). Until then, **Revision Required** and **Awaiting
+student revisions** are expected, and the requesting stage is not marked complete.
+
+On explicit resubmission, assigned reviewers are reused according to the
+workflow's restart policy: **FULL_RESTART** reopens the review from its first
+pending assigned stage; **RESUME_FROM_STAGE** preserves earlier approvals and
+reopens the requesting stage and later stages. Old decisions, drafts, finalization
+flags and reminder/notification timestamps are cleared only for the reopened
+assignments; declined reviewers remain declined. The now-active stage receives
+new notifications and due dates based on its new entry time. Future-stage
+reviewers are notified when their stage becomes active, not on every resubmission.
+
+The submissions list and progress panel use the same stored current-stage
+pointer. After this update, a successful resubmission records
+**SUBMISSION_RESUBMITTED** in the submission's activity/audit history. Historical
+resubmissions are not backfilled, so the absence of this event in older history
+is not proof that a student did not resubmit. A version upload alone does not
+establish that the student resubmitted. Existing uploaded-but-not-submitted
+revisions must still be explicitly resubmitted; deployment does not advance them
+or erase their previous feedback automatically.
+
 All administrative and workflow actions are stored in the `audit_logs` table. View via the portal at **Admin → Audit Log**, or query directly:
 
 ```bash

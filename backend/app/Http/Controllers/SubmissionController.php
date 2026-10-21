@@ -17,6 +17,7 @@ use App\Services\WorkflowAdvancer;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
@@ -457,41 +458,42 @@ class SubmissionController extends Controller
 
         // ── Revision resubmission: skip admin queue if reviewers are already assigned ──
         if ($submission->status === Submission::STATUS_REVISION_REQUIRED) {
-            $submission->update(['status' => Submission::STATUS_RESUBMITTED]);
-
             $hasReviewers = $submission->reviewers()
                 ->where('status', '!=', 'declined')
                 ->exists();
 
-            if ($hasReviewers) {
-                // Apply restart policy (reset decisions) and send straight to IN_REVIEW.
-                $this->applyRevisionRestartPolicy($submission);
-                $submission->update(['status' => Submission::STATUS_IN_REVIEW]);
-                // Re-set current stage to the first stage that has active pending reviewers.
-                $this->syncCurrentStageFromReviewers($submission);
-
-                // Notify all active reviewers that a revised version is ready.
-                $reviewerUsers = $submission->reviewers()
-                    ->with('user:id,name,email')
-                    ->where('status', '!=', 'declined')
-                    ->get()
-                    ->pluck('user')
-                    ->filter()
-                    ->unique('id')
-                    ->values();
-
-                if ($reviewerUsers->isNotEmpty()) {
-                    app(NotificationService::class)->notify(
-                        $reviewerUsers->all(),
-                        Notification::TYPE_REVIEWER_ASSIGNED,
-                        [
-                            'submission_id'    => $submission->id,
-                            'submission_title' => $submission->title,
-                            'message'          => 'A revised version has been submitted and is ready for your review.',
-                        ]
-                    );
+            DB::transaction(function () use ($submission, $hasReviewers, $request) {
+                $before = [
+                    'status' => $submission->status,
+                    'current_stage_id' => $submission->current_stage_id,
+                ];
+                if ($hasReviewers) {
+                    $this->applyRevisionRestartPolicy($submission);
+                    $submission->update(['status' => Submission::STATUS_IN_REVIEW]);
+                    $this->syncCurrentStageFromReviewers($submission);
+                } else {
+                    $submission->update([
+                        'status' => Submission::STATUS_RESUBMITTED,
+                        'current_stage_id' => null,
+                        'current_stage_entered_at' => null,
+                    ]);
                 }
-            } else {
+                AuditLog::create([
+                    'submission_id' => $submission->id,
+                    'actor_id' => $request->user()->id,
+                    'action' => 'SUBMISSION_RESUBMITTED',
+                    'before_state' => $before,
+                    'after_state' => [
+                        'status' => $submission->status,
+                        'current_stage_id' => $submission->current_stage_id,
+                        'current_version' => $submission->current_version,
+                    ],
+                ]);
+            });
+
+            if ($hasReviewers && $submission->current_stage_id) {
+                app(WorkflowAdvancer::class)->notifyStageReviewers($submission, $submission->currentStage);
+            } elseif (!$hasReviewers) {
                 // No reviewers yet — notify coordinators to assign.
                 $coordinators = User::whereJsonContains('roles', 'admin')
                     ->orWhereJsonContains('roles', 'coordinator')
@@ -1098,6 +1100,7 @@ class SubmissionController extends Controller
                 'is_gated_review'     => $isGatedReview,
                 'allow_meetings'      => $meetingsEnabled,
                 'user_meeting_context' => null,
+                'current_stage_id'    => $submission->current_stage_id,
             ]);
         }
 
@@ -1130,7 +1133,7 @@ class SubmissionController extends Controller
         $currentStageOrder = $orderedStages->firstWhere('id', $submission->current_stage_id)?->order;
 
         foreach ($orderedStages as $stage) {
-            $stageReviewers = $reviewers->where('stage_id', $stage->id);
+            $stageReviewers = $reviewers->where('stage_id', $stage->id)->where('status', '!=', 'declined');
             $total     = $stageReviewers->count();
             $completed = $stageReviewers->filter(fn($r) => $r->decision !== null)->count();
 
@@ -1138,6 +1141,8 @@ class SubmissionController extends Controller
                 $status = 'completed';
             } elseif ($total === 0) {
                 $status = $isActive ? 'needs_assignment' : 'pending';
+            } elseif ($completed === $total && $stageReviewers->contains('decision', 'revise')) {
+                $status = 'revision_required';
             } elseif ($completed === $total) {
                 $status = 'completed';
             } elseif ($completed > 0) {
@@ -1267,6 +1272,7 @@ class SubmissionController extends Controller
             'is_gated_review'     => $isGatedReview,
             'allow_meetings'      => $meetingsEnabled,
             'user_meeting_context' => $userMeetingContext,
+            'current_stage_id'    => $submission->current_stage_id,
         ]);
     }
 
@@ -1343,23 +1349,30 @@ class SubmissionController extends Controller
         $submission->load('submissionType.workflow');
         $policy   = $submission->submissionType?->workflow?->revision_restart_policy ?? 'FULL_RESTART';
         $metadata = $submission->metadata ?? [];
+        $reviewersToReset = SubmissionReviewer::where('submission_id', $submission->id)
+            ->where('status', '!=', 'declined');
 
         if ($policy === 'RESUME_FROM_STAGE' && !empty($metadata['pending_revision_stage_id'])) {
             // Reset only the failed stage and all subsequent stages.
-            $failedStage = StageDefinition::find($metadata['pending_revision_stage_id']);
-            if ($failedStage) {
-                $stageIdsToReset = StageDefinition::where('workflow_id', $failedStage->workflow_id)
-                    ->where('order', '>=', $failedStage->order)
-                    ->pluck('id');
-                SubmissionReviewer::where('submission_id', $submission->id)
-                    ->whereIn('stage_id', $stageIdsToReset)
-                    ->update(['decision' => null, 'decision_at' => null, 'comments' => null, 'status' => 'pending', 'due_at' => null]);
+            $failedStage = StageDefinition::where('workflow_id', $submission->submissionType?->workflow?->id)
+                ->find($metadata['pending_revision_stage_id']);
+            if (!$failedStage) {
+                throw \Illuminate\Validation\ValidationException::withMessages([
+                    'submission' => 'The revision stage is no longer part of this workflow. Ask a coordinator to check the workflow before resubmitting.',
+                ]);
             }
-        } else {
-            // FULL_RESTART (default): reset all reviewer decisions.
-            SubmissionReviewer::where('submission_id', $submission->id)
-                ->update(['decision' => null, 'decision_at' => null, 'comments' => null, 'status' => 'pending', 'due_at' => null]);
+            $stageIdsToReset = StageDefinition::where('workflow_id', $failedStage->workflow_id)
+                ->where('order', '>=', $failedStage->order)
+                ->pluck('id');
+            $reviewersToReset->whereIn('stage_id', $stageIdsToReset);
         }
+
+        $reviewersToReset->update([
+            'decision' => null, 'decision_at' => null, 'comments' => null,
+            'status' => 'pending', 'due_at' => null, 'finalize_workflow' => false,
+            'draft_comments' => null, 'draft_decision' => null, 'draft_saved_at' => null,
+            'assignment_notified_at' => null, 'reminder_sent_at' => null,
+        ]);
 
         // Clear all revision and gatekeeper metadata from the previous cycle.
         // Also reset current stage — it will be re-set when reviewers are re-assigned.

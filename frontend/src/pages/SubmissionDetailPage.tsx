@@ -176,6 +176,7 @@ const STAGE_STATUS_CONFIG: Record<string, { label: string; cls: string; numCls: 
   needs_assignment: { label: 'Needs reviewers',     cls: 'bg-purple-100 text-purple-700', numCls: 'bg-purple-500 text-white' },
   assigned:         { label: 'Reviewers assigned',  cls: 'bg-blue-100 text-blue-700',     numCls: 'bg-blue-500 text-white' },
   in_progress:      { label: 'In progress',         cls: 'bg-yellow-100 text-yellow-700', numCls: 'bg-yellow-400 text-white' },
+  revision_required: { label: 'Revision required', cls: 'bg-orange-100 text-orange-700', numCls: 'bg-orange-500 text-white' },
   completed:        { label: 'Completed',           cls: 'bg-green-100 text-green-700',   numCls: 'bg-green-500 text-white' },
 }
 
@@ -487,6 +488,7 @@ function ReviewProgressPanel({
     is_gated_review: boolean
     allow_meetings: boolean
     user_meeting_context: UserMeetingContext | null
+    current_stage_id: string | null
   }>({
     queryKey: ['review-progress', submissionId],
     queryFn: () => api.get(`/submissions/${submissionId}/review-progress`).then(r => r.data),
@@ -643,7 +645,7 @@ function ReviewProgressPanel({
   if (!hasAnyReviewers) return null
 
   const completedStages = stages.filter(s => s.status === 'completed').length
-  const activeStage = stages.find(s => ['assigned', 'in_progress', 'needs_assignment'].includes(s.status))
+  const activeStage = stages.find(s => s.id === data?.current_stage_id)
   const pct = Math.round((completedStages / stages.length) * 100)
   // A gatekeeper/finalize stage can close the workflow early; later stages are conditional.
   const finalizeIdx = stages.findIndex(s => s.allows_finalize)
@@ -691,7 +693,7 @@ function ReviewProgressPanel({
               : completedStages === stages.length
                 ? 'All stages complete'
                 : activeStage
-                  ? <>Current: <span className="text-gray-800 font-semibold">{activeStage.name}</span></>
+                  ? <>{submissionStatus === 'REVISION_REQUIRED' ? 'Awaiting student revisions: ' : 'Current: '}<span className="text-gray-800 font-semibold">{activeStage.name}</span></>
                   : `${completedStages} of ${stages.length} complete`}
           </span>
           <span className="text-xs text-gray-400 tabular-nums">
@@ -2797,6 +2799,9 @@ function DocumentsTab({ sub, canEdit, canRunSimilarity }: { sub: Submission; can
       setShowUploadForm(false)
       setUploadFiles([])
       setChangeSummary('')
+      if (uploadMode === 'submitter' && sub.status === 'REVISION_REQUIRED') {
+        toast.success('Revised document uploaded.', 'Upload alone does not resubmit it. Click Resubmit for Review to send it back to the reviewer.')
+      }
     } catch (e: unknown) {
       setUploadError(getApiErrorMessage(e, 'Upload failed. Please try again.', uploadFiles))
     } finally {
@@ -4731,11 +4736,19 @@ export default function SubmissionDetailPage() {
   })
 
   const submitMutation = useMutation({
-    mutationFn: () => api.post(`/submissions/${id}/submit`),
-    onSuccess: () => {
+    mutationFn: () => api.post<{ data: Submission }>(`/submissions/${id}/submit`),
+    onSuccess: (response) => {
+      qc.setQueryData(['submission', id], response.data)
       qc.invalidateQueries({ queryKey: ['submission', id] })
       qc.invalidateQueries({ queryKey: ['submissions'] })
-      toast.success('Submission submitted successfully.', 'It will be assigned for review shortly.')
+      qc.invalidateQueries({ queryKey: ['review-progress', id] })
+      qc.invalidateQueries({ queryKey: ['submission-reviewers', id] })
+      qc.invalidateQueries({ queryKey: ['my-reviews'] })
+      qc.invalidateQueries({ queryKey: ['dashboard-stats'] })
+      qc.invalidateQueries({ queryKey: ['calendar-deadlines'] })
+      toast.success('Submission submitted successfully.', response.data.data.status === 'IN_REVIEW'
+        ? 'The revised submission is back with the active review stage.'
+        : 'It will be assigned for review shortly.')
     },
     onError: (e: any) => toast.error('Submit failed.', e?.response?.data?.message),
   })
@@ -5068,8 +5081,13 @@ export default function SubmissionDetailPage() {
           <div className="flex-1">
             <p className="text-sm font-semibold text-orange-800">Revision Required</p>
             <p className="text-sm text-orange-700 mt-0.5">
-              Reviewers have requested changes. Upload a revised document and re-submit.{' '}
+              Reviewers have requested changes. Upload a revised document, then click <strong>Resubmit for Review</strong>.
+              Uploading alone does not send it back to the reviewer.{' '}
               <button onClick={() => setTab('feedback')} className="underline font-medium">View feedback →</button>
+              <button onClick={() => submitMutation.mutate()} disabled={!canSubmit || submitMutation.isPending}
+                className="mt-2 block rounded bg-orange-700 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50">
+                {submitMutation.isPending ? 'Resubmitting...' : 'Resubmit for Review'}
+              </button>
             </p>
           </div>
         </div>
@@ -5194,7 +5212,7 @@ export default function SubmissionDetailPage() {
               className="flex items-center gap-2 px-5 py-2.5 bg-green-600 text-white text-sm font-semibold rounded-lg hover:bg-green-700 disabled:opacity-50"
             >
               {submitMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
-              Submit for Review
+              {sub.status === 'REVISION_REQUIRED' ? 'Resubmit for Review' : 'Submit for Review'}
             </button>
           )}
           {canWithdraw && (
